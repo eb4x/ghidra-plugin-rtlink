@@ -1,0 +1,18 @@
+.gradle/
+build/
+dist/
+lib/
+bin/
+.settings/
+.classpath
+.project
+os/
+
+# local dev config (contains a machine-specific bearer token / local settings)
+.mcp.json
+.claude/
+
+# machine-specific build config (absolute GHIDRA_INSTALL_DIR / user extensions dir)
+gradle.properties
+# extracted Ghidra install used only to compile against (the "SDK")
+ghidra-sdk/
