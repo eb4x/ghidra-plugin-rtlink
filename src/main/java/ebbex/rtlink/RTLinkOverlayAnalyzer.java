@@ -1714,7 +1714,13 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			// Stub body runs off the end of its block — nothing to clear.
 			return;
 		}
-		program.getBookmarkManager().removeBookmarks(stubBody, BookmarkType.ERROR, monitor);
+		// Clear both severities: a resolved stub whose overlay target offset is 0 carries a
+		// JMPF 0000:0000 whose literal (unrelocated) operand the disassembler flags as a
+		// WARNING ("flow into non-existing memory at 0000:0000"), while a conflicting decode
+		// leaves an ERROR — both are stale once the stub is a thunk to its real target.
+		BookmarkManager bookmarkMgr = program.getBookmarkManager();
+		bookmarkMgr.removeBookmarks(stubBody, BookmarkType.ERROR, monitor);
+		bookmarkMgr.removeBookmarks(stubBody, BookmarkType.WARNING, monitor);
 		resolvedStubBodies.add(stubBody);
 	}
 
@@ -1740,15 +1746,22 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		resolvedStubBodies = new AddressSet();
 
 		BookmarkManager bookmarkMgr = program.getBookmarkManager();
+		// Both severities are stale on a resolved stub (see clearStubErrorBookmarks): a
+		// conflicting decode leaves an ERROR, an offset-0 stub's JMPF 0000:0000 leaves a
+		// WARNING, and neither describes anything broken once the stub is a thunk.
 		long stale = bookmarkMgr.getBookmarkAddresses(BookmarkType.ERROR)
+				.union(bookmarkMgr.getBookmarkAddresses(BookmarkType.WARNING))
 				.intersect(stubs)
 				.getNumAddresses();
 		if (stale == 0) {
 			return;
 		}
 		try {
-			program.withTransaction("RTLink: clear resolved-stub error bookmarks",
-				() -> bookmarkMgr.removeBookmarks(stubs, BookmarkType.ERROR, TaskMonitor.DUMMY));
+			program.withTransaction("RTLink: clear resolved-stub bad-instruction bookmarks",
+				() -> {
+					bookmarkMgr.removeBookmarks(stubs, BookmarkType.ERROR, TaskMonitor.DUMMY);
+					bookmarkMgr.removeBookmarks(stubs, BookmarkType.WARNING, TaskMonitor.DUMMY);
+				});
 		}
 		catch (CancelledException e) {
 			return; // DUMMY monitor never cancels
