@@ -1739,6 +1739,22 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	 */
 	@Override
 	public void analysisEnded(Program program) {
+		// Repair husk functions now that every function is finally in place. added() runs at
+		// FORMAT_ANALYSIS.after (before the husks exist), so it can only repair them on the
+		// retrofit/one-shot path; and even the dead-last flow-repair pass runs before the
+		// final re-analysis round that fabricates these call-target husks (its once-per-txn
+		// guard then skips its re-invocation). analysisEnded is the one hook after every
+		// round. Idempotent — a no-op once no husks remain — so it is harmless on the
+		// retrofit path where added() already ran it. Failures go to a throwaway log
+		// because analysisEnded cannot surface the analysis warnings dialog.
+		try {
+			program.withTransaction("RTLink: repair husk functions",
+				() -> repairHuskFunctions(program, new MessageLog(), TaskMonitor.DUMMY));
+		}
+		catch (CancelledException e) {
+			// DUMMY monitor never cancels
+		}
+
 		if (resolvedStubBodies.isEmpty()) {
 			return;
 		}
@@ -1832,7 +1848,15 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	 * Every husk found is counted; entries that still fail to disassemble are reported
 	 * in the analysis log with target and reason.
 	 */
-	private void repairHuskFunctions(Program program, MessageLog log, TaskMonitor monitor)
+	/**
+	 * Disassemble every husk function (a function object with no code at its entry, left
+	 * by CreateFunctionCmd over a call target the disassembler never followed) and rebuild
+	 * its body from the now-real flow. Package-private static so {@link
+	 * RTLinkFlowRepairAnalyzer} can invoke it on the fresh-import path: this analyzer runs
+	 * at FORMAT_ANALYSIS.after, before the husks are fabricated, so it can only repair them
+	 * on the retrofit/one-shot path; the dead-last flow-repair pass runs after they exist.
+	 */
+	static void repairHuskFunctions(Program program, MessageLog log, TaskMonitor monitor)
 			throws CancelledException {
 		Listing listing = program.getListing();
 		FunctionManager funcMgr = program.getFunctionManager();
@@ -1852,7 +1876,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			if (listing.getInstructionAt(entry) == null &&
 				listing.getInstructionContaining(entry) == null) {
 				husks.add(entry);
-				Msg.debug(this, "RTLink: husk function (no code at entry) " +
+				Msg.debug(RTLinkOverlayAnalyzer.class, "RTLink: husk function (no code at entry) " +
 					function.getName() + " at " + entry);
 			}
 		}
@@ -1912,7 +1936,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		// Msg.info only, never log.appendMsg: this is a clean-run success count, and any
 		// content in the analysis MessageLog pops the warnings dialog. The failures above
 		// did go to the MessageLog -- those are genuine.
-		Msg.info(this, String.format(
+		Msg.info(RTLinkOverlayAnalyzer.class, String.format(
 			"RTLink: Repaired %d husk function(s) (no code at entry), " +
 				"%d new function(s) at exposed call targets%s",
 			repaired.getNumAddresses(), callTargets.getNumAddresses(),
