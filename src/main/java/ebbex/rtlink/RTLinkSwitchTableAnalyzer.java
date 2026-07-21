@@ -1050,8 +1050,13 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 			return -1;
 		}
 		Instruction scale = exchange.getPrevious();
-		if (scale == null || !isDoublingOf(scale, index)) {
+		if (scale == null) {
 			return -1;
+		}
+		if (!isDoublingOf(scale, index)) {
+			// No doubling before the exchange: BX carries the byte offset into the word
+			// table directly, not a case index awaiting a scale.
+			return countFromByteOffsetIndex(scale, index, block);
 		}
 
 		long divisor = 1;
@@ -1087,6 +1092,49 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 			}
 			else if (defines(instruction, index)) {
 				return -1; // the compared value is not the value that indexes the table
+			}
+			instruction = instruction.getPrevious();
+		}
+		return -1;
+	}
+
+	/**
+	 * Count a dispatch whose index is <i>already</i> the byte offset into the word table —
+	 * no doubling precedes the exchange, because {@code BX} carries the byte offset itself
+	 * rather than a case index yet to be scaled. Since the entry is a word and {@code BX}
+	 * steps by 2, the {@code CMP} bounds the byte offset and the table holds
+	 * {@code bound/2 + 1} entries, not {@code bound + 1}. RETURN.EXE has two spellings of
+	 * this: an index halved back down ({@code SHR AX,1; CMP AX,0x12; XCHG AX,BX} at
+	 * {@code OVERLAY_43::02ecf5}) and one merely required even ({@code TEST AL,1;
+	 * CMP AX,0x16; XCHG AX,BX} at {@code OVERLAY_38::02e25b}) — both leave {@code BX} an
+	 * even byte offset. Read as a case index the count is doubled, sending the surplus
+	 * entries out of the block and aborting recovery, so {@code DecompilerSwitchAnalyzer}
+	 * takes over and scatters cases into DGROUP.
+	 * <p>
+	 * The dispatch opcode ({@link #DISPATCH_OPCODE}) is always a {@code word ptr} read, so a
+	 * valid table indexed by a bare register is necessarily byte-offset (a case index would
+	 * have to be doubled first, which the caller already checked for). An unusual doubling
+	 * this misses would under-count, and {@link #recoverOverlayTable} validates every
+	 * resolved entry, so a wrong count can only fail to recover, never plant flow.
+	 */
+	private static int countFromByteOffsetIndex(Instruction before, Register index,
+			MemoryBlock block) {
+		Instruction instruction = before;
+		for (int i = 0; i < GUARD_SCAN_LIMIT && instruction != null; i++) {
+			if (!block.contains(instruction.getMinAddress())) {
+				return -1;
+			}
+			if ("CMP".equals(instruction.getMnemonicString()) &&
+				index.equals(instruction.getRegister(0))) {
+				Scalar bound = instruction.getScalar(1);
+				if (bound == null) {
+					return -1;
+				}
+				long entries = bound.getUnsignedValue() / 2 + 1;
+				return entries > MAX_TABLE_ENTRIES ? -1 : (int) entries;
+			}
+			if (defines(instruction, index)) {
+				return -1; // the index is redefined before the guard: the bound is not on BX
 			}
 			instruction = instruction.getPrevious();
 		}
