@@ -42,6 +42,7 @@ repositories {
 // The smoke-test script is a development aid, not part of the shipped extension.
 buildExtension.exclude 'ghidra_scripts/**'
 // Keep project/dev clutter out of the packaged extension.
+buildExtension.exclude '.github/**'
 buildExtension.exclude '.claude/**'
 buildExtension.exclude 'gradle/**'
 buildExtension.exclude 'gradlew'
@@ -156,7 +157,7 @@ tasks.register('uninstallExtension') {
 
 /**
  * Headless smoke test (`gradlew smokeTest`), hermetic by construction (same shape as
- * ebbex-ghidra-mcp's): headless loads extensions extracted under <install>/Ghidra/Extensions,
+ * ghidra-plugin-mcp's): headless loads extensions extracted under <install>/Ghidra/Extensions,
  * so re-extract the freshly built zip there on every run, and pin the settings dir into
  * build/ via -Dapplication.settingsdir so ~/.config/ghidra stays out of it. The target
  * binary is an RTLink-linked overlay EXE from the RTLTEST harness; the post-script asserts
