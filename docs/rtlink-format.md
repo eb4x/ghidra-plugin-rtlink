@@ -1,16 +1,18 @@
 # RTLink/Plus — overlay format and runtime
 
-The authoritative reference for the RTLink/Plus overlay mechanisms as implemented by the
-four RTLink analyzers in this fork. It supersedes
-`../../viceroy/docs/archive/rtlink-overlay-format.md`, which remains readable as a record
-of how the format was worked out but contains errors corrected here (see
+The authoritative reference for the RTLink/Plus overlay mechanisms as implemented by
+this extension's analyzers. It supersedes the project's earlier working document (private
+reverse-engineering notes, not part of this repo), which recorded how the format was
+worked out but contained errors corrected here (see
 [Corrections to the archived document](#corrections-to-the-archived-document)).
 
 **Linker:** `.RTLink(R)/Plus` version 6.10, Pocket Soft Inc., 1993-05-24. The full
 distribution — including the overlay manager's assembly source, the manuals, and the
-vendor's own example programs with their link scripts — is at `~/dosbox/RTLINK`. A
-build-to-order DOS harness (MSC 6.00 + RTLink 6.10, scripted) is at `~/dosbox/RTLTEST`;
-see its `HANDOFF.md`.
+vendor's own example programs with their link scripts — was recovered during this work
+and is the source behind the V-* evidence tiers below (it is copyrighted vendor material
+and is not redistributed here). Around the real linker we scripted a build-to-order DOS
+harness (MSC 6.00 + RTLink 6.10 under DOSBox), which backs the CONSTR tier; its attempt
+log is referred to below as the harness log.
 
 ## Provenance of the claims below
 
@@ -22,7 +24,7 @@ Everything here is tagged with where it comes from. In descending order of autho
 | **V-BIN** | Vendor binary with symbols: the VM manager ships only as OMF modules named `vmnuc.asm` inside `RTLUTILS.LIB`. Decoding its `FIXUPP` records recovers symbolic names for the runtime's `cs:[...]` operands | `$$VMTAB` and friends in the VM manager |
 | **V-DOC** | Vendor manuals: `READ.ME`, `RTLINK.HLP`, `END-USER.DOC`, `VMEXAMPL.DOC`, `VML-EASE.DOC`, `EXAMPLE.DOC` + the `VMEX*.LNK` scripts | Product model, terminology, link-time controls, runtime env vars |
 | **RE** | Disassembly of the VM manager as it sits in a shipped binary. Legitimate because the manager is a byte-identical blob (see [Fingerprint](#fingerprint)), so a trace in VICEROY holds for every VM binary | VM dispatcher, fixup call sites, stub decode |
-| **CONSTR** | Built to order with RTLink 6.10 in `~/dosbox/RTLTEST` | List-2 emission; list-3 non-emission |
+| **CONSTR** | Built to order with RTLink 6.10 in the DOSBox harness | List-2 emission; list-3 non-emission |
 | **CORPUS** | Measured across the binaries in the [corpus](#corpus) | Field ranges, counts, what actually occurs |
 
 Where a claim is only CORPUS, it says so — a value observed in every binary to hand is
@@ -122,8 +124,8 @@ struct rtlink_page_header {   /* ALL FIELDS ARE WORDS */
 };
 ```
 
-Implemented in `Ghidra/Features/Base/src/main/java/ghidra/app/util/bin/format/mz/RTLinkPageHeader.java`,
-pinned by `RTLinkPageHeaderTest`.
+Implemented in `src/main/java/ebbex/rtlink/RTLinkPageHeader.java`, pinned by
+`RTLinkPageHeaderTest`.
 
 > **Three fields in this header were each, at some point, mis-declared as 32-bit or
 > "reserved", and each bug read correctly on VICEROY.** `reloc_count` as a dword swallows
@@ -179,7 +181,7 @@ what `LOCALON` makes the linker emit instead of a vector. Established three ways
 
 - CORPUS: 211 of 211 list-2 sites across NEBULAR, ROE2MAIN and SPHERE hold a value below
   their own page's paragraph count; list-1 sites essentially never do.
-- CONSTR: a program built with `LOCALON` in `~/dosbox/RTLTEST` emits one (see HANDOFF.md).
+- CONSTR: a program built with `LOCALON` in the harness emits one.
 - RE: the runtime's list-2 caller (VICEROY `210d:233f`, byte-identical in NEBULAR and
   SPHERE) reads the count from header +0xA, rounds the start index up to a 4-entry group
   exactly as the struct above models, and adds `currentFrame − previousFrame` on every move.
@@ -201,7 +203,7 @@ have to hold a raw page segment — which the vectoring rule (above) means norma
 produces. Better: RTLink 6.10 **cannot emit one**. Its
 resident-site patch path is advertised and not implemented — it prints "page-base relocation
 will be performed when the page comes in" and then writes nothing, producing a binary that
-is verifiably broken at runtime (CONSTR; fourteen attempts, `HANDOFF.md`). We parse the
+is verifiably broken at runtime (CONSTR; fourteen harness attempts). We parse the
 count and never apply the list, which is correct for a stated reason rather than caution.
 
 <a name="record-0-is-a-code-page"></a>
@@ -233,7 +235,7 @@ the vendor's own VM output either.
 
 The cost of the old reading was 47 stubs silently dropped in VICEROY (they failed a bounds
 check and left no log line), plus a stub↔block naming skew that derailed a whole
-investigation. See commit `0e1ca83262`.
+investigation.
 
 ### The segment list — an authoritative page table
 
@@ -466,10 +468,9 @@ both.
 
 ## How our analyzers model this
 
-Four analyzers, each pinned to a different slot in the auto-analysis pipeline (an analyzer
-registers exactly one `AnalyzerType` + `AnalysisPriority`, which is why this is four classes
-and not one). All live in
-`Ghidra/Features/Base/src/main/java/ghidra/app/plugin/core/analysis/`.
+Six analyzers, each pinned to a different slot in the auto-analysis pipeline (an analyzer
+registers exactly one `AnalyzerType` + `AnalysisPriority`, which is why this is six classes
+and not one). All live in `src/main/java/ebbex/rtlink/`.
 
 | Analyzer | Type / priority | Does |
 |---|---|---|
@@ -477,6 +478,8 @@ and not one). All live in
 | `RTLinkSwitchTableAnalyzer` | INSTRUCTION, `CODE_ANALYSIS.before()` | Recovers CS-/module-relative switch tables **and DS-relative ones** (see below), and their *references*. Must beat `DecompilerSwitchAnalyzer`, which skips computed branches that already have computed refs — winning that race is what keeps bogus targets out of other segments |
 | `RTLinkSwitchOverrideAnalyzer` | INSTRUCTION, `FUNCTION_ANALYSIS.after()` | Writes decompiler jump-table overrides for those tables (shares `recoverTable()`). Cannot merge with the above: override symbols need a defined `FunctionDB` to hang a namespace off, which does not exist that early |
 | `RTLinkXrefAnalyzer` | INSTRUCTION, `REFERENCE_ANALYSIS.after()` | The DS-relative data references, overlay far call/jump xrefs, and address-of immediates that Ghidra's own passes decline to make on 16-bit segmented programs |
+| `RTLinkFlowRepairAnalyzer` | BYTE, `LOW_PRIORITY.after()` | Recovers buried code once every other pass has planted its flows and every conflict is bookmarked — see [Buried code](#buried-code-and-why-nothing-may-be-left-undisassembled) |
+| `RTLinkDispatcherJumpAnalyzer` | BYTE, `DATA_ANALYSIS.before()` | Neutralizes the bogus current-segment computed jump the stock constant-reference pass plants on the overlay VM dispatcher trampoline: deletes only the same-block refs and the junk they caused, and leaves the `JMP` honestly unresolved so the string pass reclaims the text it destroyed |
 
 ### Modeling decisions worth knowing
 
@@ -490,14 +493,14 @@ and not one). All live in
   shadow the resident image: a list-1-relocated far call from overlay code into a low
   resident segment would otherwise be bound by the disassembler back into the overlay's own
   space, planting garbage over real page bytes. (List-2 far calls *do* land inside their own
-  block, which is where overlay binding is correct.) Commit `b417a075de`.
+  block, which is where overlay binding is correct.)
 - **The static frame is the block's base segment.** That is the delta list 2 gets. List 1
   gets the image load base (`0x1000`, where `MzLoader` puts the image; it never sets the
   program image base, so `getImageBase()` would return 0 — do not use it here).
 - **Stubs and trampolines become thunks** of their targets, and stale "Bad Instruction"
   bookmarks on stubs we resolve are cleared (they are fossils of the disassembler walking a
   `JMPF 0000:xxxx` before we got there).
-- **Everything is re-runnable.** All four set `setSupportsOneTimeAnalysis()`; the overlay
+- **Everything is re-runnable.** All of them set `setSupportsOneTimeAnalysis()`; the overlay
   analyzer's `repairStubThunks` path rebuilds its state from existing blocks, and tolerates
   the legacy `OVERLAY_(record−1)` naming of programs imported before the fix.
 - **Report counts with `Msg.info`, never `log.appendMsg`** — any content in the analysis
@@ -505,7 +508,7 @@ and not one). All live in
   dialog, so the `MessageLog` is for genuine failures only.
 
 Tests: `RTLinkPageHeaderTest` (header shapes incl. VMEX2's CODEVIEW word),
-`RTLinkOverlayRelocationTest` (pins both deltas hermetically — commit `82f65916ff`),
+`RTLinkOverlayRelocationTest` (pins both deltas hermetically),
 `RTLinkAddressOfXrefTest`, `RTLinkRuntimeDataSegmentTest`.
 
 ### The runtime owns DS — the assumption does not reach it
@@ -723,14 +726,14 @@ empty — so destinations are taken from the references instead.
 
 ### The XLAT state machine, and the Sleigh bug behind it
 
-> **Resolved (2026-07-13).** Both halves are fixed, in the order the handoff prescribed:
-> the formatter FSM's dispatch is bounded by
+> **Resolved (2026-07-13).** Both halves are fixed, in the order the investigation
+> prescribed: the formatter FSM's dispatch is bounded by
 > `RTLinkSwitchTableAnalyzer.recoverFormatterFsmTable`, and the XLAT segment bug in the
-> stock x86 Sleigh spec is fixed (`ia.sinc`, commit `x86: 16-bit XLAT honors its
-> segment`). The claim this section used to repeat — "nothing in the instruction stream
-> bounds the table" — was a placeholder for work not done, and is retracted below.
-> `docs/xlat-handoff.md` records the investigation; an upstream issue/PR draft for the
-> Sleigh bug is in `docs/upstream-xlat-issue.md`.
+> stock x86 Sleigh spec is fixed in `ia.sinc` — submitted upstream as
+> [ghidra#9391](https://github.com/NationalSecurityAgency/ghidra/pull/9391) and carried
+> meanwhile on the `dailydriver` branch of [eb4x/ghidra](https://github.com/eb4x/ghidra).
+> The claim this section used to repeat — "nothing in the instruction stream bounds the
+> table" — was a placeholder for work not done, and is retracted below.
 
 Each binary's C library carries the MSC `_output` formatter — an `XLAT`-driven FSM,
 byte-identical across the corpus modulo addresses (VICEROY `1d1d:199c`, NEBULAR
@@ -787,7 +790,7 @@ translates an instruction's 3-bit register field through an 8-byte table of
 saved-register frame offsets (x86 register order AX,CX,DX,BX,SP,BP,SI,DI; `FF` = SP,
 not on the frame, sign-checked via the `CBW`) to fetch that register's saved value
 during instruction-fault operand recovery. Ground truth is the compiled OMF module
-`vmnuc` (segment `$$VMNUC`, nine build variants) in `~/dosbox/RTLINK/RTLUTILS.LIB`; no
+`vmnuc` (segment `$$VMNUC`, nine build variants) in the vendor distribution's `RTLUTILS.LIB`; no
 vendor assembly source exists for it — `OVLMGR.ASM` is the unrelated *disk* overlay
 manager. These tables also exposed an xref bug, since fixed: the address-of pass used to
 give the `MOV BX,imm` table pointers DS-relative DGROUP references
@@ -861,8 +864,8 @@ into an ISR module's own zeroed vector table (VICEROY `275d:0778`), zero-run fra
 DGROUP code tails, and a Borland RTL call one byte into a patched instruction (NEBULAR
 `1417:0104`). SPHERE's `160f:010d` is an emulator call too sparse to trip the density gate.
 
-Vendor examples, imported to `/rtlink-dist` in the Ghidra project (they are small, have C
-source and link scripts, and are the best regression material we have):
+Vendor examples, imported into our Ghidra project (they are small, have C source and
+link scripts, and are the best regression material we have):
 
 | Binary | link script demonstrates | records | stubs | tramp. | notes |
 |---|---|---|---|---|---|
@@ -913,31 +916,30 @@ the switch tables, the decompiler overrides, and the DS/DGROUP xrefs are outside
 Its DGROUP location is a hack worth *not* copying (scan for the `"MS Run-Time"` string,
 subtract 8); we trace the startup's actual DS load.
 
-> **Licence.** `rtlink_decode` is **GPL-2** (it pulls in ScummVM's `common/`). Our analyzers
-> live in `Ghidra/Features/Base`, which is **Apache-2.0**, and this repo requires GPL code to
-> live under `GPL/` as a standalone module. Read it to corroborate findings; **do not lift
-> code or verbatim structure into the analyzer.** Everything here is independent derivation
-> and must stay that way.
+> **Licence.** `rtlink_decode` is **GPL-2** (it pulls in ScummVM's `common/`). This
+> extension is **Apache-2.0** ([LICENSE](../LICENSE)), so GPL code cannot be mixed in.
+> Read it to corroborate findings; **do not lift code or verbatim structure into the
+> analyzer.** Everything here is independent derivation and must stay that way.
 
 ## Corrections to the archived document
 
-`../../viceroy/docs/archive/rtlink-overlay-format.md` was substantially right and is where
-most of this came from. What changed:
+The archived working document (the project's earlier private RE notes) was substantially
+right and is where most of this came from. What changed:
 
 | Archive said | Actually |
 |---|---|
-| Record 0 is a "global overlay table": 527 uint32 function-directory entries + a code block that "appears to be" resident stubs. First code page = descriptor index 2 | Record 0 is a **code page**. The "527 entries" are its relocation list 1; the "code block" is its code. `page_id 1` = record 0 (`0e1ca83262`) |
-| Blocks are `OVERLAY_(page_word−2)`, stubs `OVLSTUB_(page_word−1)` | Both are the **record index**, and width-padded past 99 records (`0e1ca83262`, `74d39d5b2c`) |
-| Overlay blocks based at flat `0x1_0000` | Based **above the image end**; the old base let overlay spaces shadow resident code (`b417a075de`) |
-| List 2: "page-relative paragraph (0 = page base, or a module base)" | Right, and more specifically: the segment word of a **statically encoded intra-page far call**, which is what `LOCALON` emits. Runtime caller validated (`c60412f518`) |
+| Record 0 is a "global overlay table": 527 uint32 function-directory entries + a code block that "appears to be" resident stubs. First code page = descriptor index 2 | Record 0 is a **code page**. The "527 entries" are its relocation list 1; the "code block" is its code. `page_id 1` = record 0 |
+| Blocks are `OVERLAY_(page_word−2)`, stubs `OVLSTUB_(page_word−1)` | Both are the **record index**, and width-padded past 99 records |
+| Overlay blocks based at flat `0x1_0000` | Based **above the image end**; the old base let overlay spaces shadow resident code |
+| List 2: "page-relative paragraph (0 = page base, or a module base)" | Right, and more specifically: the segment word of a **statically encoded intra-page far call**, which is what `LOCALON` emits. Runtime caller validated |
 | "365 direct stubs" in VICEROY | 370 resident-target trampolines |
 | Page counts 30 / 78 / 104 / 170 | 31 / 79 / 105 / 171 records — the old counts excluded record 0 |
 | Open item: stub `281f:0668` "lands mid-instruction, likely dead" | Resolves correctly once its `module_word` is applied |
-| "reloc_count_3 is always zero (7 attempts to force one failed)" | Stronger: RTLink 6.10 **cannot** emit one — its resident-site patch path is advertised but unimplemented (`HANDOFF.md`, attempts 8–14) |
+| "reloc_count_3 is always zero (7 attempts to force one failed)" | Stronger: RTLink 6.10 **cannot** emit one — its resident-site patch path is advertised but unimplemented (harness attempts 8–14) |
 
 Still true and carried over: the fingerprint, the two-mechanisms framing, the header's eight
 words and their three historical misreads, the list semantics table, `$$VMTAB`, the
 descriptor lookup, the segment list, module bases from the union of relocations and stub
-words, the `info_section` struct, the RTLTEST harness recipe and its `LOCALON` gotchas, the
+words, the `info_section` struct, the build-harness recipe and its `LOCALON` gotchas, the
 Clipper dead end (Clipper 5.0's OEM RTLink has no VM runtime; 5.3 bundles Blinker instead),
 and the dreammaster comparison.
