@@ -296,7 +296,12 @@ VICEROY's copy at segment `210d`), corroborated by V-BIN symbol recovery where n
 - **`$$VMTAB`** (V-BIN, recovered from the `FIXUPP` records of `vmnuc.asm` in
   `RTLUTILS.LIB`) — VICEROY's anonymous `cs:[0x3999]`. `$$VMTAB[0]` is the **resident
   image's load segment**; the runtime elsewhere does `sub bx,VMTAB[0]; cmp bx,VMTAB[0x16]`,
-  an "is this segment inside the resident image" range check.
+  an "is this segment inside the resident image" range check. In the object, `$$VMTAB`
+  (like `$$VMSTK` and `$$VMNAME`) is a **zero-length segment RTLink fills at link time** —
+  it is the section table, not a code-pointer table, and the nucleus references it through
+  exactly one `seg16` fixup in its data area (`$$VMNUC+0x2f3d`; VICEROY `210d:3999` →
+  `0x26eb`, NEBULAR `1731:2bdf` → `0x1be5`). There are no per-offset code pointers in it
+  to seed function starts from.
 - **Descriptor table** — base segment in `cs:[0x399b]`, **2 paragraphs per descriptor**.
   Lookup (`210d:0eba`): `MOV AX,[SI+5]` (the stub's page_id) → `AND AX,0x3fff` → `DEC AX` →
   `SHL AX,1` → `ADD AX,CS:[0x399b]` → `MOV ES,AX`. The `DEC` is the `page_id − 1` above.
@@ -410,6 +415,57 @@ vectored (the page is present by definition when its own code runs), so with `LO
 linker emits it **direct** — and a direct far call needs its segment word fixed up whenever
 the page moves. That is list 2, and that is the entire reason the second list exists.
 
+### The nucleus's own entries — `$$VM_INITW` and the constant-pair dispatch
+
+Two structures reach VM-nucleus code only *through data*, so auto-analysis never
+disassembles their targets; `seedVmRuntimeEntryPoints` recognizes both and seeds function
+starts (names beyond the two below are left to FID against the vendor `vmnuc` objects —
+the nucleus ships in at least nine build variants with shifting offsets, so only body
+hashes identify the rest).
+
+**The MZ entry point is RTLink's own 10-byte stub**, the object's public `$$VM_INITW`:
+`CALLF <vm init body> ; JMPF <startup>`, both segments MZ-relocated, the init body
+directly after the stub (obj `$$VMNUC+0x05c6`; NEBULAR `1731:05c6`, VICEROY file entry
+`20fe:071d`). The `JMPF` target is the CRT startup — labeled `__astart`, MSC's entry
+symbol (the corpus toolchain; on a non-MSC RTLink binary the function start would still be
+right and only the name conventional). The tail-jump never makes the startup a function on
+its own, and nothing but the stub reaches the init body at all.
+
+**Each of `$$VM_UNK`'s two arms ends in a constant-pair dispatch** (byte-identical in the
+reference objects and the VICEROY variant):
+
+```
+B8 ii ii            MOV  AX, imm16     ; vendor entry: $$VM_CALL / $$VM_JMP
+BA ii ii            MOV  DX, imm16     ; inner entry, past that routine's prologue
+2E F6 06 aa aa FF   TEST byte CS:[flag], 0xFF
+74 06               JE   +6
+B8 ii ii            MOV  AX, imm16     ; flag-set pair: $$VM_CALLR / $$VM_JMPR
+BA ii ii            MOV  DX, imm16
+89 44 FC            MOV  [SI-4], AX    ; the return-slot patch
+FF E2               JMP  DX
+```
+
+`AX` is written into the caller's far-return offset slot, so both `AX` immediates are
+function entries — they are exactly the `$$VM_*` PUBDEF symbols in the vendor object
+(VICEROY sites `210d:0d18`/`0d36`, AX1 of the second = `0e52` = its `$$VM_CALL`). The `DX`
+immediates land a few dozen bytes inside those routines, past the busy-wait prologue, and
+are seeded as flow only, never as functions. All four immediates resolve against the
+**stub-declared dispatcher segment** (the CS the stubs' `CALLF` operands carry) — *not*
+the site's canonical segment and not the CS page base, which is why the stock constant
+analyzer's same-block resolution of this very shape stays bogus (and stays deleted by
+`RTLinkDispatcherJumpAnalyzer` — a seeded function entry is precisely the independent
+evidence its clearing pass respects) while this one is exact. A target must land in the
+dispatcher's own block and decode as an instruction, so a wrong segment fails closed.
+
+Vendor `vmnuc.asm` PUBDEF offsets, for cross-checking (`$$VM_INITW` 05c6, `$$VM_UNKR`
+0b42, `$$VM_UNK` 0b5c, `$$VM_CALL` 0c03, `$$VM_JMP` 0e21, `$$VM_CALLR` 0f01, `$$VM_JMPR`
+1013, `$$VM_RET` 10ec, …, `$$VMGETPAGE` 18e8, `$$VMCHANGE` 1d45): NEBULAR runs 0x24 below
+these up to `$$VM_JMP`'s tail and 0x5a below after it (omitted diagnostic blocks); bodies
+stay byte-identical. VICEROY matches no reference build as a whole, but its individual
+bodies do. **`$$VMCOMMIT`/`$$VMRELEASE` are one 4-byte body** — `B8 FF FF CB`
+(`MOV AX,0xFFFF; RETF`) at obj 15f0, both PUBDEFs on the same address — a reliable
+build-variant fingerprint (found by NEBULAR's naming agent).
+
 ## Overlay sections — the other mechanism
 
 Documented from `OVLMGR.ASM`/`OVLMGR.INC` (V-SRC — the vendor's own source, so these are
@@ -474,7 +530,7 @@ and not one). All live in `src/main/java/ebbex/rtlink/`.
 
 | Analyzer | Type / priority | Does |
 |---|---|---|
-| `RTLinkOverlayAnalyzer` | BYTE, `FORMAT_ANALYSIS.after()` | Detects the overlay area, parses records, creates the overlay blocks, applies relocations, discovers dispatchers, resolves stubs and trampolines into thunks, disassembles overlay code, assumes DS=DGROUP |
+| `RTLinkOverlayAnalyzer` | BYTE, `FORMAT_ANALYSIS.after()` | Detects the overlay area, parses records, creates the overlay blocks, applies relocations, discovers dispatchers, resolves stubs and trampolines into thunks, disassembles overlay code, seeds the VM runtime's data-reached entry points (`$$VM_INITW`/`__astart` and the constant-pair dispatch targets — see above), assumes DS=DGROUP |
 | `RTLinkSwitchTableAnalyzer` | INSTRUCTION, `CODE_ANALYSIS.before()` | Recovers CS-/module-relative switch tables **and DS-relative ones** (see below), and their *references*. Must beat `DecompilerSwitchAnalyzer`, which skips computed branches that already have computed refs — winning that race is what keeps bogus targets out of other segments |
 | `RTLinkSwitchOverrideAnalyzer` | INSTRUCTION, `FUNCTION_ANALYSIS.after()` | Writes decompiler jump-table overrides for those tables (shares `recoverTable()`). Cannot merge with the above: override symbols need a defined `FunctionDB` to hang a namespace off, which does not exist that early |
 | `RTLinkXrefAnalyzer` | INSTRUCTION, `REFERENCE_ANALYSIS.after()` | The DS-relative data references, overlay far call/jump xrefs, and address-of immediates that Ghidra's own passes decline to make on 16-bit segmented programs |
@@ -509,7 +565,8 @@ and not one). All live in `src/main/java/ebbex/rtlink/`.
 
 Tests: `RTLinkPageHeaderTest` (header shapes incl. VMEX2's CODEVIEW word),
 `RTLinkOverlayRelocationTest` (pins both deltas hermetically),
-`RTLinkAddressOfXrefTest`, `RTLinkRuntimeDataSegmentTest`.
+`RTLinkAddressOfXrefTest`, `RTLinkRuntimeDataSegmentTest`, `RTLinkVmRuntimeSeedTest`
+(the entry stub and the constant-pair dispatch in miniature, plus the refusals).
 
 ### The runtime owns DS — the assumption does not reach it
 

@@ -53,6 +53,30 @@ public class RTLinkSmokeScript extends GhidraScript {
 		println("smoke: " + overlayFunctions + " functions in overlay blocks, " +
 			thunks + " thunks program-wide");
 
+		// The VM-runtime seeding pass: the entry stub must have yielded __astart with a
+		// real function body, and the $$VM_UNK constant-pair recognizer must have seeded
+		// vendor entries (recorded by the analyzer in a program-info option).
+		var astartSymbols = currentProgram.getSymbolTable().getSymbols("__astart");
+		if (!astartSymbols.hasNext()) {
+			println("UNEXPECTED: no __astart symbol — entry stub seeding did not run?");
+			return;
+		}
+		Function astart = currentProgram.getFunctionManager()
+				.getFunctionAt(astartSymbols.next().getAddress());
+		if (astart == null) {
+			println("UNEXPECTED: __astart exists but is not a function");
+			return;
+		}
+		int vmSeeds = currentProgram.getOptions(ghidra.program.model.listing.Program.PROGRAM_INFO)
+				.getInt("RTLink VM Runtime Seeds", 0);
+		if (vmSeeds < 4) {
+			println("UNEXPECTED: only " + vmSeeds +
+				" VM runtime seeds — dispatch-pair recognizer did not fire?");
+			return;
+		}
+		println("smoke: __astart at " + astart.getEntryPoint() + ", " + vmSeeds +
+			" VM runtime function seeds");
+
 		println("SMOKE COMPLETE");
 	}
 }
