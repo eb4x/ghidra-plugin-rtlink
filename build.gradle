@@ -56,6 +56,7 @@ buildExtension.exclude 'docs/**'
 // the gradle.properties pointing at it. Never ship these in the extension.
 buildExtension.exclude 'ghidra-sdk/**'
 buildExtension.exclude 'gradle.properties'
+buildExtension.exclude '.mcp.json'
 
 dependencies {
 	// AbstractGenericTest and ProgramBuilder ship in Ghidra's own jars (Generic/Base),
