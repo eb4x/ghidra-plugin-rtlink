@@ -68,9 +68,11 @@ dependencies {
  * Convenience tasks for local development:
  * - `gradlew buildExtension` creates the extension zip in `dist/`
  * - `gradlew installExtension` unzips that extension into the Ghidra *user* Extensions folder,
- *   mirroring the Ghidra UI "Install Extensions" flow, and copies the zip into
- *   <GHIDRA_INSTALL_DIR>/Extensions/Ghidra.
- * - `gradlew uninstallExtension` removes both again.
+ *   mirroring the Ghidra UI "Install Extensions" flow.
+ * - `gradlew uninstallExtension` removes it again.
+ *
+ * Nothing here writes under GHIDRA_INSTALL_DIR: the SDK is shared between the
+ * ghidra-plugin-* repos and mounted read-only.
  */
 def extensionName = project.name
 
@@ -103,33 +105,12 @@ def ghidraUserExtensionsDir = {
 	return file("${linuxConfigDir}/ghidra/${ghidraUserProfileDirName}/Extensions")
 }.call()
 
-def ghidraInstallExtensionsZipDir = file("${ghidraInstallDir}/Extensions/Ghidra")
-
 def buildZipProvider = tasks.named('buildExtension', Zip).flatMap { it.archiveFile }
-
-def extensionZipGlob = "*_${extensionName}.zip"
-def installZipDropFileTree = fileTree(ghidraInstallExtensionsZipDir) { include extensionZipGlob }
 
 tasks.register('cleanExtractedExtension', Delete) {
 	group = "Ghidra"
 	description = "Delete the extracted extension from Ghidra's user Extensions folder"
 	delete new File(ghidraUserExtensionsDir, extensionName)
-}
-
-tasks.register('cleanCopiedExtensionZips', Delete) {
-	group = "Ghidra"
-	description = "Delete copied extension zip(s) from the Ghidra install Extensions/Ghidra folder"
-	delete installZipDropFileTree
-}
-
-tasks.register('copyExtensionZip', Copy) {
-	group = "Ghidra"
-	description = "Copy the built extension zip into the Ghidra install Extensions/Ghidra folder"
-
-	dependsOn tasks.named('buildExtension'), tasks.named('cleanCopiedExtensionZips')
-
-	from(buildZipProvider)
-	into ghidraInstallExtensionsZipDir
 }
 
 tasks.register('extractExtension', Copy) {
@@ -146,53 +127,36 @@ tasks.register('extractExtension', Copy) {
 
 tasks.register('installExtension') {
 	group = "Ghidra"
-	description = "Copy the zip to the Ghidra install and extract into the user Extensions folder"
-	dependsOn tasks.named('copyExtensionZip'), tasks.named('extractExtension')
+	description = "Extract the built extension into the Ghidra user Extensions folder"
+	dependsOn tasks.named('extractExtension')
 }
 
 tasks.register('uninstallExtension') {
 	group = "Ghidra"
-	description = "Delete the extracted extension and remove copied extension zip(s)"
-	dependsOn tasks.named('cleanExtractedExtension'), tasks.named('cleanCopiedExtensionZips')
+	description = "Delete the extracted extension from the Ghidra user Extensions folder"
+	dependsOn tasks.named('cleanExtractedExtension')
 }
 
 /**
  * Headless smoke test (`gradlew smokeTest`), hermetic by construction (same shape as
- * ghidra-plugin-mcp's): headless loads extensions extracted under <install>/Ghidra/Extensions,
- * so re-extract the freshly built zip there on every run, and pin the settings dir into
- * build/ via -Dapplication.settingsdir so ~/.config/ghidra stays out of it. The target
- * binary is an RTLink-linked overlay EXE from the RTLTEST harness; the post-script asserts
+ * ghidra-plugin-mcp's): GhidraApplicationLayout searches a *list* of extension directories --
+ * <install>/Ghidra/Extensions and <userSettingsDir>/ghidra/<distro>_<release>/Extensions -- so
+ * pinning the settings dir into build/ via -Dapplication.settingsdir both keeps ~/.config/ghidra
+ * out of it and gives the run a private extension folder holding only this extension. The shared
+ * SDK is read-only and never written to. The target binary is an RTLink-linked overlay EXE
+ * from the RTLTEST harness; the post-script asserts
  * overlay blocks and resolved stubs, and prints its own verdict because analyzeHeadless
  * exits 0 even when a postScript throws.
  */
-def ghidraInstallExtensionsDir = file("${ghidraInstallDir}/Ghidra/Extensions")
 def smokeDir = file("${layout.buildDirectory.get().asFile}/smoke")
 def smokeTarget = (project.findProperty("SMOKE_TARGET")
 	?: "${System.getProperty('user.home')}/dosbox/MPS/COLONIZE/VICEROY.EXE").toString()
-
-tasks.register('cleanInstalledExtension', Delete) {
-	group = "Ghidra"
-	description = "Delete the extension extracted inside the Ghidra install (headless loads it)"
-	delete new File(ghidraInstallExtensionsDir, extensionName)
-}
-
-tasks.register('extractExtensionToInstall', Copy) {
-	group = "Ghidra"
-	description = "Extract the built extension into the Ghidra install, where headless finds it"
-
-	dependsOn tasks.named('buildExtension'), tasks.named('cleanInstalledExtension')
-
-	from {
-		zipTree(buildZipProvider.get().asFile)
-	}
-	into ghidraInstallExtensionsDir
-}
 
 tasks.register('smokeTest', Exec) {
 	group = "verification"
 	description = "Headless-import an RTLink overlay EXE with the freshly built extension and assert overlays"
 
-	dependsOn tasks.named('extractExtensionToInstall')
+	dependsOn tasks.named('buildExtension')
 
 	def projectDir = new File(smokeDir, "project")
 	def settingsDir = new File(smokeDir, "settings")
@@ -204,6 +168,11 @@ tasks.register('smokeTest', Exec) {
 		settingsDir.mkdirs()
 		if (!file(smokeTarget).exists()) {
 			throw new GradleException("smoke target not found: ${smokeTarget} (set -PSMOKE_TARGET=...)")
+		}
+		// Must run here, after `delete smokeDir` -- a dependsOn Copy task would be wiped by it.
+		copy {
+			from zipTree(buildZipProvider.get().asFile)
+			into new File(settingsDir, "ghidra/${DISTRO_PREFIX}_${RELEASE_NAME}/Extensions")
 		}
 	}
 
