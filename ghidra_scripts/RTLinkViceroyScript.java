@@ -1,5 +1,5 @@
-// Headless smoke test for the RTLink extension: run as -postScript after a fresh
-// import+analysis of an RTLink-linked overlay EXE (see the smokeTest gradle task).
+// Local-only check of the RTLink extension on a real target: run as -postScript after a fresh
+// import+analysis of VICEROY.EXE (see the viceroyTest gradle task; never in verify).
 // Asserts that the RTLink analyzers actually ran: overlay memory blocks were created
 // and code ended up inside them. Prints its own verdict because analyzeHeadless
 // exits 0 even when a post-script throws.
@@ -7,7 +7,7 @@ import ghidra.app.script.GhidraScript;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.mem.MemoryBlock;
 
-public class RTLinkSmokeScript extends GhidraScript {
+public class RTLinkViceroyScript extends GhidraScript {
 
 	@Override
 	protected void run() throws Exception {
@@ -21,7 +21,7 @@ public class RTLinkSmokeScript extends GhidraScript {
 			println("UNEXPECTED: no OVERLAY_ memory blocks — RTLinkOverlayAnalyzer did not run?");
 			return;
 		}
-		println("smoke: " + overlayBlocks + " overlay blocks");
+		println("viceroy: " + overlayBlocks + " overlay blocks");
 
 		int overlayFunctions = 0;
 		int thunks = 0;
@@ -37,7 +37,7 @@ public class RTLinkSmokeScript extends GhidraScript {
 			println("UNEXPECTED: overlay blocks exist but contain no functions");
 			return;
 		}
-		println("smoke: " + overlayFunctions + " functions in overlay blocks, " +
+		println("viceroy: " + overlayFunctions + " functions in overlay blocks, " +
 			thunks + " thunks program-wide");
 
 		// The VM-runtime seeding pass: the entry stub must have yielded __astart with a
@@ -61,9 +61,9 @@ public class RTLinkSmokeScript extends GhidraScript {
 				" VM runtime seeds — dispatch-pair recognizer did not fire?");
 			return;
 		}
-		println("smoke: __astart at " + astart.getEntryPoint() + ", " + vmSeeds +
+		println("viceroy: __astart at " + astart.getEntryPoint() + ", " + vmSeeds +
 			" VM runtime function seeds");
 
-		println("SMOKE COMPLETE");
+		println("VICEROY OK");
 	}
 }

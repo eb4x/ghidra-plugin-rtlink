@@ -125,13 +125,13 @@ To build yourself: JDK 21+ and two paths in a gitignored, project-local
 - `GHIDRA_INSTALL_DIR` - an *extracted* Ghidra install, used only at build
   time (its `support/buildExtension.gradle` and API jars)
 - `GHIDRA_USER_EXTENSIONS_DIR` - the running Ghidra's user `Extensions/`
-  directory, where `installExtension` deploys the built extension
+  directory, where `installExtension` installs the built extension
 
 ```bash
 ./gradlew buildExtension     # -> dist/ghidra_<ver>_<date>_RTLink.zip
-./gradlew installExtension   # deploy the zip into the Ghidra install + user Extensions dir
-./gradlew test               # JUnit tests (ProgramBuilder-based + pure unit)
-./gradlew smokeTest          # headless import of a real overlay EXE, asserts the analysis
+./gradlew installExtension   # install the zip into GHIDRA_USER_EXTENSIONS_DIR
+./gradlew verify             # everything CI runs: packaging check, JUnit
+./gradlew viceroyTest        # local only: headless import of VICEROY.EXE (-PrtlinkViceroy=<path>)
 ```
 
 Restart Ghidra to load the new build.

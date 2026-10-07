@@ -1,18 +1,14 @@
+# --- common to every ghidra-plugin-* repo ---
 .gradle/
 build/
 dist/
 lib/
 bin/
-.settings/
+os/
 .classpath
 .project
-os/
-
-# local dev config (contains a machine-specific bearer token / local settings)
-.mcp.json
+.settings/
 .claude/
-
-# machine-specific build config (absolute GHIDRA_INSTALL_DIR / user extensions dir)
+.mcp.json
 gradle.properties
-# extracted Ghidra install used only to compile against (the "SDK")
-ghidra-sdk/
+# --- this plugin ---
