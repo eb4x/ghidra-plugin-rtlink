@@ -554,9 +554,9 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				return null;
 			}
 			if ("MOV".equals(instr.getMnemonicString())) {
-				Register dest = instr.getRegister(0);
+				Register dest = movDestination(instr);
 				if (dest != null && (dest.equals(ss) || dest.equals(ds))) {
-					Register src = instr.getRegister(1);
+					Register src = movSourceRegister(instr);
 					Long imm = src != null ? regImm.get(src) : null;
 					if (imm != null) {
 						return (int) (imm.longValue() & 0xffffL);
@@ -564,7 +564,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				}
 				else if (dest != null) {
 					int type = instr.getOperandType(1);
-					Register src = instr.getRegister(1);
+					Register src = movSourceRegister(instr);
 					Scalar scalar = instr.getScalar(1);
 					if (scalar != null && OperandType.isScalar(type) &&
 						!OperandType.isAddress(type)) {
@@ -593,6 +593,33 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * The one register {@code mov} writes, read from its p-code results rather than its
+	 * operand list, or null if it writes memory or more than one register. Stock Ghidra
+	 * 12.1.3 and 12.1.4 display {@code MOV Sreg,r/m16} ({@code 8E}) with its operands swapped
+	 * (GP-7018: {@code 8e d8} reads {@code MOV AX,DS}), so operand 0 is the <i>source</i>
+	 * there; the p-code was never affected. Shared with {@link RTLinkXrefAnalyzer}.
+	 */
+	static Register movDestination(Instruction mov) {
+		Register written = null;
+		for (Object result : mov.getResultObjects()) {
+			if (!(result instanceof Register register) || written != null) {
+				return null;
+			}
+			written = register;
+		}
+		return written;
+	}
+
+	/**
+	 * The register {@code mov} copies, read from its p-code inputs: its only input, or null
+	 * for an immediate or memory source. See {@link #movDestination} for why not operand 1.
+	 */
+	static Register movSourceRegister(Instruction mov) {
+		Object[] inputs = mov.getInputObjects();
+		return inputs.length == 1 && inputs[0] instanceof Register register ? register : null;
 	}
 
 	private static PseudoInstruction safeDecode(PseudoDisassembler disassembler, Address addr) {

@@ -574,10 +574,11 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 				return false;
 			}
 			if (cur.getMnemonicString().equals("MOV")) {
-				Object[] dst = cur.getOpObjects(0);
-				Object[] src = cur.getOpObjects(1);
-				if (dst.length == 1 && dst[0] instanceof Register dstReg &&
-					isSegmentRegister(dstReg) && src.length == 1 && src[0] == reg) {
+				// From p-code, not operand indices: stock 12.1.3/12.1.4 swap MOV Sreg's
+				// displayed operands (see RTLinkOverlayAnalyzer.movDestination).
+				Register dst = RTLinkOverlayAnalyzer.movDestination(cur);
+				if (dst != null && isSegmentRegister(dst) &&
+					reg.equals(RTLinkOverlayAnalyzer.movSourceRegister(cur))) {
 					return true;
 				}
 			}
