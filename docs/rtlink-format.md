@@ -540,10 +540,18 @@ and not one). All live in `src/main/java/ebbex/rtlink/`.
 ### Modeling decisions worth knowing
 
 - **One block per record, named by record index.** `OVERLAY_00`…, width-padded to the
-  program's largest index (SPHERE has 105 records, so `OVERLAY_009` < `OVERLAY_010`). Labels
-  agree: `OVLSTUB_NN_OOOO` on the stub, `OVLNN_OOOO` on the target, `RTLINK_HDR_NN` on the
+  program's largest index (SPHERE has 105 records, so `OVERLAY_009` < `OVERLAY_010`). Names
+  agree: `OVLSTUB_NN_OOOO` for the stub, `OVLNN_OOOO` on the target, `RTLINK_HDR_NN` on the
   header. There is no skew between any of these numbers and the record index — an earlier
   scheme had blocks at record−1 and cost us dearly.
+- **A resolved stub shows its target's name.** Its thunk keeps Ghidra's default name, which
+  displays the thunked function's, so every call through the stub decompiles as a call to
+  the overlay function and follows a rename of it. The gate name `OVLSTUB_NN_OOOO` is in the
+  stub's plate comment ("RTLink dispatch stub …"), not a symbol: Ghidra renames a
+  default-named function to any label created at its entry, in any namespace. A stub that
+  could not be thunked keeps `OVLSTUB_NN_OOOO` as its label. Through 0.4.x the thunk carried
+  the gate name, so call sites read `OVLSTUB_65_0BC8(…)`; re-running the overlay analyzer
+  converts such a program, and leaves a stub someone else named alone.
 - **Blocks are based above the image end**, at the first 0x100-paragraph boundary past the
   highest resident block, *not* at a fixed low segment. Overlay address spaces must not
   shadow the resident image: a list-1-relocated far call from overlay code into a low

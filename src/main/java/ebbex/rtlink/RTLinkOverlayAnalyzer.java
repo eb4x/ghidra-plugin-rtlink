@@ -38,6 +38,7 @@ import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.symbol.*;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
+import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
 import ghidra.util.task.TaskMonitor;
 
@@ -317,6 +318,9 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	/** A resolved dispatch stub awaiting thunk creation once its target is a real function. */
 	private record StubTarget(Address stubAddr, Address targetAddr, int stubSize) {
 	}
+
+	/** Prefix of a dispatch stub's gate label, {@code OVLSTUB_NN_OOOO}. */
+	private static final String STUB_PREFIX = "OVLSTUB_";
 
 	/**
 	 * Digit width used in OVERLAY_/RTLINK_HDR_/OVLSTUB_/OVL numbering: two, or more
@@ -1539,7 +1543,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 						RefType.UNCONDITIONAL_CALL, SourceType.ANALYSIS, 0);
 
 					labelAddress(symbolTable,
-						String.format("OVLSTUB_%0" + width + "d_%04X", pageNumber,
+						String.format(STUB_PREFIX + "%0" + width + "d_%04X", pageNumber,
 							targetOffset),
 						stubAddr);
 					labelAddress(symbolTable,
@@ -1824,7 +1828,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 							int pageNum = info.page().getPageIndex();
 							labelAddress(symbolTable,
-								String.format("OVLSTUB_%0" + width + "d_%04X", pageNum,
+								String.format(STUB_PREFIX + "%0" + width + "d_%04X", pageNum,
 									targetOffset),
 								searchAddr);
 							labelAddress(symbolTable,
@@ -1856,7 +1860,58 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	 *         clears the stub's stale ERROR bookmarks when this returns true, so a
 	 *         genuine decode failure keeps its mark.
 	 */
-	private static boolean createThunkAtStub(FunctionManager funcMgr, Address stubAddr,
+	static boolean createThunkAtStub(FunctionManager funcMgr, Address stubAddr,
+			Address targetAddr, int stubSize, MessageLog log) {
+		if (!wireThunkAtStub(funcMgr, stubAddr, targetAddr, stubSize, log)) {
+			return false;
+		}
+		showTargetName(funcMgr.getFunctionAt(stubAddr));
+		return true;
+	}
+
+	/**
+	 * Let a stub thunk display its target's name, so every call through the stub
+	 * decompiles as a call to the overlay function rather than to the gate.
+	 * <p>
+	 * A thunk created over an existing label takes that label as its own name, and an
+	 * explicitly named thunk prints that name at its call sites. So reset an
+	 * analysis-given {@code OVLSTUB_} name to default (a default-named thunk shows its
+	 * target's name, renames included). The gate name moves into the stub's plate
+	 * comment: it cannot stay a symbol, because Ghidra renames a default-named function
+	 * to any label created at its entry, in any namespace. A name anyone else gave the
+	 * stub stays.
+	 */
+	private static void showTargetName(Function stub) {
+		Symbol symbol = stub.getSymbol();
+		String gate = symbol.getName();
+		if (symbol.getSource() != SourceType.ANALYSIS || !gate.startsWith(STUB_PREFIX)) {
+			return;
+		}
+		try {
+			stub.setName(null, SourceType.DEFAULT);
+			CodeUnit cu = stub.getProgram().getListing().getCodeUnitAt(stub.getEntryPoint());
+			if (cu != null) {
+				cu.setComment(CommentType.PLATE,
+					gatePlate(gate, cu.getComment(CommentType.PLATE)));
+			}
+		}
+		catch (DuplicateNameException | InvalidInputException e) {
+			Msg.warn(RTLinkOverlayAnalyzer.class,
+				"RTLink: could not show the target name on stub " + gate + ": " +
+					e.getMessage());
+		}
+	}
+
+	/** {@code existing} plate comment plus the line naming {@code gate}, once. */
+	static String gatePlate(String gate, String existing) {
+		String line = "RTLink dispatch stub " + gate;
+		if (existing == null || existing.isBlank()) {
+			return line;
+		}
+		return existing.contains(line) ? existing : existing + "\n" + line;
+	}
+
+	private static boolean wireThunkAtStub(FunctionManager funcMgr, Address stubAddr,
 			Address targetAddr, int stubSize, MessageLog log) {
 		// A CALLF+JMPF pair inside a larger function's body is fallthrough-reachable
 		// code, not a free-standing stub — the overlay manager's own code contains

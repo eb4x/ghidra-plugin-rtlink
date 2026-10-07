@@ -99,28 +99,47 @@ public class RTLinkSmokeScript extends GhidraScript {
 		println("smoke: overlay blocks " + names);
 	}
 
-	/** Each stub is a thunk of the overlay function its page_id, offset and module name. */
+	/**
+	 * Each stub is a thunk of the overlay function its page_id, offset and module name. The
+	 * thunk shows its target's name, so calls through it decompile as calls to the overlay
+	 * function; the gate name is in the stub's plate comment.
+	 */
 	private void checkStubs() {
 		checkStub(0x00, "OVLSTUB_00_0000", "OVL00_0000");
 		checkStub(0x0c, "OVLSTUB_01_0000", "OVL01_0000");
 		checkStub(0x18, "OVLSTUB_01_0020", "OVL01_0020"); // 14-byte form, module base 2
 		checkStub(0x26, "OVLSTUB_02_0000", "OVL02_0000");
+
+		Function main = getFunctionContaining(seg(TEXT, 0x26));
+		String c = main == null ? null : decompile(main.getEntryPoint());
+		if (c == null) {
+			fail("main (calling stubs 0, 1 and 3) does not decompile");
+			return;
+		}
+		for (String callee : List.of("OVL00_0000(", "OVL01_0000(", "OVL02_0000(")) {
+			check(c.contains(callee), "decompiled main does not call " + callee + ")");
+		}
+		check(!c.contains("OVLSTUB_"), "decompiled main calls a stub by its gate name");
 	}
 
-	private void checkStub(int offset, String stubName, String targetName) {
+	private void checkStub(int offset, String gate, String targetName) {
 		Address stub = seg(NUC, offset);
 		Address target = symbol(targetName);
-		Address labelled = symbol(stubName);
-		check(stub.equals(labelled), stubName + " at " + labelled + ", expected " + stub);
 		Function thunk = getFunctionAt(stub);
 		if (thunk == null || !thunk.isThunk()) {
-			fail(stubName + " is not a thunk");
+			fail(gate + " at " + stub + " is not a thunk");
 			return;
 		}
 		Function thunked = thunk.getThunkedFunction(false);
 		check(thunked != null && thunked.getEntryPoint().equals(target),
-			stubName + " thunks " + (thunked == null ? null : thunked.getEntryPoint()) +
+			gate + " thunks " + (thunked == null ? null : thunked.getEntryPoint()) +
 				", expected " + targetName + " at " + target);
+		check(thunk.getSymbol().getSource() == SourceType.DEFAULT &&
+			thunk.getName().equals(targetName),
+			gate + " is named " + thunk.getName() + ", expected its target's " + targetName);
+		String plate = getPlateComment(stub);
+		check(plate != null && plate.contains("RTLink dispatch stub " + gate),
+			gate + " is not in the stub's plate comment: " + plate);
 	}
 
 	private void checkTrampolines() {
