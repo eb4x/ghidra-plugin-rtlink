@@ -10,10 +10,14 @@ import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
 import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.importer.MessageLog;
+import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.SegmentedAddress;
 import ghidra.program.model.lang.Register;
+import ghidra.program.model.listing.Bookmark;
+import ghidra.program.model.listing.BookmarkManager;
+import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
@@ -57,7 +61,8 @@ import ghidra.util.task.TaskMonitor;
  * SPHERE, ROE2MAIN — matching no unrelated {@code JMP reg} site: a register-indirect near
  * jump, immediately preceded by a return-slot patch {@code MOV word ptr [base-disp], reg}
  * (the {@code 89 44 fc} = {@code MOV [SI-4],AX} spelling in all four), fed by a
- * {@code MOV <jumpreg>,imm16}, and carrying a same-block ANALYSIS computed-jump reference.
+ * {@code MOV <jumpreg>,imm16}, and carrying an ANALYSIS computed-jump reference that one of
+ * those immediates explains (see {@link #matchedBogusRefs}).
  */
 public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 
@@ -146,7 +151,13 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 				references.delete(ref);
 
 				Instruction targetInsn = listing.getInstructionAt(target);
-				if (targetInsn == null || isEvidencedInstruction(program, targetInsn)) {
+				if (targetInsn == null) {
+					// The bogus flow never decoded (it ran into real code); its only trace is
+					// the "Failed to disassemble" mark at the target, now an orphan.
+					removeOrphanedErrorBookmarks(program, target);
+					continue;
+				}
+				if (isEvidencedInstruction(program, targetInsn)) {
 					// Nothing decoded there, or the target is real code that stands on its own
 					// evidence: drop the bad reference but leave the code (do not over-clear).
 					continue;
@@ -170,12 +181,32 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
+	 * Drop the disassembler's ERROR marks at {@code target} once nothing flows there any more.
+	 * A bogus target that collided with real code decodes nothing and leaves only the mark
+	 * {@code "Failed to disassemble at <target> due to conflicting instruction ..."}; with the
+	 * reference deleted, no flow explains it. A target some other flow still reaches keeps its
+	 * marks: they may describe that flow.
+	 */
+	private static void removeOrphanedErrorBookmarks(Program program, Address target) {
+		for (Reference reference : program.getReferenceManager().getReferencesTo(target)) {
+			if (reference.getReferenceType().isFlow()) {
+				return;
+			}
+		}
+		BookmarkManager bookmarks = program.getBookmarkManager();
+		for (Bookmark bookmark : bookmarks.getBookmarks(target, BookmarkType.ERROR)) {
+			if (Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory())) {
+				bookmarks.removeBookmark(bookmark);
+			}
+		}
+	}
+
+	/**
 	 * True when {@code jmp} is an RTLink overlay dispatcher trampoline: a register-indirect
 	 * near jump, immediately preceded by a return-slot patch {@code MOV [base-disp], reg}, fed
-	 * by a {@code MOV <jumpreg>, imm16}, and carrying at least one same-block ANALYSIS
-	 * computed-jump reference. The return-slot patch is the near-unforgeable gate — a compiler
-	 * does not store into a return-offset slot and then jump through a just-constant-loaded
-	 * register.
+	 * by a {@code MOV <jumpreg>, imm16}, and carrying at least one ANALYSIS computed-jump
+	 * reference. The return-slot patch is the near-unforgeable gate — a compiler does not
+	 * store into a return-offset slot and then jump through a just-constant-loaded register.
 	 */
 	private static boolean isDispatcherJump(Program program, Instruction jmp) {
 		if (!isRegisterIndirectJump(jmp)) {
@@ -191,7 +222,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		if (!hasConstantFeeder(program, jmp, jumpReg)) {
 			return false;
 		}
-		return !sameBlockComputedJumpRefs(program, jmp).isEmpty();
+		return !analysisComputedJumpRefs(jmp).isEmpty();
 	}
 
 	/** A near {@code JMP} through a single 16-bit register: {@code FF /4}, {@code mod == 3}. */
@@ -271,33 +302,60 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
-	 * The bogus references to delete: each same-block ANALYSIS computed-jump reference from
-	 * {@code jmp} whose target the constant analyzer built by resolving a
-	 * {@code MOV <jumpReg>, imm16} immediate against some segment. On a confirmed dispatcher
-	 * every such reference is bogus (the true target is runtime-selected); tying each deletion
-	 * to a loaded constant is the precision check, and the same-block filter leaves any
-	 * already-correct cross-segment overlay resolution alone.
-	 * <p>
-	 * The constant analyzer resolves the bare offset against the CS <i>page-base</i> segment
-	 * (the 64KB block base, e.g. {@code 2000}), not the address's canonical segment (e.g.
-	 * {@code 20fe}), so the target's offset-within-its-canonical-segment is <i>not</i> the
-	 * immediate. The stable relationship is on the flat address: a target physical address
-	 * {@code P} was formed as {@code seg*16 + imm} for some segment, i.e. {@code P - imm} is a
-	 * non-negative multiple of 16 landing on a representable segment. Matching on that is
-	 * robust to which segment Ghidra chose to display the target in.
+	 * The bogus references to delete: each ANALYSIS computed-jump reference from {@code jmp}
+	 * that the constant analyzer built by resolving a {@code MOV <jumpReg>, imm16} immediate
+	 * against a segment of its own choosing. On a confirmed dispatcher every such reference is
+	 * bogus (the true target is runtime-selected); tying each deletion to a loaded constant is
+	 * the precision check. Two shapes qualify:
+	 * <ul>
+	 * <li><b>Against the jump's 64KB page</b>, in any block. The x86 {@code currentCS}
+	 * subconstructor recomputes CS from the program counter as {@code (inst_next >> 4) &
+	 * 0xf000}, so the constant analyzer's target is exactly {@code page base + imm}. That page
+	 * base need not lie in the jump's own block: MzLoader makes one block per segment, and a
+	 * nucleus segment that starts past its page boundary sends the target into an earlier
+	 * block — the committed smoke sample does exactly that (nucleus at {@code 1012}, targets in
+	 * the resident code at {@code 1000}), where the junk lands inside a real routine.</li>
+	 * <li><b>Against any segment, inside the jump's own block</b> — the original rule, kept so
+	 * that nothing it matched on the corpus stops matching. Ghidra may display two addresses
+	 * of one 64KB page under different segment bases ({@code 20fe:0389}, {@code 2090:0593}),
+	 * so this compares flat addresses: a target {@code P} formed as {@code seg*16 + imm} has
+	 * {@code P - imm} a non-negative multiple of 16 on a representable segment.</li>
+	 * </ul>
+	 * A target in an overlay block is never matched: that is a genuinely resolved overlay
+	 * target, not a page-relative guess.
 	 */
 	private static List<Reference> matchedBogusRefs(Program program, Instruction jmp) {
 		Register jumpReg = jmp.getRegister(0);
 		Set<Long> immediates = loadedImmediates(program, jmp, jumpReg);
+		MemoryBlock jumpBlock = program.getMemory().getBlock(jmp.getMinAddress());
+		long pageBase = (jmp.getMaxAddress().getOffset() + 1) & PAGE_MASK;
 
 		List<Reference> matched = new ArrayList<>();
-		for (Reference ref : sameBlockComputedJumpRefs(program, jmp)) {
-			SegmentedAddress target = (SegmentedAddress) ref.getToAddress();
-			if (resolvesFromImmediate(target, immediates)) {
+		for (Reference ref : analysisComputedJumpRefs(jmp)) {
+			if (!(ref.getToAddress() instanceof SegmentedAddress target)) {
+				continue; // an overlay target: resolved for real, not against a page
+			}
+			boolean sameBlock =
+				jumpBlock != null && jumpBlock.equals(program.getMemory().getBlock(target));
+			if (resolvesAgainstPage(target, pageBase, immediates) ||
+				(sameBlock && resolvesFromImmediate(target, immediates))) {
 				matched.add(ref);
 			}
 		}
 		return matched;
+	}
+
+	/** Flat-address bits of a 64KB page base: what {@code currentCS} keeps of the PC. */
+	private static final long PAGE_MASK = 0xf0000L;
+
+	private static long physical(SegmentedAddress address) {
+		return (long) address.getSegment() * 16 + address.getSegmentOffset();
+	}
+
+	/** True when {@code target} is {@code pageBase + imm} for one of {@code immediates}. */
+	private static boolean resolvesAgainstPage(SegmentedAddress target, long pageBase,
+			Set<Long> immediates) {
+		return immediates.contains(physical(target) - pageBase);
 	}
 
 	/**
@@ -306,7 +364,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 	 * non-negative multiple of 16 whose quotient is a representable segment.
 	 */
 	private static boolean resolvesFromImmediate(SegmentedAddress target, Set<Long> immediates) {
-		long physical = (long) target.getSegment() * 16 + target.getSegmentOffset();
+		long physical = physical(target);
 		for (long imm : immediates) {
 			long base = physical - imm;
 			if (base >= 0 && (base & 0xf) == 0 && (base >> 4) <= 0xffffL) {
@@ -316,31 +374,12 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		return false;
 	}
 
-	/**
-	 * ANALYSIS computed-jump references from {@code jmp} whose target lies in the <i>same
-	 * memory block</i> as the jump — the constant analyzer resolved the bare overlay offset
-	 * against the jump's own CS page, so a truthful listing has no such static target.
-	 * <p>
-	 * The discriminator is the memory block, not the segment number: a single 64KB CS page is
-	 * one block, and Ghidra may display two addresses inside it under different segment bases
-	 * (e.g. {@code 20fe:0389} and {@code 2090:0593} are both in the page based at {@code 2000}),
-	 * so a segment-number test would miss half of them. A genuinely cross-overlay resolution
-	 * lands in a different block and is left untouched.
-	 */
-	private static List<Reference> sameBlockComputedJumpRefs(Program program, Instruction jmp) {
-		MemoryBlock jumpBlock = program.getMemory().getBlock(jmp.getMinAddress());
-		if (jumpBlock == null) {
-			return List.of();
-		}
+	/** The ANALYSIS computed-jump references from {@code jmp}: what the constant analyzer adds. */
+	private static List<Reference> analysisComputedJumpRefs(Instruction jmp) {
 		List<Reference> refs = new ArrayList<>();
 		for (Reference ref : jmp.getReferencesFrom()) {
-			if (!ref.getReferenceType().isComputed() || !ref.getReferenceType().isJump()) {
-				continue;
-			}
-			if (ref.getSource() != SourceType.ANALYSIS) {
-				continue;
-			}
-			if (jumpBlock.equals(program.getMemory().getBlock(ref.getToAddress()))) {
+			if (ref.getReferenceType().isComputed() && ref.getReferenceType().isJump() &&
+				ref.getSource() == SourceType.ANALYSIS) {
 				refs.add(ref);
 			}
 		}

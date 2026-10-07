@@ -278,6 +278,72 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	}
 
 	/**
+	 * The bogus reference in an <i>earlier</i> block. MzLoader makes one block per segment,
+	 * and stock resolves the immediate against the jump's 64KB page base, not its segment, so
+	 * a nucleus segment starting past its page boundary sends the target into whatever block
+	 * holds the page base. The committed smoke sample has this shape:
+	 * <pre>
+	 *   1000:0000  CODE block, 0x120 bytes of resident code:
+	 *   1000:0060  f8 f9 fa     the casualty the bogus flow decoded
+	 *   1000:0068  55           PUSH BP, a real function entry; the bogus flow to 0067
+	 *                           collided with it, decoded nothing, and left only a mark
+	 *   1012:0000  b8 16 00     MOV AX,0x0016    ; NUC block
+	 *   1012:0003  ba 60 00     MOV DX,0x0060
+	 *   1012:0006  ba 67 00     MOV DX,0x0067
+	 *   1012:0009  89 44 fc     MOV [SI-4],AX
+	 *   1012:000c  ff e2        JMP DX           ; bogusly resolved to page 1000 + imm
+	 * </pre>
+	 */
+	@Test
+	public void testPageBaseRefInEarlierBlockIsNeutralized() throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("PAGE", ProgramBuilder._X86_16_REAL_MODE);
+		try {
+			MemoryBlock resident = builder.createMemory("CODE", "0x1000:0x0000", 0x120);
+			MemoryBlock nucleus = builder.createMemory("NUC", "0x1012:0x0000", 0x100);
+			builder.withTransaction(() -> {
+				resident.setExecute(true);
+				nucleus.setExecute(true);
+			});
+			builder.setBytes("0x1012:0x0000", "b8 16 00 ba 60 00 ba 67 00 89 44 fc ff e2");
+			builder.setBytes("0x1000:0x0060", CASUALTY_A);
+			builder.setBytes("0x1000:0x0068", "55 c3");
+			builder.disassemble("0x1012:0x0000", 14, true);
+			builder.disassemble("0x1000:0x0060", 3, true);
+			builder.disassemble("0x1000:0x0068", 2, true);
+			builder.createFunction("0x1000:0x0068");
+			Program program = builder.getProgram();
+			builder.withTransaction(() -> {
+				ReferenceManager refs = program.getReferenceManager();
+				refs.addMemoryReference(builder.addr("0x1012:0x000c"),
+					builder.addr("0x1000:0x0060"), RefType.COMPUTED_JUMP, SourceType.ANALYSIS, 0);
+				refs.addMemoryReference(builder.addr("0x1012:0x000c"),
+					builder.addr("0x1000:0x0067"), RefType.COMPUTED_JUMP, SourceType.ANALYSIS, 0);
+				program.getBookmarkManager().setBookmark(builder.addr("0x1000:0x0060"),
+					BookmarkType.ERROR, "Bad Instruction", "conflicting data");
+				program.getBookmarkManager().setBookmark(builder.addr("0x1000:0x0067"),
+					BookmarkType.ERROR, "Bad Instruction", "Failed to disassemble at 1000:0067 " +
+						"due to conflicting instruction at 1000:0068");
+			});
+
+			assertEquals(1, neutralize(builder));
+
+			assertFalse("the page-based bogus references must be gone",
+				hasComputedJumpRef(program, "0x1012:0x000c"));
+			assertNull("the junk the first one decoded in the earlier block is cleared",
+				program.getListing().getInstructionAt(builder.addr("0x1000:0x0060")));
+			assertNull("the mark the second one left at its collision is dropped",
+				program.getBookmarkManager()
+						.getBookmark(builder.addr("0x1000:0x0067"), BookmarkType.ERROR,
+							"Bad Instruction"));
+			assertNotNull("and the real code it collided with is untouched",
+				program.getListing().getInstructionAt(builder.addr("0x1000:0x0068")));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
 	 * The {@code MOV DX,imm16 ; JMP DX} shape with a same-segment bogus reference but <b>no</b>
 	 * return-slot patch immediately before the jump (a plain NOP instead). The strict 5a gate
 	 * declines it, so an arbitrary register-indirect jump is never mistaken for a dispatcher.
