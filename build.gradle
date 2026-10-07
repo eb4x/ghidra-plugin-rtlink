@@ -44,6 +44,7 @@ buildExtension.exclude 'ghidra_scripts/**'
 // Keep project/dev clutter out of the packaged extension.
 buildExtension.exclude '.github/**'
 buildExtension.exclude '.claude/**'
+buildExtension.exclude 'CLAUDE.md'
 buildExtension.exclude 'gradle/**'
 buildExtension.exclude 'gradlew'
 buildExtension.exclude 'gradlew.bat'
