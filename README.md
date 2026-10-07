@@ -130,8 +130,13 @@ To build yourself: JDK 21+ and two paths in a gitignored, project-local
 ```bash
 ./gradlew buildExtension     # -> dist/ghidra_<ver>_<date>_RTLink.zip
 ./gradlew installExtension   # install the zip into GHIDRA_USER_EXTENSIONS_DIR
-./gradlew verify             # everything CI runs: packaging check, JUnit
-./gradlew viceroyTest        # local only: headless import of VICEROY.EXE (-PrtlinkViceroy=<path>)
+./gradlew verify             # everything CI runs: packaging check, JUnit, smokeTest
+./gradlew smokeTest          # headless import of the committed sample, src/test/smoke/
+./gradlew viceroyTest        # local only: the same on VICEROY.EXE (-PrtlinkViceroy=<path>)
 ```
+
+The smoke sample is a small RTLink-style overlay EXE built byte by byte by
+`RTLinkSampleGenerator` (no vendor code; it is for static analysis and does not
+run). After changing the generator, `./gradlew generateSmokeSample` rewrites it.
 
 Restart Ghidra to load the new build.

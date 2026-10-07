@@ -1,6 +1,28 @@
 // RTLink — the shared ghidra-plugin-* build, plus what is rtlink's own.
 apply from: 'gradle/ghidra-plugin-common.gradle'
 
+/**
+ * Regenerate the committed smoke sample from its generator (src/test/java, so the JUnit drift
+ * check can call it). Run after changing RTLinkSampleGenerator; RTLinkSampleTest fails until
+ * the committed bytes match again.
+ */
+tasks.register('generateSmokeSample', JavaExec) {
+	description = 'Regenerate src/test/smoke/rtlink-sample.exe from RTLinkSampleGenerator'
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'ebbex.rtlink.sample.RTLinkSampleGenerator'
+	args file('src/test/smoke/rtlink-sample.exe')
+}
+
+// The committed, self-built sample: every analyzer's result, checked in the decompiler.
+ghidraHeadless('smokeTest') {
+	description = 'Headless-import the committed RTLink sample and assert each analyzer\'s result'
+	importFile = 'src/test/smoke/rtlink-sample.exe'
+	postScript 'RTLinkSmokeScript.java'
+	requiredLine = 'SMOKE OK'
+}
+
+tasks.named('verify') { dependsOn 'smokeTest' }
+
 // Local only, never in verify: VICEROY.EXE is not redistributable.
 ghidraHeadless('viceroyTest') {
 	description = 'Headless-import VICEROY.EXE and assert overlays, stubs and VM seeds (local only)'
