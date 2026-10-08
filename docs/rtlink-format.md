@@ -286,6 +286,30 @@ next anchor" as a hard end has cost us the same way twice: the table is rejected
 `DecompilerSwitchAnalyzer` claims the dispatch instead, and its cases land in other segments
 entirely. Anchor a displacement with them; bound nothing with them.
 
+### Extracting pages outside Ghidra
+
+`RTLinkExtract` (`src/test/java/ebbex/rtlink/extract/`) walks the record chain as this
+section describes and writes each page's code as a flat `ovl_NN.bin`, its relocation entries
+as `ovl_NN.relocs.txt`, the MZ load module as `resident.bin` and its relocations as
+`mz-relocs.txt`, with an `index.txt` of every record. With `--image-base` and `--frame` it
+also writes relocated copies. It uses only the JDK and was written from this document, not
+from the analyzer's parser. That makes it an oracle when "the analyzer says so" is the claim
+under test. `RTLinkExtractTest` checks that the two parsers agree on the committed sample.
+
+```bash
+java src/test/java/ebbex/rtlink/extract/RTLinkExtract.java <exe> <outdir> \
+    [--image-base 0x1000 --frame <overlay block segment>]
+objdump -D -b binary -m i8086 -M intel <outdir>/ovl_NN.bin
+cmp -l <outdir>/ovl_NN.bin <outdir>/ovl_NN.rel.bin     # every byte a fixup changes
+```
+
+`./gradlew extractOverlays -PrtlinkExtractIn=<exe> -PrtlinkExtractOut=<dir>` runs the same
+through Gradle. The analyzer's values for `--image-base` and `--frame` are 0x1000 and the
+overlay blocks' base segment (0x2d00 in NEBULAR), so `ovl_NN.rel.bin` matches Ghidra's
+`OVERLAY_NN` byte for byte. Its `overhead_tail_nonzero` column counts nonzero bytes between
+a record's last relocation list and its code; a relocation the header does not count would
+show up there.
+
 ## VM runtime
 
 Everything in this section is RE against the fingerprinted manager (offsets quoted from

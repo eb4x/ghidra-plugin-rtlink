@@ -13,6 +13,23 @@ tasks.register('generateSmokeSample', JavaExec) {
 	args file('src/test/smoke/rtlink-sample.exe')
 }
 
+/**
+ * Extract every overlay page as a flat binary for a stock disassembler, outside Ghidra (see
+ * RTLinkExtract). -PrtlinkExtractIn=<exe> -PrtlinkExtractOut=<dir>; add
+ * -PrtlinkExtractImageBase=0x1000 -PrtlinkExtractFrame=<seg> for relocated copies too.
+ */
+tasks.register('extractOverlays', JavaExec) {
+	description = 'Extract RTLink overlay pages, their relocations and the resident image, without Ghidra'
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'ebbex.rtlink.extract.RTLinkExtract'
+	args file(findProperty('rtlinkExtractIn') ?: 'src/test/smoke/rtlink-sample.exe'),
+		file(findProperty('rtlinkExtractOut') ?: layout.buildDirectory.dir('rtlink-extract').get())
+	if (findProperty('rtlinkExtractImageBase')) {
+		args '--image-base', findProperty('rtlinkExtractImageBase'),
+			'--frame', findProperty('rtlinkExtractFrame')
+	}
+}
+
 // The committed, self-built sample: every analyzer's result, checked in the decompiler.
 ghidraHeadless('smokeTest') {
 	description = 'Headless-import the committed RTLink sample and assert each analyzer\'s result'
