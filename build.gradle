@@ -40,11 +40,13 @@ ghidraHeadless('smokeTest') {
 
 tasks.named('verify') { dependsOn 'smokeTest' }
 
-// Local only, never in verify: VICEROY.EXE is not redistributable.
+// Local only, never in verify: VICEROY.EXE is not redistributable. The default is the GOG
+// edition, the build the curated /COLONIZE/VICEROY.EXE was imported from; the DOSBox copy
+// under ~/dosbox/MPS is a different build, with every overlay 0x2000 lower.
 ghidraHeadless('viceroyTest') {
 	description = 'Headless-import VICEROY.EXE and assert overlays, stubs and VM seeds (local only)'
 	importFile = findProperty('rtlinkViceroy') ?:
-		"${System.getProperty('user.home')}/dosbox/MPS/COLONIZE/VICEROY.EXE"
+		"${System.getProperty('user.home')}/GOG Games/Sid Meiers Colonization/data/MPS/COLONIZE/VICEROY.EXE"
 	importSwitch = 'rtlinkViceroy'
 	postScript 'RTLinkViceroyScript.java'
 	requiredLine = 'VICEROY OK'
