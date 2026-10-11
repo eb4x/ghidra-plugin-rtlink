@@ -204,12 +204,14 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			// assume DS. Husks first, so the thunk pass finds real code at its targets.
 			repairHuskFunctions(program, log, monitor);
 			if (createStubXrefs) {
-				repairStubThunks(program, log, monitor);
-				// Retrofit the VM-runtime entry seeds too: dispatch-stub discovery is a
-				// cheap byte scan, and everything seedVmRuntimeEntryPoints does is a
-				// no-op where a prior run or hand analysis already claimed the address.
-				seedVmRuntimeEntryPoints(program, discoverDispatchers(program, monitor),
-					log, monitor);
+				// Retrofit the VM-runtime entry seeds too, unless the stub pass already
+				// did: dispatch-stub discovery is a cheap byte scan, and everything
+				// seedVmRuntimeEntryPoints does is a no-op where a prior run or hand
+				// analysis already claimed the address.
+				if (!repairStubThunks(program, log, monitor)) {
+					seedVmRuntimeEntryPoints(program, discoverDispatchers(program, monitor),
+						log, monitor);
+				}
 			}
 			assignCodeSegments(program, log);
 			maybeAssumeDataSegment(program, log);
@@ -879,6 +881,17 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		return a.compareTo(b) <= 0 ? a : b;
 	}
 
+	/** The module bases recorded for {@code block}, plus those {@code page}'s relocations name. */
+	private static SortedSet<Integer> recordedModuleBases(Program program, MemoryBlock block,
+			RTLinkOverlayPage page) {
+		SortedSet<Integer> bases = new TreeSet<>(page.getModuleBases());
+		List<Integer> recorded = RTLinkSwitchTableAnalyzer.moduleBases(program, block);
+		if (recorded != null) {
+			bases.addAll(recorded);
+		}
+		return bases;
+	}
+
 	/** The overlay block's comment, naming {@code bases} as its module base paragraphs. */
 	private static String blockComment(RTLinkOverlayPage page, Collection<Integer> bases) {
 		StringBuilder comment = new StringBuilder(
@@ -919,7 +932,9 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				continue;
 			}
 
-			SortedSet<Integer> merged = new TreeSet<>(info.page().getModuleBases());
+			// Against what is recorded, not the relocation table alone, so a re-run does
+			// not count the stub-only bases an earlier run already added.
+			SortedSet<Integer> merged = recordedModuleBases(program, info.block(), info.page());
 			int before = merged.size();
 			merged.addAll(fromStubs);
 			if (merged.size() == before) {
@@ -1023,7 +1038,8 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		}
 	}
 
-	private void discoverAndProcessStubs(Program program,
+	/** Resolve the dispatch stubs and trampolines; true if it seeded the VM runtime entries. */
+	private boolean discoverAndProcessStubs(Program program,
 			List<OverlayBlockInfo> overlayBlocks, MessageLog log, TaskMonitor monitor)
 			throws CancelledException {
 		AddressSet overlayEntryPoints = new AddressSet();
@@ -1067,7 +1083,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		int total = jmpfStubs + int3fStubs;
 		if (total == 0 && trampolines == 0) {
 			log.appendMsg("RTLink: No dispatch stubs found");
-			return;
+			return false;
 		}
 
 		FunctionManager funcMgr = program.getFunctionManager();
@@ -1106,9 +1122,11 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 		// Only a corroborated VM-nucleus binary (real CALLF+JMPF stubs) gets its runtime
 		// entry points seeded; an INT 3Fh-era binary has no nucleus to seed.
-		if (jmpfStubs > 0) {
-			seedVmRuntimeEntryPoints(program, dispatcherSegs, log, monitor);
+		if (jmpfStubs == 0) {
+			return false;
 		}
+		seedVmRuntimeEntryPoints(program, dispatcherSegs, log, monitor);
+		return true;
 	}
 
 	/**
@@ -2350,11 +2368,12 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	 * no-return flag (which silently truncates the decompilation of every caller of
 	 * every stub forwarding to them).
 	 */
-	private void repairStubThunks(Program program, MessageLog log, TaskMonitor monitor)
+	/** Re-wire the stub thunks; true if that also seeded the VM runtime entries. */
+	private boolean repairStubThunks(Program program, MessageLog log, TaskMonitor monitor)
 			throws CancelledException {
 		List<FileBytes> allFileBytes = program.getMemory().getAllFileBytes();
 		if (allFileBytes.isEmpty()) {
-			return;
+			return false;
 		}
 		FileBytes fileBytes = allFileBytes.get(0);
 		try (FileBytesProvider provider = new FileBytesProvider(fileBytes)) {
@@ -2364,7 +2383,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			List<RTLinkOverlayPage> allPages =
 				RTLinkOverlayPage.parseAllPages(reader, overlayStart, fileBytes.getSize());
 			if (allPages.size() < 2) {
-				return;
+				return false;
 			}
 
 			// Rebuild the OverlayBlockInfo list from the existing blocks, mirroring
@@ -2397,22 +2416,24 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				MemoryBlock block = findOverlayBlock(memory, nameIndex, width);
 				if (block == null) {
 					// Unexpected layout (blocks renamed/removed); leave the program alone.
-					return;
+					return false;
 				}
 				overlayBlocks.add(new OverlayBlockInfo(page, block));
 				// Retrofit the module base record onto programs imported before it
 				// existed, so overlay switch-table recovery works there on re-analysis.
 				// discoverAndProcessStubs() then merges in the stub-only modules.
-				recordModuleBases(program, block.getName(), page.getModuleBases());
+				recordModuleBases(program, block.getName(),
+					recordedModuleBases(program, block, page));
 			}
 
-			discoverAndProcessStubs(program, overlayBlocks, log, monitor);
+			return discoverAndProcessStubs(program, overlayBlocks, log, monitor);
 		}
 		catch (CancelledException e) {
 			throw e;
 		}
 		catch (Exception e) {
 			log.appendMsg("RTLink: stub thunk retrofit failed: " + e.getMessage());
+			return false;
 		}
 	}
 
