@@ -937,7 +937,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 	 * The module base paragraphs {@link RTLinkOverlayAnalyzer} recorded for {@code block}
 	 * when it created the overlay, sorted ascending, or null if there is no (valid) record.
 	 */
-	private static List<Integer> moduleBases(Program program, MemoryBlock block) {
+	static List<Integer> moduleBases(Program program, MemoryBlock block) {
 		String recorded = program.getOptions(Program.PROGRAM_INFO).getString(
 			RTLinkOverlayAnalyzer.MODULE_BASES_PREFIX + block.getName(), null);
 		if (recorded == null || recorded.isEmpty()) {

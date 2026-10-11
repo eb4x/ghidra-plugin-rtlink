@@ -476,6 +476,163 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 		}
 	}
 
+	/** The routine above the run, the run itself (65 bytes), and the routine below. */
+	private static final String ROUTINE_RUN_ABOVE = "55 8b ec 5d ca 04 00 ";
+	private static final String ROUTINE_RUN_BELOW = "55 8b ec 5d cb";
+
+	/** Routine C of the run, its {@code JA} landing on the code after its inner JMP. */
+	private static final String ROUTINE_C_REACHED =
+		"3b 06 4c a6 77 05 a1 4c a6 eb 03 a1 62 26 a3 62 26 cb ";
+
+	/**
+	 * VICEROY {@code OVERLAY_30::03a40a} in miniature: three library routines that
+	 * nothing calls, between a routine ending in {@code RETF 4} and the next function,
+	 * each padded onto an even address by one {@code NOP}. Longer than any single-routine
+	 * gap, so only the whole-routine rule can claim it.
+	 * <pre>
+	 *   0100  55 8b ec 5d ca 04 00   routine above, ends RETF 4      ; disassembled
+	 *   0107  90                     pad
+	 *   0108  c8 02 00 00 ...        A: ENTER 2,0 ... INT 21h; LEAVE; RETF 4
+	 *   0117  90                     pad
+	 *   0118  a1 62 26 ... cb        B: copy two longs; RETF (no frame)
+	 *   0135  90                     pad
+	 *   0136  3b 06 4c a6 77 05 ...  C: CMP; JA 0141; MOV; JMP 0144; 0141 MOV; 0144 MOV; RETF
+	 *   0148  55 8b ec 5d cb         the next function                ; disassembled
+	 * </pre>
+	 */
+	private ProgramBuilder routineRunProgram(String routineC) throws Exception {
+		return routineRunProgram(ROUTINE_RUN_ABOVE, routineC);
+	}
+
+	/** The same, with {@code above} (seven bytes) as the routine above the run. */
+	private ProgramBuilder routineRunProgram(String above, String routineC) throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("RUN", ProgramBuilder._X86_16_REAL_MODE);
+		MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0100", 0x60);
+		builder.withTransaction(() -> code.setExecute(true));
+		builder.setBytes("0x1000:0x0100", above + "90 " +
+			"c8 02 00 00 8b 46 06 b4 4a cd 21 c9 ca 04 00 " + "90 " +
+			"a1 62 26 8b 16 64 26 a3 4c a6 89 16 4e a6 " +
+			"a1 6a 26 8b 16 6c 26 a3 50 a6 89 16 52 a6 cb " + "90 " + routineC +
+			ROUTINE_RUN_BELOW);
+		builder.disassemble("0x1000:0x0100", 7, true);
+		builder.createFunction("0x1000:0x0100");
+		builder.disassemble("0x1000:0x0148", 5, true);
+		builder.createFunction("0x1000:0x0148");
+		return builder;
+	}
+
+	@Test
+	public void testRunOfWholeRoutinesIsRecovered() throws Exception {
+		ProgramBuilder builder = routineRunProgram(ROUTINE_C_REACHED);
+		try {
+			Program program = builder.getProgram();
+			Listing listing = program.getListing();
+			assertNull("setup: the run must start out undefined",
+				listing.getInstructionAt(builder.addr("0x1000:0x0108")));
+
+			assertEquals("three routines", 3, fillGaps(builder));
+
+			for (String entry : new String[] { "0x0108", "0x0118", "0x0136" }) {
+				assertNotNull("a function at " + entry, program.getFunctionManager()
+						.getFunctionAt(builder.addr("0x1000:" + entry)));
+			}
+			assertEquals("ENTER", listing.getInstructionAt(builder.addr("0x1000:0x0108"))
+					.getMnemonicString());
+			assertNotNull("C's code past its inner JMP is reached by its JA",
+				listing.getInstructionAt(builder.addr("0x1000:0x0141")));
+			assertNull("and is part of C, not a routine of its own",
+				program.getFunctionManager().getFunctionAt(builder.addr("0x1000:0x0141")));
+			assertNull("the alignment pads stay undefined",
+				listing.getInstructionAt(builder.addr("0x1000:0x0107")));
+			assertEquals("a second pass finds nothing left", 0, fillGaps(builder));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * The same run with C's {@code JA} aimed past {@code 0141}: the code after the inner
+	 * {@code JMP} is now reached by nothing, so the run does not account for itself and
+	 * none of it is claimed.
+	 */
+	@Test
+	public void testRunWithUnreachedCodeIsLeftAlone() throws Exception {
+		ProgramBuilder builder = routineRunProgram(
+			"3b 06 4c a6 77 08 a1 4c a6 eb 03 a1 62 26 a3 62 26 cb ");
+		try {
+			assertEquals("code nothing reaches is not a routine", 0, fillGaps(builder));
+			assertNull("so the run stays undefined", builder.getProgram()
+					.getListing()
+					.getInstructionAt(builder.addr("0x1000:0x0108")));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * VICEROY {@code 1b22:0006}: a routine of the run that starts on zero bytes. Here C
+	 * opens with four of them, which decode in phase as {@code ADD [BX+SI],AL} but are
+	 * data (a saved interrupt vector, there), so the run is not claimed.
+	 */
+	@Test
+	public void testRunStartingOnZerosIsLeftAlone() throws Exception {
+		ProgramBuilder builder = routineRunProgram(
+			"00 00 00 00 8b 16 64 26 a1 4c a6 a3 62 26 a3 62 26 cb ");
+		try {
+			assertEquals("zeros are no routine entry", 0, fillGaps(builder));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * VICEROY {@code 210d:05f0}: the run sits below a far jump that Shared Return Calls
+	 * made a tail call ({@code CALL_TERMINATOR}, which is terminal). That is no return,
+	 * so the code below may still belong to the routine above, and none of it is claimed.
+	 */
+	@Test
+	public void testRunBelowATailCallIsLeftAlone() throws Exception {
+		// 0100: NOP; NOP; JMPF 1000:0148, then the run as before
+		ProgramBuilder builder = routineRunProgram("90 90 ea 48 01 00 10 ", ROUTINE_C_REACHED);
+		try {
+			Program program = builder.getProgram();
+			Instruction jump = program.getListing().getInstructionAt(builder.addr("0x1000:0x0102"));
+			builder.withTransaction(() -> jump.setFlowOverride(FlowOverride.CALL_RETURN));
+			assertTrue("setup: the jump is now terminal", jump.getFlowType().isTerminal());
+
+			assertEquals("a tail call is no return", 0, fillGaps(builder));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/** A short gap opening with {@code ENTER n,0} is a prologue like PUSH BP; MOV BP,SP. */
+	@Test
+	public void testEnterPrologueIsRecovered() throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("ENTER", ProgramBuilder._X86_16_REAL_MODE);
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0100", 0x20);
+			builder.withTransaction(() -> code.setExecute(true));
+			// 0100: RETF; 0101: ENTER 2,0; LEAVE; RETF (the gap); 0107: the next routine
+			builder.setBytes("0x1000:0x0100", "cb c8 02 00 00 c9 cb 55 8b ec 5d cb");
+			builder.disassemble("0x1000:0x0100", 1, true);
+			builder.disassemble("0x1000:0x0107", 5, true);
+			builder.createFunction("0x1000:0x0107");
+
+			assertEquals(1, fillGaps(builder));
+			assertNotNull("the ENTER routine becomes a function", builder.getProgram()
+					.getFunctionManager()
+					.getFunctionAt(builder.addr("0x1000:0x0101")));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
 	private static int resolveVectors(ProgramBuilder builder) throws Exception {
 		Program program = builder.getProgram();
 		int txId = program.startTransaction("resolve far vectors");

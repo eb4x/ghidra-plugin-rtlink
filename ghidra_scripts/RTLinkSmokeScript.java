@@ -41,6 +41,7 @@ public class RTLinkSmokeScript extends GhidraScript {
 			checkTrampolines();
 			checkEntrySeeds();
 			checkDataSegment();
+			checkCodeSegment();
 			checkDataReferences();
 			checkIntraPageCall();
 			checkSwitch();
@@ -179,6 +180,24 @@ public class RTLinkSmokeScript extends GhidraScript {
 			check(value != null && value.intValue() == DGROUP,
 				"DS at " + at + " is " + value + ", expected 0x101a");
 		}
+	}
+
+	/** CS over overlay code is the segment its module runs in: frame + module base. */
+	private void checkCodeSegment() {
+		Register cs = currentProgram.getRegister("CS");
+		checkCodeSegment(cs, "OVL01_0000", 0);
+		checkCodeSegment(cs, "OVL01_0020", 2); // the page's second module, base paragraph 2
+	}
+
+	private void checkCodeSegment(Register cs, String name, int moduleBase) {
+		Address at = symbol(name);
+		if (at == null) {
+			return;
+		}
+		long expected = (getMemoryBlock(at).getStart().getOffset() >> 4) + moduleBase;
+		var value = currentProgram.getProgramContext().getValue(cs, at, false);
+		check(value != null && value.longValue() == expected, String.format(
+			"CS at %s (%s) is %s, expected 0x%x", at, name, value, expected));
 	}
 
 	// ---------------------------------------------------------------- xref analyzer

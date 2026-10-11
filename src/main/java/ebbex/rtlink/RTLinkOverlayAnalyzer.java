@@ -211,6 +211,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				seedVmRuntimeEntryPoints(program, discoverDispatchers(program, monitor),
 					log, monitor);
 			}
+			assignCodeSegments(program, log);
 			maybeAssumeDataSegment(program, log);
 			return true;
 		}
@@ -251,6 +252,9 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 			List<OverlayBlockInfo> overlayBlocks =
 				createOverlayBlocks(program, fileBytes, allPages, log, monitor);
+			// Before the stub scan disassembles anything; again below, once the stubs have
+			// named the modules the relocation table cannot.
+			assignCodeSegments(program, log);
 
 			if (applyRelocations && !overlayBlocks.isEmpty()) {
 				monitor.setMessage("RTLink: Applying overlay relocations...");
@@ -270,6 +274,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				markupOverlayHeaders(program, fileBytes, allPages, log, monitor);
 			}
 
+			assignCodeSegments(program, log);
 			monitor.setMessage("RTLink: Determining data segment (DGROUP)...");
 			maybeAssumeDataSegment(program, log);
 
@@ -808,6 +813,70 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		}
 		program.getOptions(Program.PROGRAM_INFO)
 				.setString(MODULE_BASES_PREFIX + blockName, text.toString());
+	}
+
+	/**
+	 * Set CS over every module of every overlay block to the segment the module runs in:
+	 * the block's base paragraph plus the module's base paragraph.
+	 * <p>
+	 * In real mode {@code currentCS} reads the CS register from context (upstream PR
+	 * #9703). MzLoader sets it over each resident block but knows nothing of overlays, so
+	 * without this an overlay falls back to the default CS of its 64KB page: VICEROY's
+	 * {@code OVL24_0EC4} read its {@code JMP CS:[BX+0x156]} table through 0x3000 instead
+	 * of the module's 0x3ae7. Runs on every pass, like the DS assumption, so a One Shot
+	 * gives an already-analyzed program the context too.
+	 */
+	private static void assignCodeSegments(Program program, MessageLog log) {
+		Register cs = program.getLanguage().getRegister("CS");
+		if (cs == null) {
+			return;
+		}
+		ProgramContext context = program.getProgramContext();
+		int modules = 0;
+		int pages = 0;
+		try {
+			for (MemoryBlock block : program.getMemory().getBlocks()) {
+				List<Integer> bases = RTLinkSwitchTableAnalyzer.moduleBases(program, block);
+				if (bases == null) {
+					continue;
+				}
+				modules += assignCodeSegments(context, cs, block, bases);
+				pages++;
+			}
+		}
+		catch (ContextChangeException e) {
+			log.appendMsg("RTLink: failed to set CS over the overlays: " + e.getMessage());
+			return;
+		}
+		if (pages > 0) {
+			Msg.info(RTLinkOverlayAnalyzer.class, String.format(
+				"RTLink/Plus: Set CS over %d overlay module(s) in %d page(s)", modules, pages));
+		}
+	}
+
+	private static int assignCodeSegments(ProgramContext context, Register cs,
+			MemoryBlock block, List<Integer> recordedBases) throws ContextChangeException {
+		SortedSet<Integer> bases = new TreeSet<>(recordedBases);
+		bases.add(0); // the page's own start, which an early record may omit
+		Address start = block.getStart();
+		long frame = start.getOffset() >> 4;
+		int modules = 0;
+		for (int base : bases) {
+			Address from = start.add(base * 16L);
+			if (!block.contains(from)) {
+				break;
+			}
+			SortedSet<Integer> later = bases.tailSet(base + 1);
+			Address to = later.isEmpty() ? block.getEnd()
+					: min(block.getEnd(), start.add(later.first() * 16L - 1));
+			context.setValue(cs, from, to, BigInteger.valueOf((frame + base) & 0xffffL));
+			modules++;
+		}
+		return modules;
+	}
+
+	private static Address min(Address a, Address b) {
+		return a.compareTo(b) <= 0 ? a : b;
 	}
 
 	/** The overlay block's comment, naming {@code bases} as its module base paragraphs. */

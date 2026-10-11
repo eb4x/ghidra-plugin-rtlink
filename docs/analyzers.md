@@ -7,7 +7,9 @@ six classes and not one. They share package-private statics and must stay in
 
 - **`RTLinkOverlayAnalyzer`** — BYTE, `FORMAT_ANALYSIS.after()`. Detects overlay data
   past the MZ image end, parses pages, creates the overlay memory blocks, wires up the
-  dispatch-stub thunks and assumes DS=DGROUP. Runs on raw bytes, before disassembly.
+  dispatch-stub thunks, sets CS over each overlay module (frame + module base; real-mode
+  `currentCS` reads it from context since upstream PR #9703, and the MZ loader sets it
+  only for resident blocks) and assumes DS=DGROUP. Runs on raw bytes, before disassembly.
 - **`RTLinkSwitchTableAnalyzer`** — INSTRUCTION, `CODE_ANALYSIS.before()`. Recovers the
   CS-/module-relative switch tables and fixes their *references*. Must run before
   `DecompilerSwitchAnalyzer`, which skips any computed branch that already has
@@ -41,7 +43,8 @@ six classes and not one. They share package-private statics and must stay in
   followed; provably terminating routines (`INT 21h/4Ch` and tail-jump chains into
   one) sealing their callers' fall-throughs; "conflicting instruction" bookmarks
   arbitrated by evidence; undefined gaps that decode exactly onto the code after them
-  disassembled; instructions decoded out of zero fill (≥16 zero bytes) deleted when
+  disassembled (a short gap shaped like one routine, or a run of whole routines below a
+  return, each made a function); instructions decoded out of zero fill (≥16 zero bytes) deleted when
   unreferenced. The test is always on the bytes in memory, never on the instruction
   (`00 00` is a real instruction). Unresolved dispatch stubs and NOP sleds are left
   strictly alone.

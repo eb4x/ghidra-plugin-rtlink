@@ -740,6 +740,30 @@ flows into memory that does not exist is never claimed either: that is RTLink's 
 stub (`CALLF dispatcher; JMPF 0000:offset`, segment unrelocated until the overlay manager
 patches it), and it belongs to `RTLinkOverlayAnalyzer`.
 
+The single-routine rule stops at 64 bytes, so it cannot see **a run of whole routines**.
+VICEROY's `OVERLAY_30::03a40a`–`03a4a7` holds three library routines linked in with their
+module and called by nothing, since no stub of page 30 names them: an `ENTER`-framed
+`INT 21h/4Ah` wrapper, a routine that saves two longs, and one that restores them. Each
+ends in `RETF` and one `NOP` puts the next on an even address. A longer gap is claimed when
+it splits exactly that way. The code above it must end in a return, every routine must end
+in a return or an unconditional jump that none of its own jumps reaches past, at most one
+`NOP` may sit between routines, and every branch landing in the gap must land on an
+instruction of the decode. Code after an inner `JMP` must be one of the routine's own jump
+targets, since nothing else could reach it. Each routine becomes a function. `ENTER n,0`
+counts as a frame prologue alongside `PUSH BP; MOV BP,SP`.
+
+Two shapes in VICEROY's resident code pass every one of those checks and are still not
+routines, so the rule refuses them by name:
+
+- **A tail call is not a return.** Shared Return Calls turns a `JMPF` to a function into a
+  `CALL_TERMINATOR`, and that flow type is terminal. The code below such a jump can be the
+  jumping routine's own branch target (`210d:05f0`, below `JMPF 0630`). Only `RET`, `RETF`
+  and `IRET` count as the return above.
+- **Zero bytes are not a routine entry.** `00 00` decodes as `ADD [BX+SI],AL`, and a few
+  of them can happen to land in phase. In VICEROY these are an interrupt handler's saved
+  old vector (`1b22:0006`, read by `JMPF CS:[0006]`) and a CS word variable of the RTLink
+  runtime (`210d:0663`, written by `MOV CS:[0663],BX`). A run in which any routine starts on `00` is not claimed.
+
 **Filler is not code.** The DGROUP segment is mapped executable — there is code down there
 among the data — so its zeroed regions are fair game for anything that disassembles at an
 address it never checked, and something does: a switch's *default* case is disassembled

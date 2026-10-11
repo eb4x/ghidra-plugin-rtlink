@@ -127,6 +127,12 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 	private static final int MIN_GAP_LENGTH = 2;
 	private static final int MAX_GAP_LENGTH = 64;
 
+	/** A run of whole routines may be longer; past this an undefined run is not a gap. */
+	private static final int MAX_ROUTINE_RUN_LENGTH = 1024;
+
+	/** The one-byte alignment pad MSC puts between routines to start the next on a word. */
+	private static final byte NOP = (byte) 0x90;
+
 	/** Rounds to run the gap filler for; it converges in two or three on this corpus. */
 	private static final int GAP_FILL_ROUNDS = 10;
 
@@ -1302,10 +1308,19 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 	 * instruction above it falls straight into it. A run of one repeated byte is
 	 * padding by definition and is never claimed — which is what keeps this off the
 	 * zero-filled islands in the C library's data.
+	 * <p>
+	 * A longer gap is claimed only as a run of <b>whole routines</b>: the code above it
+	 * ends in a return, and the gap splits exactly into routines that
+	 * each end in a return or an unconditional jump, separated at most by the single
+	 * {@code NOP} that puts the next routine on an even address. Every branch that lands
+	 * inside the gap must land on an instruction of the decode. VICEROY's
+	 * {@code OVERLAY_30::03a40a} is the shape: three library routines linked in with
+	 * their module, 158 bytes that nothing calls, which no flow and no single-routine
+	 * rule reaches. Each routine becomes a function.
 	 */
 	static int fillCodeGaps(Program program, TaskMonitor monitor) throws CancelledException {
 		Listing listing = program.getListing();
-		AddressSet gapStarts = new AddressSet();
+		List<GapClaim> claims = new ArrayList<>();
 
 		for (MemoryBlock block : program.getMemory().getBlocks()) {
 			monitor.checkCancelled();
@@ -1324,32 +1339,69 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 					gapStart = current;
 				}
 				else if (previous != null && !current.equals(previous.next())) {
-					if (isRecoverableGap(program, gapStart, previous)) {
-						gapStarts.add(inSegmentOf(block, gapStart));
-					}
+					claimGap(program, block, gapStart, previous, claims);
 					gapStart = current;
 				}
 				previous = current;
 			}
-			if (gapStart != null && previous != null &&
-				isRecoverableGap(program, gapStart, previous)) {
-				gapStarts.add(inSegmentOf(block, gapStart));
+			if (gapStart != null && previous != null) {
+				claimGap(program, block, gapStart, previous, claims);
 			}
 		}
 
-		if (gapStarts.isEmpty()) {
+		int filled = 0;
+		for (GapClaim claim : claims) {
+			monitor.checkCancelled();
+			filled += claim.wholeRoutines() ? fillRoutines(program, claim, monitor)
+					: fillGap(program, claim.starts().get(0), monitor);
+		}
+		return filled;
+	}
+
+	/**
+	 * What the gap filler will disassemble in one gap: its start, or the start of every
+	 * routine in it when it is a run of whole routines.
+	 */
+	private record GapClaim(AddressSet gap, List<Address> starts, boolean wholeRoutines) {
+	}
+
+	private static void claimGap(Program program, MemoryBlock block, Address start,
+			Address end, List<GapClaim> claims) {
+		GapClaim claim = recoverableGap(program, start, end);
+		if (claim == null) {
+			return;
+		}
+		List<Address> starts = claim.starts().stream().map(a -> inSegmentOf(block, a)).toList();
+		claims.add(new GapClaim(claim.gap(), starts, claim.wholeRoutines()));
+	}
+
+	private static int fillGap(Program program, Address start, TaskMonitor monitor) {
+		// Fall-through only: flow out of the gap is already disassembled, and a runaway
+		// would be exactly the mis-phased decode this guards against.
+		new DisassembleCommand(start, null, false).applyTo(program, monitor);
+		if (program.getListing().getInstructionAt(start) == null) {
 			return 0;
 		}
+		promoteIfPrologue(program, start, monitor);
+		return 1;
+	}
+
+	private static int fillRoutines(Program program, GapClaim claim, TaskMonitor monitor) {
+		// Named one by one: a claim this wide is worth being able to audit.
+		Msg.info(RTLinkFlowRepairAnalyzer.class, String.format(
+			"RTLink/Plus: Unreached run of %d routine(s) at %s", claim.starts().size(),
+			claim.starts()));
 		int filled = 0;
-		for (Address start : gapStarts.getAddresses(true)) {
-			monitor.checkCancelled();
-			// Restricted to the gap: flow out of it is already disassembled, and a
-			// runaway would be exactly the mis-phased decode this guards against.
-			new DisassembleCommand(start, null, false).applyTo(program, monitor);
-			if (listing.getInstructionAt(start) == null) {
+		for (Address start : claim.starts()) {
+			// Following flow, but only inside the gap: a routine's own branches are
+			// what reach the code past its first unconditional jump.
+			new DisassembleCommand(start, claim.gap(), true).applyTo(program, monitor);
+			if (program.getListing().getInstructionAt(start) == null) {
 				continue;
 			}
-			promoteIfPrologue(program, start, monitor);
+			if (program.getFunctionManager().getFunctionContaining(start) == null) {
+				new CreateFunctionCmd(start).applyTo(program, monitor);
+			}
 			filled++;
 		}
 		return filled;
@@ -1379,49 +1431,71 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
-	 * True when the undefined run {@code [start, end]} is a routine the analysis
-	 * missed rather than padding or data: in-phase (it decodes exactly onto the next
-	 * code unit) and shaped like code (prologue, stranded epilogue, or fallen into).
+	 * What to claim of the undefined run {@code [start, end]}, or null when it is padding
+	 * or data rather than code the analysis missed. It must be in phase (it decodes
+	 * exactly onto the next code unit) and shaped like code: a short gap with a
+	 * prologue, a stranded epilogue or a fall-through into it, or a run of whole
+	 * routines.
 	 */
-	private static boolean isRecoverableGap(Program program, Address start, Address end) {
+	private static GapClaim recoverableGap(Program program, Address start, Address end) {
 		long length = end.subtract(start) + 1;
-		if (length < MIN_GAP_LENGTH || length > MAX_GAP_LENGTH) {
-			return false;
+		if (length < MIN_GAP_LENGTH || length > MAX_ROUTINE_RUN_LENGTH) {
+			return null;
 		}
 		byte[] bytes = new byte[(int) length];
 		try {
 			if (program.getMemory().getBytes(start, bytes) != bytes.length) {
-				return false;
+				return null;
 			}
 		}
 		catch (MemoryAccessException e) {
-			return false;
+			return null;
 		}
 		if (isRepeatedByte(bytes) || containsFillerRun(bytes)) {
 			// Padding, not code — and a gap that merely *contains* a fill run is no
 			// better: once an island has been cleared, the undefined bytes around it
 			// may no longer be uniform, and without this a gap straddling the island's
 			// edge could decode in phase and put the junk straight back.
-			return false;
+			return null;
+		}
+		List<PseudoInstruction> decoded = decodeExactly(program, start, length);
+		if (decoded == null) {
+			return null;
 		}
 
+		AddressSet gap = new AddressSet(start, end);
+		Instruction last = decoded.get(decoded.size() - 1);
+		if (length <= MAX_GAP_LENGTH && (startsWithPrologue(bytes) ||
+			isStrandedEpilogue(program, end, last) || fallsInto(program, start))) {
+			return new GapClaim(gap, List.of(start), false);
+		}
+		List<Address> routines = splitIntoRoutines(program, gap, decoded);
+		return routines.isEmpty() ? null : new GapClaim(gap, routines, true);
+	}
+
+	/**
+	 * The instructions {@code [start, start + length)} decodes to, or null unless every
+	 * byte decodes and the last instruction ends exactly at the end of the run.
+	 */
+	private static List<PseudoInstruction> decodeExactly(Program program, Address start,
+			long length) {
 		PseudoDisassembler pseudo = new PseudoDisassembler(program);
+		List<PseudoInstruction> decoded = new ArrayList<>();
 		Address at = start;
-		Instruction last = null;
 		long consumed = 0;
 		while (consumed < length) {
-			PseudoInstruction decoded;
+			PseudoInstruction instruction;
 			try {
 				// Undecodable bytes come back as null here, not as an exception.
-				decoded = pseudo.disassemble(at);
+				instruction = pseudo.disassemble(at);
 			}
 			catch (Exception e) {
-				decoded = null;
+				instruction = null;
 			}
-			if (decoded == null) {
-				return false; // does not decode: not code
+			if (instruction == null) {
+				return null; // does not decode: not code
 			}
-			if (flowsNowhere(program, decoded)) {
+			if (flowsNowhere(program, instruction)) {
 				// A decode that jumps somewhere that does not exist is not code this
 				// analyzer may claim. The shape that matters here is RTLink's own
 				// dispatch stub — CALLF dispatcher; JMPF 0000:offset, whose segment is
@@ -1429,18 +1503,120 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 				// runtime. Those are RTLinkOverlayAnalyzer's to resolve into thunks;
 				// decoding them here produces a real instruction and a "flow into
 				// non-existing memory" error nobody sweeps.
-				return false;
+				return null;
 			}
-			last = decoded;
-			consumed += decoded.getLength();
-			at = at.add(decoded.getLength());
+			decoded.add(instruction);
+			consumed += instruction.getLength();
+			at = at.add(instruction.getLength());
 		}
-		if (consumed != length) {
-			return false; // out of phase: the run overshoots the code that follows
-		}
+		// Out of phase when the run overshoots the code that follows.
+		return consumed == length ? decoded : null;
+	}
 
-		return startsWithPrologue(bytes) || isStrandedEpilogue(program, end, last) ||
-			fallsInto(program, start);
+	/**
+	 * The entry of every routine in {@code gap}, or an empty list unless the gap is a run
+	 * of whole routines: the code above it ends in a return, every branch that
+	 * lands in the gap lands on an instruction of the decode, and the gap splits exactly
+	 * into routines, with at most one {@code NOP} padding a routine onto an even address.
+	 * No routine may start on a zero byte.
+	 * <p>
+	 * A routine ends at an instruction without a fall-through (a return or an
+	 * unconditional jump) that none of its own jumps reaches past. One that some jump
+	 * does reach past is internal ({@code JMP} over an {@code else}), and the code after
+	 * it must then be a target of one of the routine's jumps: nothing else could reach it.
+	 */
+	private static List<Address> splitIntoRoutines(Program program, AddressSet gap,
+			List<PseudoInstruction> decoded) {
+		Address before = gap.getMinAddress().previous();
+		Instruction above =
+			before == null ? null : program.getListing().getInstructionContaining(before);
+		if (above == null || !isReturn(above)) {
+			// Only a return closes the routine above for certain: below a jump may be
+			// that routine's own stranded epilogue, which is no routine of its own.
+			return List.of();
+		}
+		Set<Address> boundaries = new LinkedHashSet<>();
+		decoded.forEach(instruction -> boundaries.add(instruction.getAddress()));
+
+		List<Address> starts = new ArrayList<>();
+		Set<Address> targets = new LinkedHashSet<>(); // the current routine's jump targets
+		Address furthest = null;
+		boolean betweenRoutines = true;
+		boolean padded = false;
+		boolean unreached = false; // the previous instruction has no fall-through
+		for (PseudoInstruction instruction : decoded) {
+			Address at = instruction.getAddress();
+			if (betweenRoutines) {
+				if (isAlignmentPad(instruction) && !padded) {
+					padded = true;
+					continue;
+				}
+				if (startsOnZero(instruction)) {
+					// ADD [BX+SI],AL: zeroed data that happens to decode, such as a
+					// saved interrupt vector or a CS variable, never a routine entry.
+					return List.of();
+				}
+				starts.add(at);
+				targets.clear();
+				furthest = null;
+				betweenRoutines = false;
+			}
+			else if (unreached && !targets.contains(at)) {
+				return List.of(); // code inside a routine that nothing reaches
+			}
+			FlowType flowType = instruction.getFlowType();
+			for (Address flow : instruction.getFlows()) {
+				if (!gap.contains(flow)) {
+					continue;
+				}
+				if (!boundaries.contains(flow)) {
+					return List.of(); // a branch into the middle of an instruction
+				}
+				if (flowType.isJump()) {
+					targets.add(flow);
+					furthest = furthest == null || flow.compareTo(furthest) > 0 ? flow : furthest;
+				}
+			}
+			unreached = !flowType.hasFallthrough();
+			if (unreached && (furthest == null || furthest.compareTo(at) <= 0)) {
+				betweenRoutines = true;
+				padded = false;
+			}
+		}
+		return betweenRoutines ? starts : List.of();
+	}
+
+	/**
+	 * A return ({@code RET}, {@code RETF}, {@code IRET}). {@code isTerminal()} alone
+	 * also holds for a jump the Shared Return Calls analyzer turned into a tail call.
+	 */
+	private static boolean isReturn(Instruction instruction) {
+		FlowType flowType = instruction.getFlowType();
+		return flowType.isTerminal() && !flowType.isCall() && !flowType.isJump();
+	}
+
+	private static boolean startsOnZero(PseudoInstruction instruction) {
+		try {
+			return instruction.getByte(0) == 0;
+		}
+		catch (MemoryAccessException e) {
+			return true;
+		}
+	}
+
+	/** A one-byte {@code NOP} at an odd address: it puts what follows on a word. */
+	private static boolean isAlignmentPad(PseudoInstruction instruction) {
+		return instruction.getLength() == 1 && (instruction.getAddress().getOffset() & 1) == 1 &&
+			isNop(instruction);
+	}
+
+	private static boolean isNop(PseudoInstruction instruction) {
+		try {
+			return instruction.getByte(0) == NOP;
+		}
+		catch (MemoryAccessException e) {
+			return false;
+		}
 	}
 
 	/** True if any flow out of {@code instruction} lands outside mapped memory. */
@@ -1453,10 +1629,15 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		return false;
 	}
 
-	/** {@code PUSH BP; MOV BP,SP} — the frame prologue every routine here opens with. */
+	/**
+	 * A frame prologue: {@code PUSH BP; MOV BP,SP}, or {@code ENTER n,0}, which MSC emits
+	 * instead for 186+ targets (VICEROY {@code OVERLAY_30::03a40a}).
+	 */
 	private static boolean startsWithPrologue(byte[] bytes) {
-		return bytes.length >= 3 && bytes[0] == 0x55 && bytes[1] == (byte) 0x8b &&
+		boolean pushBp = bytes.length >= 3 && bytes[0] == 0x55 && bytes[1] == (byte) 0x8b &&
 			bytes[2] == (byte) 0xec;
+		boolean enter = bytes.length >= 4 && bytes[0] == (byte) 0xc8 && bytes[3] == 0;
+		return pushBp || enter;
 	}
 
 	/**
@@ -1510,8 +1691,8 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 			return;
 		}
 		try {
-			byte[] bytes = new byte[3];
-			if (program.getMemory().getBytes(start, bytes) == 3 &&
+			byte[] bytes = new byte[4]; // ENTER n,0 is four bytes
+			if (program.getMemory().getBytes(start, bytes) == bytes.length &&
 				startsWithPrologue(bytes)) {
 				new CreateFunctionCmd(start).applyTo(program, monitor);
 			}
