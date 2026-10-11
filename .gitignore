@@ -8,7 +8,5 @@ os/
 .classpath
 .project
 .settings/
-.claude/
-.mcp.json
 gradle.properties
 # --- this plugin ---
