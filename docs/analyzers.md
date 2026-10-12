@@ -9,7 +9,9 @@ six classes and not one. They share package-private statics and must stay in
   past the MZ image end, parses pages, creates the overlay memory blocks, wires up the
   dispatch-stub thunks, sets CS over each overlay module (frame + module base; real-mode
   `currentCS` reads it from context since upstream PR #9703, and the MZ loader sets it
-  only for resident blocks) and assumes DS=DGROUP. Runs on raw bytes, before disassembly.
+  only for resident blocks), sets the dailydriver fork's `cseg` context field to the same
+  value where the language has it (near rel16 branches then wrap inside the module's
+  64KB segment), and assumes DS=DGROUP. Runs on raw bytes, before disassembly.
 - **`RTLinkSwitchTableAnalyzer`** — INSTRUCTION, `CODE_ANALYSIS.before()`. Recovers the
   CS-/module-relative switch tables and fixes their *references*. Must run before
   `DecompilerSwitchAnalyzer`, which skips any computed branch that already has

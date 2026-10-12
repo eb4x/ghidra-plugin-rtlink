@@ -254,8 +254,8 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 			List<OverlayBlockInfo> overlayBlocks =
 				createOverlayBlocks(program, fileBytes, allPages, log, monitor);
-			// Before the stub scan disassembles anything; again below, once the stubs have
-			// named the modules the relocation table cannot.
+			// Before the stub scan disassembles anything; again inside it, once the stubs
+			// have named the modules the relocation table cannot.
 			assignCodeSegments(program, log);
 
 			if (applyRelocations && !overlayBlocks.isEmpty()) {
@@ -276,7 +276,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				markupOverlayHeaders(program, fileBytes, allPages, log, monitor);
 			}
 
-			assignCodeSegments(program, log);
 			monitor.setMessage("RTLink: Determining data segment (DGROUP)...");
 			maybeAssumeDataSegment(program, log);
 
@@ -827,12 +826,20 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	 * {@code OVL24_0EC4} read its {@code JMP CS:[BX+0x156]} table through 0x3000 instead
 	 * of the module's 0x3ae7. Runs on every pass, like the DS assumption, so a One Shot
 	 * gives an already-analyzed program the context too.
+	 * <p>
+	 * The same value goes into the {@code cseg} context field where the language has
+	 * one (the dailydriver fork, not stock Ghidra): near rel16 branches then wrap inside
+	 * the module's 64KB segment instead of adding linearly. It is the Ghidra-side
+	 * segment, not the runtime swap-area frame; the two differ by a constant, so the
+	 * wrap boundary is the same. It only affects instructions decoded after it is set,
+	 * and cannot be set over decoded code at all (see {@link #setCodeSegmentField}).
 	 */
 	private static void assignCodeSegments(Program program, MessageLog log) {
 		Register cs = program.getLanguage().getRegister("CS");
 		if (cs == null) {
 			return;
 		}
+		Register cseg = program.getLanguage().getRegister("cseg");
 		ProgramContext context = program.getProgramContext();
 		int modules = 0;
 		int pages = 0;
@@ -842,7 +849,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				if (bases == null) {
 					continue;
 				}
-				modules += assignCodeSegments(context, cs, block, bases);
+				modules += assignCodeSegments(context, cs, cseg, block, bases);
 				pages++;
 			}
 		}
@@ -856,7 +863,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		}
 	}
 
-	private static int assignCodeSegments(ProgramContext context, Register cs,
+	static int assignCodeSegments(ProgramContext context, Register cs, Register cseg,
 			MemoryBlock block, List<Integer> recordedBases) throws ContextChangeException {
 		SortedSet<Integer> bases = new TreeSet<>(recordedBases);
 		bases.add(0); // the page's own start, which an early record may omit
@@ -871,10 +878,32 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			SortedSet<Integer> later = bases.tailSet(base + 1);
 			Address to = later.isEmpty() ? block.getEnd()
 					: min(block.getEnd(), start.add(later.first() * 16L - 1));
-			context.setValue(cs, from, to, BigInteger.valueOf((frame + base) & 0xffffL));
+			BigInteger segment = BigInteger.valueOf((frame + base) & 0xffffL);
+			context.setValue(cs, from, to, segment);
+			if (cseg != null) {
+				setCodeSegmentField(context, cseg, from, to, segment);
+			}
 			modules++;
 		}
 		return modules;
+	}
+
+	/**
+	 * Ghidra refuses a context-register write over a range that already holds instructions,
+	 * and {@code cseg} is a context field (CS is not). Such a range — a module first named
+	 * by the stub scan after its code was decoded, or a One Shot on an analyzed program —
+	 * keeps the {@code cseg} it has. Within one page that is harmless: a page is under 64KB,
+	 * so the lower module's segment gives the same near targets.
+	 */
+	private static void setCodeSegmentField(ProgramContext context, Register cseg,
+			Address from, Address to, BigInteger segment) {
+		try {
+			context.setValue(cseg, from, to, segment);
+		}
+		catch (ContextChangeException e) {
+			Msg.debug(RTLinkOverlayAnalyzer.class,
+				"RTLink: cseg left as is over " + from + "-" + to + ": code already decoded");
+		}
 	}
 
 	private static Address min(Address a, Address b) {
@@ -1061,6 +1090,8 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		// fold what they revealed into each page's module base set before the switch
 		// table analyzer reads it back.
 		mergeStubModuleBases(program, overlayBlocks, stubModuleBases);
+		// Before anything below decodes overlay code: cseg cannot be set over it afterwards.
+		assignCodeSegments(program, log);
 
 		if (jmpfStubs == 0) {
 			int3fStubs = scanForInt3fStubs(program, overlayBlocks, overlayEntryPoints,

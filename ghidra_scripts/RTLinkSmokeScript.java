@@ -182,22 +182,31 @@ public class RTLinkSmokeScript extends GhidraScript {
 		}
 	}
 
-	/** CS over overlay code is the segment its module runs in: frame + module base. */
+	/**
+	 * CS over overlay code is the segment its module runs in: frame + module base. So is
+	 * {@code cseg}, the rel16 context field, on a Ghidra that has it (stock Ghidra does not).
+	 */
 	private void checkCodeSegment() {
-		Register cs = currentProgram.getRegister("CS");
-		checkCodeSegment(cs, "OVL01_0000", 0);
-		checkCodeSegment(cs, "OVL01_0020", 2); // the page's second module, base paragraph 2
+		for (String name : List.of("CS", "cseg")) {
+			Register register = currentProgram.getRegister(name);
+			if (register == null) {
+				continue;
+			}
+			checkCodeSegment(register, "OVL01_0000", 0);
+			checkCodeSegment(register, "OVL01_0020", 2); // the page's second module, base 2
+		}
 	}
 
-	private void checkCodeSegment(Register cs, String name, int moduleBase) {
+	private void checkCodeSegment(Register register, String name, int moduleBase) {
 		Address at = symbol(name);
 		if (at == null) {
 			return;
 		}
 		long expected = (getMemoryBlock(at).getStart().getOffset() >> 4) + moduleBase;
-		var value = currentProgram.getProgramContext().getValue(cs, at, false);
+		var value = currentProgram.getProgramContext().getValue(register, at, false);
 		check(value != null && value.longValue() == expected, String.format(
-			"CS at %s (%s) is %s, expected 0x%x", at, name, value, expected));
+			"%s at %s (%s) is %s, expected 0x%x", register.getName(), at, name, value,
+			expected));
 	}
 
 	// ---------------------------------------------------------------- xref analyzer
