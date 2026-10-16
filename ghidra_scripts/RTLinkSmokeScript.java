@@ -8,7 +8,9 @@
 // line is printed only when all checks pass, because analyzeHeadless exits 0 even when a
 // post-script throws.
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
@@ -331,9 +333,11 @@ public class RTLinkSmokeScript extends GhidraScript {
 	// ---------------------------------------------------------------- dispatcher jump
 
 	/**
-	 * Stock resolves the dispatcher's JMP DX against its 64KB page (1000:), not the nucleus
-	 * segment (1012:), which puts the targets inside the float routine. The jump must end up
-	 * with no computed reference, its plate comment saying why, and the routine undamaged.
+	 * JMP DX is a near jump: it continues at vm_call_body or vm_callr_body in the nucleus
+	 * (1012:0067, 1012:006c), the two constants that reach it. Stock resolves it against its
+	 * 64KB page (1000:) instead, which puts the targets inside the float routine; where
+	 * currentCS reads CS from context it resolves it correctly. Either way the jump must end up
+	 * referencing exactly the two bodies, both decoded, and the float routine undamaged.
 	 */
 	private void checkDispatcherJump() {
 		Address jmp = seg(NUC, 0x62);
@@ -342,13 +346,20 @@ public class RTLinkSmokeScript extends GhidraScript {
 			fail("no instruction at the dispatcher's JMP DX, " + jmp);
 			return;
 		}
+		Set<Address> expected = Set.of(seg(NUC, 0x67), seg(NUC, 0x6c));
+		Set<Address> targets = new HashSet<>();
 		for (Reference ref : getReferencesFrom(jmp)) {
 			if (ref.getReferenceType().isComputed()) {
-				fail("JMP DX keeps a computed reference to " + ref.getToAddress());
+				targets.add(ref.getToAddress());
 			}
 		}
+		check(targets.equals(expected),
+			"JMP DX references " + targets + ", not the two VM entry bodies " + expected);
+		for (Address body : expected) {
+			check(getInstructionAt(body) != null, "the VM entry body at " + body + " is not decoded");
+		}
 		check(insn.getComment(CommentType.PLATE) != null,
-			"the dispatcher's JMP DX was not neutralized (no plate comment)");
+			"the dispatcher's JMP DX carries no plate comment");
 		// The page-relative targets 1000:0067 and 1000:006c fall mid-instruction in the
 		// abort vector and the float routine's prologue.
 		for (int offset : new int[] { 0x67, 0x6c }) {

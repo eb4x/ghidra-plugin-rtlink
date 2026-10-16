@@ -2,14 +2,16 @@ package ebbex.rtlink;
 
 import static org.junit.Assert.*;
 
+import java.util.HashSet;
+import java.util.Set;
+
 import org.junit.Test;
 
 import generic.test.AbstractGenericTest;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
-import ghidra.program.model.data.DataUtilities;
 import ghidra.program.model.listing.BookmarkType;
-import ghidra.program.model.listing.Listing;
+import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.RefType;
@@ -19,78 +21,39 @@ import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Tests for {@link RTLinkDispatcherJumpAnalyzer}: the overlay dispatcher trampoline in
- * miniature — {@code MOV DX,imm16 ; MOV [SI-4],AX ; JMP DX} with the stock constant
- * analyzer's bogus same-segment {@code COMPUTED_JUMP} references already planted and the
- * junk it decoded at each wrong target already present — and, as important, the cases the
- * analyzer must refuse to touch (a legitimate register-indirect jump, an already-correct
- * cross-segment resolution, an evidenced target, and any {@code JMP reg} lacking the
- * return-slot patch that makes a dispatcher a dispatcher).
+ * Tests for {@link RTLinkDispatcherJumpAnalyzer}: the VM nucleus' constant-pair dispatch in
+ * miniature. {@code JMP DX} is a near jump, so its targets are {@code CS:imm} for the
+ * constants that reach it: those references are kept or added and their bodies decoded;
+ * references stock resolved against the 64KB page are removed with the junk they decoded.
+ * And the cases it must refuse: a legitimate register-indirect jump, a resolution into
+ * another segment no constant explains, and any {@code JMP reg} lacking the return-slot patch.
  */
 public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 
-	// Dispatcher trampoline at 0100 (each MOV DX loads a bare overlay offset into DX; kept a
-	// straight-line block so a restricted disassemble decodes it whole):
-	//   0100  b8 16 00     MOV AX,0x0016
-	//   0103  ba 60 01     MOV DX,0x0160     ; arm 1 -> the non-string casualty at 0160
-	//   0106  b8 7c 00     MOV AX,0x007c
-	//   0109  ba 80 01     MOV DX,0x0180     ; arm 2 -> the string casualty at 0180
-	//   010c  89 44 fc     MOV [SI-4],AX     ; the return-slot patch (89 44 fc fingerprint)
-	//   010f  ff e2        JMP DX            ; runtime-overlay-selected; bogusly resolved
-	private static final String DISPATCHER = "b8 16 00 ba 60 01 b8 7c 00 ba 80 01 89 44 fc ff e2";
-	private static final int DISPATCHER_LEN = 0x11;
-	private static final String JMP = "0x1000:0x010f";
-	private static final String TARGET_A = "0x1000:0x0160"; // non-string casualty
-	private static final String TARGET_B = "0x1000:0x0180"; // string casualty
+	// The two-armed dispatch at 1000:0100, as in the nucleus:
+	//   0100  b8 16 00   MOV AX,0x0016
+	//   0103  ba 60 01   MOV DX,0x0160     ; arm 1 body
+	//   0106  74 06      JZ 0x010e
+	//   0108  b8 7c 00   MOV AX,0x007c
+	//   010b  ba 80 01   MOV DX,0x0180     ; arm 2 body
+	//   010e  89 44 fc   MOV [SI-4],AX     ; the return-slot patch (89 44 fc fingerprint)
+	//   0111  ff e2      JMP DX
+	private static final String DISPATCH = "b8 16 00 ba 60 01 74 06 b8 7c 00 ba 80 01 89 44 fc ff e2";
+	private static final int DISPATCH_LEN = 0x13;
+	private static final String JMP = "0x1000:0x0111";
+	private static final String BODY_A = "0x1000:0x0160";
+	private static final String BODY_B = "0x1000:0x0180";
 
-	// 0160: CLC ; STC ; CLI — non-text bytes mis-decoded as a short instruction run.
-	private static final String CASUALTY_A = "f8 f9 fa";
-	// 0180: "PQRS" — printable bytes (PUSH AX/CX/DX/BX) mis-decoded as code.
-	private static final String CASUALTY_B = "50 51 52 53";
-
-	/**
-	 * A fresh-import miniature: the dispatcher decoded, the two casualties decoded at their
-	 * wrong targets with their ERROR bookmarks, and the two bogus ANALYSIS same-segment
-	 * {@code COMPUTED_JUMP} references on the {@code JMP DX} — exactly the post-596 state.
-	 *
-	 * @param evidencedTargetB if true, {@code 0180} carries a non-default symbol, so it must
-	 *            survive the clear (the evidence rule).
-	 */
-	private ProgramBuilder dispatcherProgram(boolean evidencedTargetB) throws Exception {
+	private static ProgramBuilder dispatchProgram() throws Exception {
 		ProgramBuilder builder = new ProgramBuilder("DISPATCH", ProgramBuilder._X86_16_REAL_MODE);
 		boolean ok = false;
 		try {
 			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0000", 0x400);
 			builder.withTransaction(() -> code.setExecute(true));
-			builder.setBytes("0x1000:0x0100", DISPATCHER);
-			builder.setBytes(TARGET_A, CASUALTY_A);
-			builder.setBytes(TARGET_B, CASUALTY_B);
-
-			// Seed each region as a fresh import leaves it: the dispatcher block, then the
-			// two casualties the constant analyzer's inline disassembly decoded at the wrong
-			// targets. Each disassemble is restricted to the bytes it is given.
-			builder.disassemble("0x1000:0x0100", DISPATCHER_LEN, true);
-			builder.disassemble(TARGET_A, 3, true);
-			builder.disassemble(TARGET_B, 4, true);
-
-			Program program = builder.getProgram();
-			builder.withTransaction(() -> {
-				ReferenceManager refs = program.getReferenceManager();
-				// The bogus current-segment computed jumps the x86 Constant Reference Analyzer
-				// plants (SourceType.ANALYSIS), one per JZ arm.
-				refs.addMemoryReference(builder.addr(JMP), builder.addr(TARGET_A),
-					RefType.COMPUTED_JUMP, SourceType.ANALYSIS, 0);
-				refs.addMemoryReference(builder.addr(JMP), builder.addr(TARGET_B),
-					RefType.COMPUTED_JUMP, SourceType.ANALYSIS, 0);
-				// The confined Bad-Instruction bookmarks the mis-decode left behind.
-				program.getBookmarkManager().setBookmark(builder.addr(TARGET_A),
-					BookmarkType.ERROR, "Bad Instruction", "conflicting data");
-				program.getBookmarkManager().setBookmark(builder.addr(TARGET_B),
-					BookmarkType.ERROR, "Bad Instruction", "conflicting string");
-			});
-			if (evidencedTargetB) {
-				builder.createLabel(TARGET_B, "keep_me"); // non-default symbol: real code
-			}
+			builder.setBytes("0x1000:0x0100", DISPATCH);
+			builder.setBytes(BODY_A, "33 c0 cb");             // XOR AX,AX ; RETF
+			builder.setBytes(BODY_B, "5d cb");                // POP BP ; RETF
+			builder.disassemble("0x1000:0x0100", DISPATCH_LEN, true);
 			ok = true;
 			return builder;
 		}
@@ -102,11 +65,11 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	}
 
 	/** Run the pass inside a transaction over the whole program and hand back the count. */
-	private static int neutralize(ProgramBuilder builder) throws Exception {
+	private static int resolve(ProgramBuilder builder) throws Exception {
 		Program program = builder.getProgram();
-		int txId = program.startTransaction("neutralize dispatcher jumps");
+		int txId = program.startTransaction("resolve dispatch jumps");
 		try {
-			return RTLinkDispatcherJumpAnalyzer.neutralizeDispatcherJumps(program,
+			return RTLinkDispatcherJumpAnalyzer.resolveDispatchJumps(program,
 				program.getMemory(), TaskMonitor.DUMMY);
 		}
 		finally {
@@ -114,39 +77,185 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 		}
 	}
 
-	private static boolean hasComputedJumpRef(Program program, String from) {
-		for (Reference ref : program.getReferenceManager()
-				.getReferencesFrom(program.getAddressFactory().getAddress(from))) {
+	private static Set<Address> computedJumpTargets(ProgramBuilder builder, String from) {
+		Set<Address> targets = new HashSet<>();
+		for (Reference ref : builder.getProgram().getReferenceManager()
+				.getReferencesFrom(builder.addr(from))) {
 			if (ref.getReferenceType().isComputed() && ref.getReferenceType().isJump()) {
-				return true;
+				targets.add(ref.getToAddress());
 			}
 		}
-		return false;
+		return targets;
+	}
+
+	private static void addAnalysisJump(ProgramBuilder builder, String from, String to) {
+		builder.withTransaction(() -> builder.getProgram().getReferenceManager()
+				.addMemoryReference(builder.addr(from), builder.addr(to), RefType.COMPUTED_JUMP,
+					SourceType.ANALYSIS, 0));
 	}
 
 	@Test
-	public void testDispatcherJumpBogusRefIsNeutralized() throws Exception {
-		ProgramBuilder builder = dispatcherProgram(false);
+	public void testBodiesAreReferencedAndDecoded() throws Exception {
+		ProgramBuilder builder = dispatchProgram();
 		try {
 			Program program = builder.getProgram();
-			Listing listing = program.getListing();
-			assertNotNull("setup: string casualty must be decoded as code",
-				listing.getInstructionAt(builder.addr(TARGET_B)));
-			assertTrue("setup: the bogus computed jump must be present",
-				hasComputedJumpRef(program, JMP));
+			assertNull("setup: body A not yet decoded",
+				program.getListing().getInstructionAt(builder.addr(BODY_A)));
 
-			assertEquals(1, neutralize(builder));
+			assertEquals(1, resolve(builder));
 
-			assertFalse("the bogus computed jump must be gone",
-				hasComputedJumpRef(program, JMP));
-			assertNull("no instruction may survive on the string bytes",
-				listing.getInstructionAt(builder.addr(TARGET_B)));
-			assertNull("the confined error bookmark must be gone",
+			assertEquals("JMP DX goes to CS:imm for both constants that reach it",
+				Set.of(builder.addr(BODY_A), builder.addr(BODY_B)), computedJumpTargets(builder, JMP));
+			assertNotNull("body A is decoded",
+				program.getListing().getInstructionAt(builder.addr(BODY_A)));
+			assertNotNull("body B is decoded",
+				program.getListing().getInstructionAt(builder.addr(BODY_B)));
+			assertEquals(RTLinkDispatcherJumpAnalyzer.DISPATCHER_COMMENT,
+				program.getListing().getInstructionAt(builder.addr(JMP))
+						.getComment(CommentType.PLATE));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * Where {@code currentCS} reads CS from context, stock already plants the right
+	 * references and decodes the bodies: nothing is deleted and nothing cleared. The version
+	 * before this one deleted exactly these and cleared VICEROY's VM runtime with them.
+	 */
+	@Test
+	public void testCorrectReferencesAreKept() throws Exception {
+		ProgramBuilder builder = dispatchProgram();
+		try {
+			Program program = builder.getProgram();
+			builder.disassemble(BODY_A, 3, true);
+			builder.disassemble(BODY_B, 2, true);
+			addAnalysisJump(builder, JMP, BODY_A);
+			addAnalysisJump(builder, JMP, BODY_B);
+
+			assertEquals("nothing to change", 0, resolve(builder));
+
+			assertEquals(Set.of(builder.addr(BODY_A), builder.addr(BODY_B)),
+				computedJumpTargets(builder, JMP));
+			assertNotNull(program.getListing().getInstructionAt(builder.addr(BODY_A)));
+			assertNotNull(program.getListing().getInstructionAt(builder.addr(BODY_B)));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	@Test
+	public void testResolutionIsIdempotent() throws Exception {
+		ProgramBuilder builder = dispatchProgram();
+		try {
+			assertEquals(1, resolve(builder));
+			assertEquals("a re-run finds nothing left to do", 0, resolve(builder));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	@Test
+	public void testLegacyCommentIsReplaced() throws Exception {
+		ProgramBuilder builder = dispatchProgram();
+		try {
+			Program program = builder.getProgram();
+			builder.withTransaction(() -> program.getListing().getInstructionAt(builder.addr(JMP))
+					.setComment(CommentType.PLATE,
+						"RTLink/Plus overlay dispatcher: jump target is selected at runtime " +
+							"(overlay segment); static resolution intentionally suppressed."));
+
+			resolve(builder);
+
+			assertEquals(RTLinkDispatcherJumpAnalyzer.DISPATCHER_COMMENT,
+				program.getListing().getInstructionAt(builder.addr(JMP))
+						.getComment(CommentType.PLATE));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * The nucleus has two dispatchers back to back. Each takes only the constants that reach
+	 * it: the first one's {@code JMP DX} has no fall-through, so its constant never counts for
+	 * the second, and the second's never flows backwards into the first.
+	 * <pre>
+	 *   0100  ba 60 01   MOV DX,0x0160
+	 *   0103  89 44 fc   MOV [SI-4],AX
+	 *   0106  ff e2      JMP DX
+	 *   0108  ba 80 01   MOV DX,0x0180
+	 *   010b  89 44 fc   MOV [SI-4],AX
+	 *   010e  ff e2      JMP DX
+	 * </pre>
+	 */
+	@Test
+	public void testSiblingDispatchersKeepTheirOwnConstants() throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("SIBLINGS", ProgramBuilder._X86_16_REAL_MODE);
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0000", 0x400);
+			builder.withTransaction(() -> code.setExecute(true));
+			builder.setBytes("0x1000:0x0100", "ba 60 01 89 44 fc ff e2 ba 80 01 89 44 fc ff e2");
+			builder.setBytes(BODY_A, "33 c0 cb");
+			builder.setBytes(BODY_B, "5d cb");
+			builder.disassemble("0x1000:0x0100", 8, true);
+			builder.disassemble("0x1000:0x0108", 8, true);
+
+			assertEquals(2, resolve(builder));
+
+			assertEquals(Set.of(builder.addr(BODY_A)), computedJumpTargets(builder, "0x1000:0x0106"));
+			assertEquals(Set.of(builder.addr(BODY_B)), computedJumpTargets(builder, "0x1000:0x010e"));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * Stock resolves the immediate against the jump's 64KB page, not its segment. MzLoader
+	 * makes one block per segment, so a nucleus that starts past its page boundary sends that
+	 * target into an earlier block. The committed smoke sample has this shape:
+	 * <pre>
+	 *   1000:0000  CODE block, 0x120 bytes of resident code:
+	 *   1000:0060  f8 f9 fa     the casualty the bogus flow decoded
+	 *   1000:0068  55           PUSH BP, a real function entry; the bogus flow to 0067
+	 *                           collided with it, decoded nothing, and left only a mark
+	 *   1012:0000  b8 16 00     MOV AX,0x0016    ; NUC block
+	 *   1012:0003  ba 60 00     MOV DX,0x0060
+	 *   1012:0006  74 03        JZ 0x000b
+	 *   1012:0008  ba 67 00     MOV DX,0x0067
+	 *   1012:000b  89 44 fc     MOV [SI-4],AX
+	 *   1012:000e  ff e2        JMP DX           ; resolved by stock to page 1000 + imm
+	 *   1012:0060  c3           arm 1 body
+	 *   1012:0067  cb           arm 2 body
+	 * </pre>
+	 */
+	@Test
+	public void testPageBaseRefsAreReplacedBySegmentRefs() throws Exception {
+		ProgramBuilder builder = pageProgram(false);
+		try {
+			Program program = builder.getProgram();
+
+			assertEquals(1, resolve(builder));
+
+			assertEquals("the page-based references give way to the nucleus-segment ones",
+				Set.of(builder.addr("0x1012:0x0060"), builder.addr("0x1012:0x0067")),
+				computedJumpTargets(builder, "0x1012:0x000e"));
+			assertNull("the junk the first one decoded in the earlier block is cleared",
+				program.getListing().getInstructionAt(builder.addr("0x1000:0x0060")));
+			assertNull("the mark the second one left at its collision is dropped",
 				program.getBookmarkManager()
-						.getBookmark(builder.addr(TARGET_B), BookmarkType.ERROR, "Bad Instruction"));
-			assertTrue("the string range is undefined again, so the string pass can claim it",
-				DataUtilities.isUndefinedRange(program, builder.addr(TARGET_B),
-					builder.addr("0x1000:0x0183")));
+						.getBookmark(builder.addr("0x1000:0x0067"), BookmarkType.ERROR,
+							"Bad Instruction"));
+			assertNotNull("the real code it collided with is untouched",
+				program.getListing().getInstructionAt(builder.addr("0x1000:0x0068")));
+			assertNotNull("arm 1's body is decoded",
+				program.getListing().getInstructionAt(builder.addr("0x1012:0x0060")));
+			assertNotNull("arm 2's body is decoded",
+				program.getListing().getInstructionAt(builder.addr("0x1012:0x0067")));
 		}
 		finally {
 			builder.dispose();
@@ -154,54 +263,63 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	}
 
 	@Test
-	public void testNonStringCasualtyIsCleared() throws Exception {
-		ProgramBuilder builder = dispatcherProgram(false);
+	public void testEvidencedCodeAtPageTargetIsKept() throws Exception {
+		ProgramBuilder builder = pageProgram(true); // 1000:0060 carries a non-default symbol
 		try {
+			assertEquals(1, resolve(builder));
+
+			assertFalse("the page-based reference is still deleted",
+				computedJumpTargets(builder, "0x1012:0x000e").contains(builder.addr("0x1000:0x0060")));
+			assertNotNull("but evidenced code at its target is kept, not over-cleared",
+				builder.getProgram().getListing().getInstructionAt(builder.addr("0x1000:0x0060")));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	private static ProgramBuilder pageProgram(boolean evidencedJunk) throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("PAGE", ProgramBuilder._X86_16_REAL_MODE);
+		boolean ok = false;
+		try {
+			MemoryBlock resident = builder.createMemory("CODE", "0x1000:0x0000", 0x120);
+			MemoryBlock nucleus = builder.createMemory("NUC", "0x1012:0x0000", 0x100);
+			builder.withTransaction(() -> {
+				resident.setExecute(true);
+				nucleus.setExecute(true);
+			});
+			builder.setBytes("0x1012:0x0000", "b8 16 00 ba 60 00 74 03 ba 67 00 89 44 fc ff e2");
+			builder.setBytes("0x1012:0x0060", "c3");
+			builder.setBytes("0x1012:0x0067", "cb");
+			builder.setBytes("0x1000:0x0060", "f8 f9 fa");
+			builder.setBytes("0x1000:0x0068", "55 c3");
+			builder.disassemble("0x1012:0x0000", 16, true);
+			builder.disassemble("0x1000:0x0060", 3, true);
+			builder.disassemble("0x1000:0x0068", 2, true);
+			builder.createFunction("0x1000:0x0068");
 			Program program = builder.getProgram();
-			Listing listing = program.getListing();
-			assertNotNull("setup: non-string casualty must be decoded",
-				listing.getInstructionAt(builder.addr(TARGET_A)));
-
-			assertEquals(1, neutralize(builder));
-
-			assertNull("the non-string junk must be cleared too",
-				listing.getInstructionAt(builder.addr(TARGET_A)));
-			assertNull("its error bookmark must be gone",
-				program.getBookmarkManager()
-						.getBookmark(builder.addr(TARGET_A), BookmarkType.ERROR, "Bad Instruction"));
+			builder.withTransaction(() -> {
+				ReferenceManager refs = program.getReferenceManager();
+				refs.addMemoryReference(builder.addr("0x1012:0x000e"),
+					builder.addr("0x1000:0x0060"), RefType.COMPUTED_JUMP, SourceType.ANALYSIS, 0);
+				refs.addMemoryReference(builder.addr("0x1012:0x000e"),
+					builder.addr("0x1000:0x0067"), RefType.COMPUTED_JUMP, SourceType.ANALYSIS, 0);
+				program.getBookmarkManager().setBookmark(builder.addr("0x1000:0x0060"),
+					BookmarkType.ERROR, "Bad Instruction", "conflicting data");
+				program.getBookmarkManager().setBookmark(builder.addr("0x1000:0x0067"),
+					BookmarkType.ERROR, "Bad Instruction", "Failed to disassemble at 1000:0067 " +
+						"due to conflicting instruction at 1000:0068");
+			});
+			if (evidencedJunk) {
+				builder.createLabel("0x1000:0x0060", "keep_me");
+			}
+			ok = true;
+			return builder;
 		}
 		finally {
-			builder.dispose();
-		}
-	}
-
-	@Test
-	public void testEvidencedTargetNotCleared() throws Exception {
-		ProgramBuilder builder = dispatcherProgram(true); // 0180 carries a non-default symbol
-		try {
-			Program program = builder.getProgram();
-			Listing listing = program.getListing();
-
-			assertEquals(1, neutralize(builder));
-
-			assertFalse("the bogus reference is still deleted", hasComputedJumpRef(program, JMP));
-			assertNotNull("but evidenced code at the target is kept, not over-cleared",
-				listing.getInstructionAt(builder.addr(TARGET_B)));
-		}
-		finally {
-			builder.dispose();
-		}
-	}
-
-	@Test
-	public void testNeutralizationIsIdempotent() throws Exception {
-		ProgramBuilder builder = dispatcherProgram(false);
-		try {
-			assertEquals(1, neutralize(builder));
-			assertEquals("a re-run finds nothing left to do", 0, neutralize(builder));
-		}
-		finally {
-			builder.dispose();
+			if (!ok) {
+				builder.dispose();
+			}
 		}
 	}
 
@@ -226,18 +344,15 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 			builder.setBytes("0x1000:0x0250", "c3");
 			builder.disassemble("0x1000:0x0200", 6, true);
 			builder.disassemble("0x1000:0x0250", 1, true);
-			Program program = builder.getProgram();
-			builder.withTransaction(() -> program.getReferenceManager().addMemoryReference(
-				builder.addr("0x1000:0x0204"), builder.addr("0x1000:0x0250"),
-				RefType.COMPUTED_JUMP, SourceType.ANALYSIS, 0));
+			addAnalysisJump(builder, "0x1000:0x0204", "0x1000:0x0250");
 			builder.createLabel("0x1000:0x0250", "real_target");
 
-			assertEquals(0, neutralize(builder));
+			assertEquals(0, resolve(builder));
 
-			assertTrue("the legitimate computed jump's reference must survive",
-				hasComputedJumpRef(program, "0x1000:0x0204"));
+			assertEquals(Set.of(builder.addr("0x1000:0x0250")),
+				computedJumpTargets(builder, "0x1000:0x0204"));
 			assertNotNull("its target code must be untouched",
-				program.getListing().getInstructionAt(builder.addr("0x1000:0x0250")));
+				builder.getProgram().getListing().getInstructionAt(builder.addr("0x1000:0x0250")));
 		}
 		finally {
 			builder.dispose();
@@ -245,32 +360,23 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	}
 
 	/**
-	 * A full dispatcher shape whose computed reference already resolves into a <i>different</i>
-	 * segment — an already-correct overlay resolution. The same-segment filter leaves it alone.
+	 * A dispatcher whose computed reference lands in a different segment that none of its
+	 * constants explains: not a stock guess, so it is left alone.
 	 */
 	@Test
-	public void testCrossSegmentComputedRefUntouched() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("XSEG", ProgramBuilder._X86_16_REAL_MODE);
+	public void testUnexplainedCrossSegmentRefUntouched() throws Exception {
+		ProgramBuilder builder = dispatchProgram();
 		try {
-			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0000", 0x400);
-			MemoryBlock overlay = builder.createMemory("OVL", "0x2000:0x0000", 0x400);
-			builder.withTransaction(() -> {
-				code.setExecute(true);
-				overlay.setExecute(true);
-			});
-			builder.setBytes("0x1000:0x0100", DISPATCHER);
-			builder.setBytes("0x2000:0x0080", "c3"); // a real overlay entry
-			builder.disassemble("0x1000:0x0100", DISPATCHER_LEN, true);
+			MemoryBlock other = builder.createMemory("OVL", "0x2000:0x0000", 0x400);
+			builder.withTransaction(() -> other.setExecute(true));
+			builder.setBytes("0x2000:0x0080", "c3");
 			builder.disassemble("0x2000:0x0080", 1, true);
-			Program program = builder.getProgram();
-			builder.withTransaction(() -> program.getReferenceManager().addMemoryReference(
-				builder.addr(JMP), builder.addr("0x2000:0x0080"), RefType.COMPUTED_JUMP,
-				SourceType.ANALYSIS, 0));
+			addAnalysisJump(builder, JMP, "0x2000:0x0080");
 
-			assertEquals(0, neutralize(builder));
+			resolve(builder);
 
-			assertTrue("an already-correct cross-segment resolution must survive",
-				hasComputedJumpRef(program, JMP));
+			assertTrue("a resolution no constant explains must survive",
+				computedJumpTargets(builder, JMP).contains(builder.addr("0x2000:0x0080")));
 		}
 		finally {
 			builder.dispose();
@@ -278,80 +384,14 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	}
 
 	/**
-	 * The bogus reference in an <i>earlier</i> block. MzLoader makes one block per segment,
-	 * and stock resolves the immediate against the jump's 64KB page base, not its segment, so
-	 * a nucleus segment starting past its page boundary sends the target into whatever block
-	 * holds the page base. The committed smoke sample has this shape:
-	 * <pre>
-	 *   1000:0000  CODE block, 0x120 bytes of resident code:
-	 *   1000:0060  f8 f9 fa     the casualty the bogus flow decoded
-	 *   1000:0068  55           PUSH BP, a real function entry; the bogus flow to 0067
-	 *                           collided with it, decoded nothing, and left only a mark
-	 *   1012:0000  b8 16 00     MOV AX,0x0016    ; NUC block
-	 *   1012:0003  ba 60 00     MOV DX,0x0060
-	 *   1012:0006  ba 67 00     MOV DX,0x0067
-	 *   1012:0009  89 44 fc     MOV [SI-4],AX
-	 *   1012:000c  ff e2        JMP DX           ; bogusly resolved to page 1000 + imm
-	 * </pre>
-	 */
-	@Test
-	public void testPageBaseRefInEarlierBlockIsNeutralized() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("PAGE", ProgramBuilder._X86_16_REAL_MODE);
-		try {
-			MemoryBlock resident = builder.createMemory("CODE", "0x1000:0x0000", 0x120);
-			MemoryBlock nucleus = builder.createMemory("NUC", "0x1012:0x0000", 0x100);
-			builder.withTransaction(() -> {
-				resident.setExecute(true);
-				nucleus.setExecute(true);
-			});
-			builder.setBytes("0x1012:0x0000", "b8 16 00 ba 60 00 ba 67 00 89 44 fc ff e2");
-			builder.setBytes("0x1000:0x0060", CASUALTY_A);
-			builder.setBytes("0x1000:0x0068", "55 c3");
-			builder.disassemble("0x1012:0x0000", 14, true);
-			builder.disassemble("0x1000:0x0060", 3, true);
-			builder.disassemble("0x1000:0x0068", 2, true);
-			builder.createFunction("0x1000:0x0068");
-			Program program = builder.getProgram();
-			builder.withTransaction(() -> {
-				ReferenceManager refs = program.getReferenceManager();
-				refs.addMemoryReference(builder.addr("0x1012:0x000c"),
-					builder.addr("0x1000:0x0060"), RefType.COMPUTED_JUMP, SourceType.ANALYSIS, 0);
-				refs.addMemoryReference(builder.addr("0x1012:0x000c"),
-					builder.addr("0x1000:0x0067"), RefType.COMPUTED_JUMP, SourceType.ANALYSIS, 0);
-				program.getBookmarkManager().setBookmark(builder.addr("0x1000:0x0060"),
-					BookmarkType.ERROR, "Bad Instruction", "conflicting data");
-				program.getBookmarkManager().setBookmark(builder.addr("0x1000:0x0067"),
-					BookmarkType.ERROR, "Bad Instruction", "Failed to disassemble at 1000:0067 " +
-						"due to conflicting instruction at 1000:0068");
-			});
-
-			assertEquals(1, neutralize(builder));
-
-			assertFalse("the page-based bogus references must be gone",
-				hasComputedJumpRef(program, "0x1012:0x000c"));
-			assertNull("the junk the first one decoded in the earlier block is cleared",
-				program.getListing().getInstructionAt(builder.addr("0x1000:0x0060")));
-			assertNull("the mark the second one left at its collision is dropped",
-				program.getBookmarkManager()
-						.getBookmark(builder.addr("0x1000:0x0067"), BookmarkType.ERROR,
-							"Bad Instruction"));
-			assertNotNull("and the real code it collided with is untouched",
-				program.getListing().getInstructionAt(builder.addr("0x1000:0x0068")));
-		}
-		finally {
-			builder.dispose();
-		}
-	}
-
-	/**
-	 * The {@code MOV DX,imm16 ; JMP DX} shape with a same-segment bogus reference but <b>no</b>
-	 * return-slot patch immediately before the jump (a plain NOP instead). The strict 5a gate
-	 * declines it, so an arbitrary register-indirect jump is never mistaken for a dispatcher.
+	 * The {@code MOV DX,imm16 ; JMP DX} shape with a reference but <b>no</b> return-slot patch
+	 * immediately before the jump (a plain NOP instead). The gate declines it, so an arbitrary
+	 * register-indirect jump is never mistaken for a dispatcher.
 	 * <pre>
 	 *   0100  ba 80 01   MOV DX,0x0180
 	 *   0103  90         NOP            ; NOT a return-slot patch
 	 *   0104  ff e2      JMP DX
-	 *   0180  50 51 52 53  (would-be casualty)
+	 *   0180  50 51 52 53
 	 * </pre>
 	 */
 	@Test
@@ -361,20 +401,16 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0000", 0x400);
 			builder.withTransaction(() -> code.setExecute(true));
 			builder.setBytes("0x1000:0x0100", "ba 80 01 90 ff e2");
-			builder.setBytes(TARGET_B, CASUALTY_B);
+			builder.setBytes(BODY_B, "50 51 52 53");
 			builder.disassemble("0x1000:0x0100", 6, true);
-			builder.disassemble(TARGET_B, 4, true);
-			Program program = builder.getProgram();
-			builder.withTransaction(() -> program.getReferenceManager().addMemoryReference(
-				builder.addr("0x1000:0x0104"), builder.addr(TARGET_B), RefType.COMPUTED_JUMP,
-				SourceType.ANALYSIS, 0));
+			builder.disassemble(BODY_B, 4, true);
+			addAnalysisJump(builder, "0x1000:0x0104", BODY_B);
 
-			assertEquals(0, neutralize(builder));
+			assertEquals(0, resolve(builder));
 
-			assertTrue("without the return-slot patch it is not a dispatcher: ref survives",
-				hasComputedJumpRef(program, "0x1000:0x0104"));
+			assertEquals(Set.of(builder.addr(BODY_B)), computedJumpTargets(builder, "0x1000:0x0104"));
 			assertNotNull("and nothing is cleared",
-				program.getListing().getInstructionAt(builder.addr(TARGET_B)));
+				builder.getProgram().getListing().getInstructionAt(builder.addr(BODY_B)));
 		}
 		finally {
 			builder.dispose();

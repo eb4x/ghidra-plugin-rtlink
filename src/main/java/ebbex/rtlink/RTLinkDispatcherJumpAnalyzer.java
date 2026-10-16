@@ -1,10 +1,14 @@
 package ebbex.rtlink;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.plugin.core.clear.ClearFlowAndRepairCmd;
 import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
@@ -14,7 +18,9 @@ import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.SegmentedAddress;
+import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.lang.Register;
+import ghidra.program.model.lang.RegisterValue;
 import ghidra.program.model.listing.Bookmark;
 import ghidra.program.model.listing.BookmarkManager;
 import ghidra.program.model.listing.BookmarkType;
@@ -25,6 +31,7 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.scalar.Scalar;
+import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.SourceType;
@@ -34,48 +41,58 @@ import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Neutralizes the bogus current-segment computed jump the stock x86 Constant Reference
- * Analyzer plants on an RTLink/Plus overlay VM dispatcher trampoline.
+ * Resolves the RTLink/Plus VM nucleus' constant-pair dispatch: removes the computed-jump
+ * references stock resolves against the wrong segment, with the junk they decoded, and puts
+ * in the true ones.
  * <p>
- * The dispatcher trampoline is {@code MOV DX,imm16 ; … ; MOV [SI-4],AX ; JMP DX}: it
- * patches the caller's far-return offset slot and jumps to a <i>bare offset</i> that
- * belongs to a runtime-selected overlay segment, not to the current code segment. Stock
- * Ghidra cannot model that runtime segment, so the constant analyzer (priority 596)
- * constant-propagates {@code DX} and resolves the offset against the current {@code CS},
- * planting a {@code COMPUTED_JUMP} reference into this segment and — synchronously, inside
- * the same pass — disassembling junk at that wrong target (a string decoded as code, plus
- * a non-string casualty; five Bad-Instruction ERROR bookmarks on a fresh VICEROY import).
+ * The dispatch is {@code MOV AX,entry ; MOV DX,body ; … ; MOV [SI-4],AX ; JMP DX}: it
+ * patches the caller's return slot with one VM entry ({@code $$VM_CALL}, {@code $$VM_JMP},
+ * …) and continues at that entry's body. {@code JMP DX} is a near jump, so the body is
+ * {@code CS:DX} in the nucleus segment itself — VICEROY's {@code 210d:0e3d} goes to
+ * {@code 210d:0e93} or {@code 210d:1369}, the code right after {@code $$VM_CALL}'s and
+ * {@code $$VM_CALLR}'s entry checks. The bodies hold most of the VM runtime: nothing else
+ * reaches them.
  * <p>
- * There is no window between the reference being planted and the junk being decoded (both
- * happen in the 596 pass; see the design doc), so this cannot be pre-empted the way
- * {@link RTLinkSwitchTableAnalyzer} wins its race at 399. Instead this pass runs
- * <i>after</i> all reference/disassembly activity (596/600/602) and <i>before</i> the ASCII
- * Strings analyzer (~905): for each recognized dispatcher it deletes the bogus
- * current-segment references, clears the unevidenced junk they caused (returning the bytes
- * to undefined so the string analyzer can reclaim any string on its own), and drops the
- * confined ERROR bookmarks. The {@code JMP DX} itself is left unresolved — the truthful
- * end-state, since its target is overlay-selected at runtime.
+ * Stock resolves the offset against the jump's 64KB <i>page</i> ({@code currentCS} is
+ * {@code (inst_next >> 4) & 0xf000} in real mode), so the x86 Constant Reference Analyzer
+ * (596) plants {@code COMPUTED_JUMP} references to {@code page + imm} and — synchronously,
+ * inside the same pass — disassembles junk there (on VICEROY, strings in segment
+ * {@code 2047}). There is no window to pre-empt that, so this pass runs after 596/600/602
+ * and before the ASCII Strings analyzer (~905): it deletes each reference an immediate
+ * explains against any other base than the jump's own segment, clears the unevidenced junk
+ * it seeded (returning the bytes to undefined for the string pass), drops the confined ERROR
+ * bookmarks, and then adds the reference to {@code CS:imm} for every constant that feeds the
+ * jump and disassembles there. Where {@code currentCS} reads CS from context (upstream PR
+ * #9703, the dailydriver fork), stock already resolves correctly and only the second half has
+ * anything to do.
+ * <p>
+ * An earlier version took the body for an offset into a runtime-selected overlay segment and
+ * deleted every same-block reference too, the correct ones included, clearing the bodies —
+ * 37 runtime routines of VICEROY's nucleus went with them.
  * <p>
  * The recognition fingerprint is near-unforgeable and was validated to appear exactly twice
  * (the two sibling dispatchers) in each of the four corpus binaries — VICEROY, NEBULAR,
  * SPHERE, ROE2MAIN — matching no unrelated {@code JMP reg} site: a register-indirect near
  * jump, immediately preceded by a return-slot patch {@code MOV word ptr [base-disp], reg}
  * (the {@code 89 44 fc} = {@code MOV [SI-4],AX} spelling in all four), fed by a
- * {@code MOV <jumpreg>,imm16}, and carrying an ANALYSIS computed-jump reference that one of
- * those immediates explains (see {@link #matchedBogusRefs}).
+ * {@code MOV <jumpreg>,imm16} on the straight-line path into it.
  */
 public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 
 	private static final String NAME = "RTLink Dispatcher Jump";
 	private static final String DESCRIPTION =
-		"Neutralizes the bogus current-segment computed jump the x86 Constant Reference " +
-			"Analyzer plants on an RTLink/Plus overlay dispatcher trampoline (MOV reg,imm16 ; " +
-			"MOV [SI-disp],reg ; JMP reg): deletes the bad reference, clears the junk it " +
-			"disassembled at the wrong target, and drops the confined error bookmarks, so the " +
-			"jump is left honestly unresolved and the string pass can reclaim any string.";
+		"Resolves the RTLink/Plus VM nucleus' constant-pair dispatch (MOV DX,imm16 ; " +
+			"MOV [SI-disp],AX ; JMP DX): deletes the computed jumps stock resolves against the " +
+			"64KB page instead of the nucleus segment, clears the junk they disassembled and " +
+			"their error bookmarks, and adds the true CS:imm targets, the VM entries' bodies.";
 
-	/** The comment the neutralized dispatcher jump carries, so a human knows why it is bare. */
+	/** The plate comment the dispatch jump carries, saying where its targets come from. */
 	static final String DISPATCHER_COMMENT =
+		"RTLink/Plus VM dispatch: continues at the body of the VM entry patched into the " +
+			"caller's return slot (MOV AX/MOV DX constant pair, near, this segment).";
+
+	/** What versions up to 0.6.0 wrote there; a re-run replaces it. */
+	private static final String LEGACY_DISPATCHER_COMMENT =
 		"RTLink/Plus overlay dispatcher: jump target is selected at runtime (overlay " +
 			"segment); static resolution intentionally suppressed.";
 
@@ -104,23 +121,24 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 	@Override
 	public boolean added(Program program, AddressSetView set, TaskMonitor monitor, MessageLog log)
 			throws CancelledException {
-		int neutralized = neutralizeDispatcherJumps(program, set, monitor);
-		if (neutralized > 0) {
+		int resolved = resolveDispatchJumps(program, set, monitor);
+		if (resolved > 0) {
 			// Msg.info only, never log.appendMsg: content in the analysis MessageLog makes
 			// AutoAnalysisPlugin pop a "warnings/errors issued during analysis" dialog.
 			Msg.info(this, String.format(
-				"RTLink/Plus: Neutralized %d overlay-dispatcher computed jump(s)", neutralized));
+				"RTLink/Plus: Resolved %d VM dispatch jump(s) to their entry bodies", resolved));
 		}
 		return true;
 	}
 
 	/**
 	 * The pass proper, exposed as a static so tests can drive it directly: recognizes the
-	 * overlay dispatcher trampolines in {@code set}, deletes their bogus current-segment
-	 * computed-jump references, clears the junk those references caused, and drops the
-	 * confined ERROR bookmarks. Returns the number of dispatcher jumps neutralized.
+	 * VM dispatch jumps in {@code set}, deletes the computed-jump references stock resolved
+	 * against the wrong segment, clears the junk those references caused and the confined
+	 * ERROR bookmarks, then references and disassembles each {@code CS:imm} body. Returns the
+	 * number of dispatch jumps it changed anything on.
 	 */
-	static int neutralizeDispatcherJumps(Program program, AddressSetView set, TaskMonitor monitor)
+	static int resolveDispatchJumps(Program program, AddressSetView set, TaskMonitor monitor)
 			throws CancelledException {
 		Listing listing = program.getListing();
 		ReferenceManager references = program.getReferenceManager();
@@ -135,13 +153,10 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 			}
 		}
 
-		int neutralized = 0;
+		int resolved = 0;
 		for (Instruction jmp : dispatchers) {
 			monitor.checkCancelled();
 			List<Reference> bogus = matchedBogusRefs(program, jmp);
-			if (bogus.isEmpty()) {
-				continue;
-			}
 			for (Reference ref : bogus) {
 				monitor.checkCancelled();
 				Address target = ref.getToAddress();
@@ -171,13 +186,73 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 				// flow (this reference) is already deleted, so nothing re-decodes the target.
 				new ClearFlowAndRepairCmd(target, false, true, true).applyTo(program, monitor);
 			}
-			// Leave JMP unresolved (the honest end-state) and say why.
-			if (jmp.getComment(CommentType.PLATE) == null) {
+			int added = resolveBodies(program, jmp, monitor);
+			String plate = jmp.getComment(CommentType.PLATE);
+			if (plate == null || plate.equals(LEGACY_DISPATCHER_COMMENT)) {
 				jmp.setComment(CommentType.PLATE, DISPATCHER_COMMENT);
 			}
-			neutralized++;
+			if (!bogus.isEmpty() || added > 0) {
+				resolved++;
+			}
 		}
-		return neutralized;
+		return resolved;
+	}
+
+	/**
+	 * Reference every {@code CS:imm} body from {@code jmp} and disassemble the ones not yet
+	 * decoded; returns how many references were added. A body is only taken in an
+	 * initialized executable block, and never into an overlay space: the nucleus is resident.
+	 */
+	private static int resolveBodies(Program program, Instruction jmp, TaskMonitor monitor) {
+		if (!(jmp.getMinAddress() instanceof SegmentedAddress at)) {
+			return 0;
+		}
+		int segment = codeSegment(program, jmp, at);
+		ReferenceManager references = program.getReferenceManager();
+		int added = 0;
+		for (long imm : loadedImmediates(program, jmp, jmp.getRegister(0))) {
+			Address body =
+				((SegmentedAddressSpace) at.getAddressSpace()).getAddress(segment, (int) imm);
+			MemoryBlock block = program.getMemory().getBlock(body);
+			if (block == null || !block.isExecute() || !block.isInitialized()) {
+				continue;
+			}
+			if (!hasReferenceTo(jmp, body)) {
+				references.addMemoryReference(jmp.getMinAddress(), body, RefType.COMPUTED_JUMP,
+					SourceType.ANALYSIS, Reference.MNEMONIC);
+				added++;
+			}
+			if (program.getListing().getInstructionAt(body) == null &&
+				program.getListing().getDefinedDataContaining(body) == null) {
+				new DisassembleCommand(body, null, true).applyTo(program, monitor);
+			}
+		}
+		return added;
+	}
+
+	/**
+	 * The jump's CS: the context value where one is asserted (MzLoader over each resident
+	 * block), else its address' segment. Never the language default, which is a page guess.
+	 */
+	private static int codeSegment(Program program, Instruction jmp, SegmentedAddress at) {
+		Register cs = program.getLanguage().getRegister("CS");
+		if (cs != null) {
+			RegisterValue value =
+				program.getProgramContext().getNonDefaultValue(cs, jmp.getMinAddress());
+			if (value != null && value.hasValue()) {
+				return value.getUnsignedValue().intValue() & 0xffff;
+			}
+		}
+		return at.getSegment();
+	}
+
+	private static boolean hasReferenceTo(Instruction jmp, Address target) {
+		for (Reference ref : jmp.getReferencesFrom()) {
+			if (ref.getToAddress().equals(target) && ref.getReferenceType().isJump()) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -202,11 +277,11 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
-	 * True when {@code jmp} is an RTLink overlay dispatcher trampoline: a register-indirect
-	 * near jump, immediately preceded by a return-slot patch {@code MOV [base-disp], reg}, fed
-	 * by a {@code MOV <jumpreg>, imm16}, and carrying at least one ANALYSIS computed-jump
-	 * reference. The return-slot patch is the near-unforgeable gate — a compiler does not
-	 * store into a return-offset slot and then jump through a just-constant-loaded register.
+	 * True when {@code jmp} is an RTLink VM dispatch jump: a register-indirect near jump,
+	 * immediately preceded by a return-slot patch {@code MOV [base-disp], reg} and fed by a
+	 * {@code MOV <jumpreg>, imm16}. The return-slot patch is the near-unforgeable gate — a
+	 * compiler does not store into a return-offset slot and then jump through a
+	 * just-constant-loaded register.
 	 */
 	private static boolean isDispatcherJump(Program program, Instruction jmp) {
 		if (!isRegisterIndirectJump(jmp)) {
@@ -219,10 +294,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		if (!hasReturnSlotPatchBefore(program, jmp)) {
 			return false;
 		}
-		if (!hasConstantFeeder(program, jmp, jumpReg)) {
-			return false;
-		}
-		return !analysisComputedJumpRefs(jmp).isEmpty();
+		return !loadedImmediates(program, jmp, jumpReg).isEmpty();
 	}
 
 	/** A near {@code JMP} through a single 16-bit register: {@code FF /4}, {@code mod == 3}. */
@@ -288,25 +360,12 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		return disp < 0; // a return-slot patch stores below the frame pointer
 	}
 
-	/** True when a {@code MOV <jumpReg>, imm16} feeds the register within the block. */
-	private static boolean hasConstantFeeder(Program program, Instruction jmp, Register jumpReg) {
-		Listing listing = program.getListing();
-		Instruction cur = listing.getInstructionBefore(jmp.getMinAddress());
-		for (int i = 0; i < FEEDER_WALK_LIMIT && cur != null; i++) {
-			if (loadedImmediate(cur, jumpReg) != null) {
-				return true;
-			}
-			cur = listing.getInstructionBefore(cur.getMinAddress());
-		}
-		return false;
-	}
-
 	/**
 	 * The bogus references to delete: each ANALYSIS computed-jump reference from {@code jmp}
 	 * that the constant analyzer built by resolving a {@code MOV <jumpReg>, imm16} immediate
-	 * against a segment of its own choosing. On a confirmed dispatcher every such reference is
-	 * bogus (the true target is runtime-selected); tying each deletion to a loaded constant is
-	 * the precision check. Two shapes qualify:
+	 * against another base than the jump's own segment. The {@code CS:imm} targets are the
+	 * true ones and never match; tying each deletion to a loaded constant is the precision
+	 * check. Two shapes qualify:
 	 * <ul>
 	 * <li><b>Against the jump's 64KB page</b>, in any block. The x86 {@code currentCS}
 	 * subconstructor recomputes CS from the program counter as {@code (inst_next >> 4) &
@@ -325,15 +384,22 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 	 * target, not a page-relative guess.
 	 */
 	private static List<Reference> matchedBogusRefs(Program program, Instruction jmp) {
+		if (!(jmp.getMinAddress() instanceof SegmentedAddress at)) {
+			return List.of();
+		}
 		Register jumpReg = jmp.getRegister(0);
 		Set<Long> immediates = loadedImmediates(program, jmp, jumpReg);
 		MemoryBlock jumpBlock = program.getMemory().getBlock(jmp.getMinAddress());
 		long pageBase = (jmp.getMaxAddress().getOffset() + 1) & PAGE_MASK;
+		long csBase = (long) codeSegment(program, jmp, at) * 16;
 
 		List<Reference> matched = new ArrayList<>();
 		for (Reference ref : analysisComputedJumpRefs(jmp)) {
 			if (!(ref.getToAddress() instanceof SegmentedAddress target)) {
 				continue; // an overlay target: resolved for real, not against a page
+			}
+			if (immediates.contains(physical(target) - csBase)) {
+				continue; // CS:imm, where the near jump really goes
 			}
 			boolean sameBlock =
 				jumpBlock != null && jumpBlock.equals(program.getMemory().getBlock(target));
@@ -386,19 +452,66 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		return refs;
 	}
 
-	/** Every {@code MOV <jumpReg>, imm16} immediate in the block before {@code jmp}. */
+	/**
+	 * The {@code MOV <jumpReg>, imm16} immediates that reach {@code jmp}: a backward walk over
+	 * fall-through and jump predecessors, each path ending at its first write to the register
+	 * (a path whose write is anything but such a {@code MOV} contributes nothing), at most
+	 * {@value #FEEDER_WALK_LIMIT} instructions deep. Reaching definitions rather than a linear
+	 * scan, so that the sibling dispatcher's constants above an unconditional jump never count,
+	 * and a constant the other arm overwrites is not taken for a target.
+	 */
 	private static Set<Long> loadedImmediates(Program program, Instruction jmp, Register jumpReg) {
-		Listing listing = program.getListing();
-		Set<Long> immediates = new HashSet<>();
-		Instruction cur = listing.getInstructionBefore(jmp.getMinAddress());
-		for (int i = 0; i < FEEDER_WALK_LIMIT && cur != null; i++) {
-			Long imm = loadedImmediate(cur, jumpReg);
-			if (imm != null) {
-				immediates.add(imm);
+		Set<Long> immediates = new LinkedHashSet<>();
+		Set<Address> visited = new HashSet<>();
+		Deque<Instruction> frontier = new ArrayDeque<>(predecessors(program, jmp));
+		for (int depth = 0; depth < FEEDER_WALK_LIMIT && !frontier.isEmpty(); depth++) {
+			Deque<Instruction> next = new ArrayDeque<>();
+			for (Instruction cur : frontier) {
+				if (!visited.add(cur.getMinAddress())) {
+					continue;
+				}
+				Long imm = loadedImmediate(cur, jumpReg);
+				if (imm != null) {
+					immediates.add(imm);
+				}
+				else if (!writes(cur, jumpReg)) {
+					next.addAll(predecessors(program, cur));
+				}
 			}
-			cur = listing.getInstructionBefore(cur.getMinAddress());
+			frontier = next;
 		}
 		return immediates;
+	}
+
+	/** The instruction falling through to {@code instruction} and every jump landing on it. */
+	private static List<Instruction> predecessors(Program program, Instruction instruction) {
+		Listing listing = program.getListing();
+		Address at = instruction.getMinAddress();
+		List<Instruction> predecessors = new ArrayList<>();
+		Instruction above = listing.getInstructionBefore(at);
+		if (above != null && at.equals(above.getFallThrough())) {
+			predecessors.add(above);
+		}
+		for (Reference reference : program.getReferenceManager().getReferencesTo(at)) {
+			if (!reference.getReferenceType().isJump()) {
+				continue;
+			}
+			Instruction source = listing.getInstructionAt(reference.getFromAddress());
+			if (source != null) {
+				predecessors.add(source);
+			}
+		}
+		return predecessors;
+	}
+
+	private static boolean writes(Instruction instruction, Register register) {
+		for (Object result : instruction.getResultObjects()) {
+			if (result instanceof Register written &&
+				(written.contains(register) || register.contains(written))) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** The 16-bit immediate a {@code MOV <reg>, imm16} loads, or null if that is not this. */

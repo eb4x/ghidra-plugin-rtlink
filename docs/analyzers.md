@@ -17,18 +17,20 @@ six classes and not one. They share package-private statics and must stay in
   `DecompilerSwitchAnalyzer`, which skips any computed branch that already has
   computed refs — winning that race is what keeps bogus targets from being
   disassembled into other segments.
-- **`RTLinkDispatcherJumpAnalyzer`** — BYTE, `DATA_ANALYSIS.before()`. Neutralizes the
-  bogus current-segment `COMPUTED_JUMP` the stock x86 Constant Reference Analyzer (596)
-  plants on the overlay VM dispatcher trampoline (`MOV reg,imm16 ; MOV [base-disp],reg
-  ; JMP reg`): the immediate is a bare offset into a *runtime-selected* overlay
-  segment, which stock resolves against the current CS and — synchronously in the same
-  pass — disassembles junk at (a string decoded as code, plus a non-string casualty).
-  There is no window to pre-empt it, so this runs after 596/600/602 settle but before
-  `ASCII Strings` (~905): it deletes only the *same-block* (bogus current-CS)
-  computed-jump refs, clears the junk they caused, drops the confined ERROR bookmarks,
-  and leaves the `JMP` honestly unresolved — so the string pass reclaims the string
-  itself. Cross-block refs (a genuinely-resolved overlay target) are preserved. Gated
-  by a near-unforgeable fingerprint: the return-slot patch (`MOV [base-neg-disp],reg`)
+- **`RTLinkDispatcherJumpAnalyzer`** — BYTE, `DATA_ANALYSIS.before()`. Resolves the VM
+  nucleus' constant-pair dispatch (`MOV AX,entry ; MOV DX,body ; … ; MOV [SI-4],AX ;
+  JMP DX`). `JMP DX` is a near jump: its targets are `CS:imm` for the `MOV DX`
+  constants that reach it (a backward reaching-definitions walk), the bodies of the VM
+  entries — on VICEROY most of the VM runtime hangs off them. Stock resolves the
+  offset against the 64KB *page* instead and — synchronously, inside the 596 pass —
+  disassembles junk there; with no window to pre-empt it, this runs after 596/600/602
+  but before `ASCII Strings` (~905): it deletes the computed-jump refs an immediate
+  explains against any base but the jump's own segment, clears the junk they seeded and
+  its ERROR bookmarks, then adds the `CS:imm` refs and disassembles the bodies. Where
+  `currentCS` reads CS from context (the dailydriver fork) stock is already right and only
+  the plate comment changes. Up to 0.6.0 this took the body for an overlay offset and
+  deleted the correct refs too, clearing 37 routines of VICEROY's nucleus. Gated by a
+  near-unforgeable fingerprint: the return-slot patch (`MOV [base-neg-disp],reg`)
   immediately before a register-indirect `JMP`, fed by a `MOV reg,imm16`.
 - **`RTLinkSwitchOverrideAnalyzer`** — INSTRUCTION, `FUNCTION_ANALYSIS.after()`. Writes
   the decompiler jump-table overrides for the same tables (shares
@@ -44,9 +46,15 @@ six classes and not one. They share package-private statics and must stay in
   data (`CALL_RETURN`); far jumps/calls through initialized `CS:[imm16]` vectors
   followed; provably terminating routines (`INT 21h/4Ch` and tail-jump chains into
   one) sealing their callers' fall-throughs; "conflicting instruction" bookmarks
-  arbitrated by evidence; undefined gaps that decode exactly onto the code after them
-  disassembled (a short gap shaped like one routine, or a run of whole routines below a
-  return, each made a function); instructions decoded out of zero fill (≥16 zero bytes) deleted when
+  arbitrated by evidence; routines reached only through a `CS:imm` far pointer the
+  program builds to itself (stored into adjacent words, handed as `DS:DX` to a routine
+  that stores it so, or installed by DOS set-vector: interrupt hooks, the PSP terminate
+  hook, `$$RTL_REGISTER` handlers, the VM's return vector); undefined gaps that decode
+  exactly onto the code after them disassembled (a short gap shaped like one routine, or
+  a run of whole routines below a routine exit — a return, a far jump or a tail jump —
+  past any short zero padding, entries sharing one body included, jump-table slots and
+  blocks that jump back into the routine just above excluded, each routine made a
+  function); instructions decoded out of zero fill (≥16 zero bytes) deleted when
   unreferenced. The test is always on the bytes in memory, never on the instruction
   (`00 00` is a real instruction). Unresolved dispatch stubs and NOP sleds are left
   strictly alone.

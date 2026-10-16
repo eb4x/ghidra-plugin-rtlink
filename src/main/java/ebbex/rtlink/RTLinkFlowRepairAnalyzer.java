@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 import ghidra.app.cmd.disassemble.DisassembleCommand;
@@ -114,8 +115,10 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		"Repairs code buried under junk instructions from bad flows: removes the " +
 			"impossible fall-through of calls that land on loader-relocated segment " +
 			"words, and arbitrates the disassembler's conflicting-instruction " +
-			"bookmarks in favor of referenced code over unreferenced junk. Re-run " +
-			"as a one-shot to repair conflicts introduced after the initial pass.";
+			"bookmarks in favor of referenced code over unreferenced junk; recovers " +
+			"routines reached only through a CS:imm far pointer (interrupt hooks, " +
+			"registered handlers, return vectors) and runs of routines nothing reaches. " +
+			"Re-run as a one-shot to repair conflicts introduced after the initial pass.";
 
 	/** Backward fall-from walk bound; exhaustion counts as evidence (never clear). */
 	private static final int JUNK_CHAIN_WALK_LIMIT = 64;
@@ -135,6 +138,9 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 
 	/** Rounds to run the gap filler for; it converges in two or three on this corpus. */
 	private static final int GAP_FILL_ROUNDS = 10;
+
+	/** How far above a gap a jump back marks the gap as a detached block of that routine. */
+	private static final int DETACHED_BLOCK_REACH = 0x100;
 
 	/** {@code JMPF CS:[disp16]} — CS prefix, opcode FF /5, mod=00 r/m=110. */
 	private static final byte[] FAR_JUMP_VECTOR = { 0x2e, (byte) 0xff, 0x2e };
@@ -199,14 +205,18 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		int conflicts = arbitrateConflictBookmarks(program, monitor);
 
 		// Filling a gap creates a function, and a function is what identifies the
-		// stranded epilogue of the routine above it — so each round exposes the next.
+		// stranded epilogue of the routine above it — so each round exposes the next. A
+		// routine reached through a far pointer brings its own calls and pointers along.
 		// Run to a fixpoint rather than leaving code for a second invocation to find.
 		int gaps = 0;
+		int pointed = 0;
 		for (int round = 0; round < GAP_FILL_ROUNDS; round++) {
+			int claimed = FarCodePointers.recover(program, monitor);
 			int filled = fillCodeGaps(program, monitor);
-			if (filled == 0) {
+			if (claimed + filled == 0) {
 				break;
 			}
+			pointed += claimed;
 			gaps += filled;
 		}
 		// Last: a conflict mark whose blocked address now holds code is a fossil,
@@ -228,6 +238,11 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 			Msg.info(this, String.format(
 				"RTLink/Plus: Recovered %d buried instruction run(s) from junk conflicts",
 				conflicts));
+		}
+		if (pointed > 0) {
+			Msg.info(this, String.format(
+				"RTLink/Plus: Recovered %d routine(s) reached through a CS:imm far pointer",
+				pointed));
 		}
 		if (gaps > 0) {
 			Msg.info(this, String.format(
@@ -1391,20 +1406,23 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		Msg.info(RTLinkFlowRepairAnalyzer.class, String.format(
 			"RTLink/Plus: Unreached run of %d routine(s) at %s", claim.starts().size(),
 			claim.starts()));
-		int filled = 0;
+		List<Address> decoded = new ArrayList<>();
 		for (Address start : claim.starts()) {
 			// Following flow, but only inside the gap: a routine's own branches are
 			// what reach the code past its first unconditional jump.
 			new DisassembleCommand(start, claim.gap(), true).applyTo(program, monitor);
-			if (program.getListing().getInstructionAt(start) == null) {
-				continue;
+			if (program.getListing().getInstructionAt(start) != null) {
+				decoded.add(start);
 			}
+		}
+		// Last entry first: of entries sharing a tail, the one that falls into it owns it,
+		// and each earlier one then keeps only the bytes up to its jump into that tail.
+		for (Address start : decoded.reversed()) {
 			if (program.getFunctionManager().getFunctionContaining(start) == null) {
 				new CreateFunctionCmd(start).applyTo(program, monitor);
 			}
-			filled++;
 		}
-		return filled;
+		return decoded.size();
 	}
 
 	/**
@@ -1451,6 +1469,13 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		catch (MemoryAccessException e) {
 			return null;
 		}
+		int pad = leadingZeros(bytes);
+		if (pad > 0 && pad < FILLER_MIN_RUN && pad < length && closedAbove(program, start)) {
+			// Zero padding or a zeroed variable between a routine's last jump and the next
+			// routine (RTLink's rtcommon, 275d:07cf): left alone, and what follows judged
+			// as a gap of its own.
+			return recoverableGap(program, start.add(pad), end);
+		}
 		if (isRepeatedByte(bytes) || containsFillerRun(bytes)) {
 			// Padding, not code — and a gap that merely *contains* a fill run is no
 			// better: once an island has been cleared, the undefined bytes around it
@@ -1464,13 +1489,30 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		}
 
 		AddressSet gap = new AddressSet(start, end);
+		// Below a routine exit, whole routines first: each then becomes a function, where
+		// the single-start claim would decode only the first one and name none
+		// (RTLink's $$RTL_PRELOAD and $$RTL_SHELL_EVENT, 275d:07d5 and 275d:07df).
+		List<Address> routines = splitIntoRoutines(program, gap, decoded);
+		if (!routines.isEmpty()) {
+			return new GapClaim(gap, routines, true);
+		}
 		Instruction last = decoded.get(decoded.size() - 1);
 		if (length <= MAX_GAP_LENGTH && (startsWithPrologue(bytes) ||
 			isStrandedEpilogue(program, end, last) || fallsInto(program, start))) {
 			return new GapClaim(gap, List.of(start), false);
 		}
-		List<Address> routines = splitIntoRoutines(program, gap, decoded);
-		return routines.isEmpty() ? null : new GapClaim(gap, routines, true);
+		return null;
+	}
+
+	/**
+	 * A near {@code JMP} between routines: a slot of a table of jumps that only a computed
+	 * jump reaches (VICEROY {@code 210d:2016}, {@code JMP 2121} between two others), not a
+	 * routine. Its target is decoded anyway; the slot itself is not claimed.
+	 */
+	private static boolean isJumpSlot(PseudoInstruction instruction) {
+		FlowType flowType = instruction.getFlowType();
+		return flowType.isJump() && !flowType.hasFallthrough() &&
+			!"JMPF".equals(instruction.getMnemonicString());
 	}
 
 	/**
@@ -1515,24 +1557,23 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 
 	/**
 	 * The entry of every routine in {@code gap}, or an empty list unless the gap is a run
-	 * of whole routines: the code above it ends in a return, every branch that
-	 * lands in the gap lands on an instruction of the decode, and the gap splits exactly
-	 * into routines, with at most one {@code NOP} padding a routine onto an even address.
-	 * No routine may start on a zero byte.
+	 * of whole routines: the code above it cannot run into it (see {@link #closedAbove}),
+	 * every branch that lands in the gap lands on an instruction of the decode, and the gap
+	 * splits exactly into routines, with at most one {@code NOP} padding a routine onto an
+	 * even address. No routine may start on a zero byte.
 	 * <p>
 	 * A routine ends at an instruction without a fall-through (a return or an
 	 * unconditional jump) that none of its own jumps reaches past. One that some jump
 	 * does reach past is internal ({@code JMP} over an {@code else}), and the code after
-	 * it must then be a target of one of the routine's jumps: nothing else could reach it.
+	 * it must then be a target of one of the routine's jumps — or a further entry that
+	 * jumps or falls straight into one of them, as hand-written runtimes share one body
+	 * between entries that differ in a register they load first. A run that merely falls
+	 * into the function below the gap is not claimed: short data in front of a routine
+	 * decodes that way as readily as an entry does.
 	 */
 	private static List<Address> splitIntoRoutines(Program program, AddressSet gap,
 			List<PseudoInstruction> decoded) {
-		Address before = gap.getMinAddress().previous();
-		Instruction above =
-			before == null ? null : program.getListing().getInstructionContaining(before);
-		if (above == null || !isReturn(above)) {
-			// Only a return closes the routine above for certain: below a jump may be
-			// that routine's own stranded epilogue, which is no routine of its own.
+		if (!closedAbove(program, gap.getMinAddress())) {
 			return List.of();
 		}
 		Set<Address> boundaries = new LinkedHashSet<>();
@@ -1541,10 +1582,12 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		List<Address> starts = new ArrayList<>();
 		Set<Address> targets = new LinkedHashSet<>(); // the current routine's jump targets
 		Address furthest = null;
+		int entry = -1; // the current routine's first entry, as an index into decoded
 		boolean betweenRoutines = true;
 		boolean padded = false;
 		boolean unreached = false; // the previous instruction has no fall-through
-		for (PseudoInstruction instruction : decoded) {
+		for (int index = 0; index < decoded.size(); index++) {
+			PseudoInstruction instruction = decoded.get(index);
 			Address at = instruction.getAddress();
 			if (betweenRoutines) {
 				if (isAlignmentPad(instruction) && !padded) {
@@ -1556,17 +1599,35 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 					// saved interrupt vector or a CS variable, never a routine entry.
 					return List.of();
 				}
+				if (isJumpSlot(instruction)) {
+					continue; // still between routines
+				}
 				starts.add(at);
 				targets.clear();
 				furthest = null;
+				entry = index;
 				betweenRoutines = false;
 			}
 			else if (unreached && !targets.contains(at)) {
-				return List.of(); // code inside a routine that nothing reaches
+				// Nothing in this routine reaches it, so it is either a further entry
+				// into the routine's tail (PUSH DX ; MOV DX,0x2000 ; JMP tail, VICEROY
+				// 210d:1df7, parallel to the first entry PUSH DX ; MOV DX,0x0800) or not
+				// code at all — dead code, or data, after an inner jump. Only the first is
+				// claimed.
+				if (!parallelEntry(decoded, entry, index) || !joinsTail(decoded, index, targets)) {
+					return List.of();
+				}
+				starts.add(at);
 			}
 			FlowType flowType = instruction.getFlowType();
 			for (Address flow : instruction.getFlows()) {
 				if (!gap.contains(flow)) {
+					if (flowType.isJump() && backIntoRoutineAbove(program, gap, flow)) {
+						// A block that jumps back into the middle of a routine is a
+						// detached part of it (VICEROY 210d:05f0, below a far jump, jumps
+						// back into the INT 21h hook), not a routine of its own.
+						return List.of();
+					}
 					continue;
 				}
 				if (!boundaries.contains(flow)) {
@@ -1587,12 +1648,132 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
-	 * A return ({@code RET}, {@code RETF}, {@code IRET}). {@code isTerminal()} alone
-	 * also holds for a jump the Shared Return Calls analyzer turned into a tail call.
+	 * True when {@code target} lies just above the gap ({@value #DETACHED_BLOCK_REACH} bytes
+	 * at most) inside a function's body but not at its entry: the gap is then a detached block
+	 * of that routine. A jump into the middle of a routine further away is a tail jump into a
+	 * shared exit, which library and runtime routines make routinely (getchar,
+	 * {@code 1d1d:077e}).
 	 */
-	private static boolean isReturn(Instruction instruction) {
+	private static boolean backIntoRoutineAbove(Program program, AddressSet gap, Address target) {
+		Address start = gap.getMinAddress();
+		if (target.compareTo(start) >= 0 || start.subtract(target) > DETACHED_BLOCK_REACH) {
+			return false;
+		}
+		Function function = program.getFunctionManager().getFunctionContaining(target);
+		return function != null && !function.getEntryPoint().equals(target);
+	}
+
+	/**
+	 * True when the first two instructions at {@code decoded[index]} have the mnemonics and
+	 * register operands of the two at {@code decoded[entry]}: entries into one shared body
+	 * that differ only in the constant they load ({@code PUSH DX ; MOV DX,imm}).
+	 */
+	private static boolean parallelEntry(List<PseudoInstruction> decoded, int entry, int index) {
+		if (entry < 0 || index + 1 >= decoded.size()) {
+			return false;
+		}
+		for (int i = 0; i < 2; i++) {
+			PseudoInstruction first = decoded.get(entry + i);
+			PseudoInstruction other = decoded.get(index + i);
+			if (!first.getMnemonicString().equals(other.getMnemonicString()) ||
+				first.getNumOperands() != other.getNumOperands()) {
+				return false;
+			}
+			for (int op = 0; op < first.getNumOperands(); op++) {
+				if (!Objects.equals(first.getRegister(op), other.getRegister(op))) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * True when the straight-line run from {@code decoded[index]} reaches one of
+	 * {@code targets} — by a jump or by falling into it — before it stops. That is what makes
+	 * code below a routine's unconditional jump another entry into the same routine.
+	 */
+	private static boolean joinsTail(List<PseudoInstruction> decoded, int index,
+			Set<Address> targets) {
+		for (int i = index; i < decoded.size(); i++) {
+			PseudoInstruction instruction = decoded.get(i);
+			if (i > index && targets.contains(instruction.getAddress())) {
+				return true; // fell into it
+			}
+			for (Address flow : instruction.getFlows()) {
+				if (targets.contains(flow)) {
+					return true;
+				}
+			}
+			if (!instruction.getFlowType().hasFallthrough() ||
+				instruction.getFlowType().isConditional()) {
+				return false;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * True when the routine above {@code start} has certainly ended there: its last
+	 * instruction leaves it — a return, a far jump, or a jump to another function's entry (a
+	 * tail call: VICEROY's {@code JMP rtlink_error_vm_stack_underflow} at {@code 210d:2b7a})
+	 * — possibly followed by fewer than {@value #FILLER_MIN_RUN} zero bytes of padding. A near
+	 * jump within the routine does not: what follows it may be a case of an unresolved switch,
+	 * code of that same routine that only a computed jump reaches.
+	 */
+	private static boolean closedAbove(Program program, Address start) {
+		Address before = start.previous();
+		try {
+			for (int i = 0; i < FILLER_MIN_RUN && before != null; i++) {
+				Instruction above = program.getListing().getInstructionContaining(before);
+				if (above != null) {
+					return leavesRoutine(program, above);
+				}
+				if (program.getMemory().getByte(before) != FILLER_BYTE) {
+					return false;
+				}
+				before = before.previous();
+			}
+		}
+		catch (MemoryAccessException e) {
+			return false;
+		}
+		return false;
+	}
+
+	private static boolean leavesRoutine(Program program, Instruction instruction) {
 		FlowType flowType = instruction.getFlowType();
-		return flowType.isTerminal() && !flowType.isCall() && !flowType.isJump();
+		if (flowType.hasFallthrough()) {
+			return false;
+		}
+		if (flowType.isTerminal() && !flowType.isJump()) {
+			// RET, RETF, IRET — or a jump the Shared Return Calls analyzer made a tail call
+			return true;
+		}
+		if (!flowType.isJump()) {
+			return false;
+		}
+		if ("JMPF".equals(instruction.getMnemonicString())) {
+			return true;
+		}
+		Address[] flows = instruction.getFlows();
+		if (flows.length == 0) {
+			return false; // an unresolved near jump: a switch, not an exit
+		}
+		for (Address flow : flows) {
+			if (program.getFunctionManager().getFunctionAt(flow) == null) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static int leadingZeros(byte[] bytes) {
+		int zeros = 0;
+		while (zeros < bytes.length && bytes[zeros] == FILLER_BYTE) {
+			zeros++;
+		}
+		return zeros;
 	}
 
 	private static boolean startsOnZero(PseudoInstruction instruction) {

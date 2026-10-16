@@ -589,12 +589,12 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 	}
 
 	/**
-	 * VICEROY {@code 210d:05f0}: the run sits below a far jump that Shared Return Calls
-	 * made a tail call ({@code CALL_TERMINATOR}, which is terminal). That is no return,
-	 * so the code below may still belong to the routine above, and none of it is claimed.
+	 * The run below a far jump that Shared Return Calls made a tail call
+	 * ({@code CALL_TERMINATOR}): the routine above has left, as surely as by a return, and
+	 * the run is claimed.
 	 */
 	@Test
-	public void testRunBelowATailCallIsLeftAlone() throws Exception {
+	public void testRunBelowATailCallIsRecovered() throws Exception {
 		// 0100: NOP; NOP; JMPF 1000:0148, then the run as before
 		ProgramBuilder builder = routineRunProgram("90 90 ea 48 01 00 10 ", ROUTINE_C_REACHED);
 		try {
@@ -603,7 +603,139 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 			builder.withTransaction(() -> jump.setFlowOverride(FlowOverride.CALL_RETURN));
 			assertTrue("setup: the jump is now terminal", jump.getFlowType().isTerminal());
 
-			assertEquals("a tail call is no return", 0, fillGaps(builder));
+			assertEquals("three routines", 3, fillGaps(builder));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * VICEROY {@code 210d:05f0}: code below a far jump that jumps back into the middle of the
+	 * routine above it ({@code JNZ 05e5}, {@code JMP 05e1}, into the INT 21h hook) is a
+	 * detached block of that routine, not a routine of its own. Here C ends in
+	 * {@code JMP 0103}, the {@code POP BP} of the routine above.
+	 */
+	@Test
+	public void testBlockJumpingBackIntoTheRoutineAboveIsLeftAlone() throws Exception {
+		ProgramBuilder builder = routineRunProgram(
+			"a1 62 26 a3 62 26 a1 62 26 a3 62 26 a1 62 26 e9 bb ff ");
+		try {
+			assertEquals("a detached block is no routine", 0, fillGaps(builder));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * VICEROY {@code 210d:1df1}: three entries into one body, each loading its own constant
+	 * into DX first — the first two jump to the body, the last falls into it. Nothing calls
+	 * any of them; each becomes a function, the last owning the body.
+	 * <pre>
+	 *   0100  55 8b ec 5d cb   the routine above, ends RETF       ; disassembled
+	 *   0105  52 ba 00 08 eb 0a   PUSH DX ; MOV DX,0x0800 ; JMP 0115
+	 *   010b  52 ba 00 20 eb 04   PUSH DX ; MOV DX,0x2000 ; JMP 0115
+	 *   0111  52 ba 00 10         PUSH DX ; MOV DX,0x1000
+	 *   0115  09 16 00 00 5a cb   OR [0],DX ; POP DX ; RETF
+	 *   011b  55 8b ec 5d cb   the next function                  ; disassembled
+	 * </pre>
+	 */
+	@Test
+	public void testEntriesSharingABodyAreRecovered() throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("ENTRIES", ProgramBuilder._X86_16_REAL_MODE);
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0100", 0x40);
+			builder.withTransaction(() -> code.setExecute(true));
+			builder.setBytes("0x1000:0x0100", "55 8b ec 5d cb " +
+				"52 ba 00 08 eb 0a 52 ba 00 20 eb 04 52 ba 00 10 09 16 00 00 5a cb " +
+				"55 8b ec 5d cb");
+			builder.disassemble("0x1000:0x0100", 5, true);
+			builder.createFunction("0x1000:0x0100");
+			builder.disassemble("0x1000:0x011b", 5, true);
+			builder.createFunction("0x1000:0x011b");
+
+			assertEquals("three entries", 3, fillGaps(builder));
+
+			var functions = builder.getProgram().getFunctionManager();
+			assertEquals(6, functions.getFunctionAt(builder.addr("0x1000:0x0105"))
+					.getBody().getNumAddresses());
+			assertEquals(6, functions.getFunctionAt(builder.addr("0x1000:0x010b"))
+					.getBody().getNumAddresses());
+			assertEquals("the last entry owns the body", 10,
+				functions.getFunctionAt(builder.addr("0x1000:0x0111")).getBody().getNumAddresses());
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * RTLink's rtcommon, {@code 275d:07cf}: a far jump, six zero bytes, then two routines
+	 * nothing calls. The zeros are left alone and the routines claimed.
+	 * <pre>
+	 *   0100  ea 00 01 00 10      JMPF 1000:0100                  ; disassembled
+	 *   0105  00 00 00 00 00 00   padding
+	 *   010b  50 06 b0 04 07 58 cb   PUSH AX ; PUSH ES ; MOV AL,4 ; POP ES ; POP AX ; RETF
+	 *   0112  33 c0 cb            XOR AX,AX ; RETF
+	 *   0115  55 8b ec 5d cb      the next function               ; disassembled
+	 * </pre>
+	 */
+	@Test
+	public void testRoutinesBehindZeroPaddingAreRecovered() throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("PAD", ProgramBuilder._X86_16_REAL_MODE);
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0100", 0x40);
+			builder.withTransaction(() -> code.setExecute(true));
+			builder.setBytes("0x1000:0x0100", "ea 00 01 00 10 00 00 00 00 00 00 " +
+				"50 06 b0 04 07 58 cb 33 c0 cb 55 8b ec 5d cb");
+			builder.disassemble("0x1000:0x0100", 5, true);
+			builder.disassemble("0x1000:0x0115", 5, true);
+			builder.createFunction("0x1000:0x0115");
+
+			assertEquals("two routines", 2, fillGaps(builder));
+
+			Program program = builder.getProgram();
+			assertNotNull(program.getFunctionManager().getFunctionAt(builder.addr("0x1000:0x010b")));
+			assertNotNull(program.getFunctionManager().getFunctionAt(builder.addr("0x1000:0x0112")));
+			assertNull("the padding stays undefined",
+				program.getListing().getInstructionContaining(builder.addr("0x1000:0x0105")));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * VICEROY {@code 210d:2016}: near jumps between routines are slots of a table only a
+	 * computed jump reaches, not routines; they are not claimed.
+	 * <pre>
+	 *   0100  c3            RET                                   ; disassembled
+	 *   0101  e9 0c 00      JMP 0110
+	 *   0104  e9 09 00      JMP 0110
+	 *   0107  e9 06 00      JMP 0110
+	 *   010a  e9 03 00      JMP 0110
+	 *   010d  e9 00 00      JMP 0110
+	 *   0110  55 8b ec 5d c3   the next function                  ; disassembled
+	 * </pre>
+	 */
+	@Test
+	public void testJumpSlotsAreLeftAlone() throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("SLOTS", ProgramBuilder._X86_16_REAL_MODE);
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0100", 0x20);
+			builder.withTransaction(() -> code.setExecute(true));
+			builder.setBytes("0x1000:0x0100",
+				"c3 e9 0c 00 e9 09 00 e9 06 00 e9 03 00 e9 00 00 55 8b ec 5d c3");
+			builder.disassemble("0x1000:0x0100", 1, true);
+			builder.disassemble("0x1000:0x0110", 5, true);
+			builder.createFunction("0x1000:0x0110");
+
+			fillGaps(builder);
+
+			assertNull("a jump slot is no routine", builder.getProgram()
+					.getFunctionManager()
+					.getFunctionAt(builder.addr("0x1000:0x0101")));
 		}
 		finally {
 			builder.dispose();
