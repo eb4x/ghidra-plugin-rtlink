@@ -429,9 +429,6 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 
 		for (Instruction instruction : listing.getInstructions(true)) {
 			monitor.checkCancelled();
-			if (hasComputedReference(references, instruction)) {
-				continue; // already resolved (idempotent for one-shot re-runs)
-			}
 			boolean isCall = matchesBytes(instruction, FAR_CALL_VECTOR);
 			if (!isCall && !matchesBytes(instruction, FAR_JUMP_VECTOR)) {
 				continue;
@@ -440,10 +437,19 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 			if (target == null) {
 				continue;
 			}
-			references.addMemoryReference(instruction.getMinAddress(), target,
-				isCall ? RefType.COMPUTED_CALL : RefType.COMPUTED_JUMP, SourceType.ANALYSIS,
-				Reference.MNEMONIC);
-			if (listing.getInstructionAt(target) == null) {
+			// Since GP-7349 Ghidra resolves the vector itself and plants the reference, but
+			// a target only that reference reaches may still be undecoded: done means both.
+			boolean referenced = hasReferenceTo(instruction, target);
+			boolean decoded = listing.getInstructionAt(target) != null;
+			if (referenced && decoded) {
+				continue; // idempotent for one-shot re-runs
+			}
+			if (!referenced) {
+				references.addMemoryReference(instruction.getMinAddress(), target,
+					isCall ? RefType.COMPUTED_CALL : RefType.COMPUTED_JUMP, SourceType.ANALYSIS,
+					Reference.MNEMONIC);
+			}
+			if (!decoded) {
 				targets.add(target);
 			}
 			resolved++;
@@ -600,12 +606,42 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		}
 		for (Instruction exit : exits) {
 			monitor.checkCancelled();
+			Address after = exit.getMaxAddress().next();
 			exit.setFlowOverride(FlowOverride.RETURN);
 			Function owner =
 				program.getFunctionManager().getFunctionContaining(exit.getMinAddress());
 			if (owner != null) {
 				CreateFunctionCmd.fixupFunctionBody(program,
 					listing.getInstructionAt(owner.getEntryPoint()), monitor);
+			}
+			if (after != null) {
+				dropFallThroughMarks(program, after);
+			}
+		}
+	}
+
+	/**
+	 * Drop the disassembler's ERROR marks at {@code after}, the address an exit used to fall
+	 * into, once nothing flows there any more. Where the bytes after the exit are already
+	 * data when disassembly reaches them — the smoke sample's abort vector, typed as a
+	 * pointer as soon as the indirect {@code JMPF CS:[vector]} above reads it (GP-7349) — the
+	 * fall-through left "Failed to disassemble … due to conflicting data" there, which the
+	 * exit, now terminal, no longer explains.
+	 */
+	private static void dropFallThroughMarks(Program program, Address after) {
+		for (Reference reference : program.getReferenceManager().getReferencesTo(after)) {
+			if (reference.getReferenceType().isFlow()) {
+				return;
+			}
+		}
+		Instruction above = program.getListing().getInstructionContaining(after.previous());
+		if (above != null && after.equals(above.getFallThrough())) {
+			return;
+		}
+		BookmarkManager bookmarks = program.getBookmarkManager();
+		for (Bookmark bookmark : bookmarks.getBookmarks(after, BookmarkType.ERROR)) {
+			if (Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory())) {
+				bookmarks.removeBookmark(bookmark);
 			}
 		}
 	}
@@ -778,11 +814,10 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		return scalar != null && scalar.getUnsignedValue() == value;
 	}
 
-	/** True if Ghidra already recorded a computed flow out of this instruction. */
-	private static boolean hasComputedReference(ReferenceManager references,
-			Instruction instruction) {
-		for (Reference reference : references.getReferencesFrom(instruction.getMinAddress())) {
-			if (reference.getReferenceType().isComputed()) {
+	/** True if a flow out of this instruction already goes to {@code target}. */
+	private static boolean hasReferenceTo(Instruction instruction, Address target) {
+		for (Reference reference : instruction.getReferencesFrom()) {
+			if (reference.getReferenceType().isFlow() && reference.getToAddress().equals(target)) {
 				return true;
 			}
 		}
