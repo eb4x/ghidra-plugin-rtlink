@@ -64,11 +64,52 @@ public class RTLinkViceroyScript extends GhidraScript {
 		println("viceroy: __astart at " + astart.getEntryPoint() + ", " + vmSeeds +
 			" VM runtime function seeds");
 
-		if (!checkRuntimeCoverage()) {
+		String[] args = getScriptArgs();
+		boolean library = args.length > 0 && !args[0].equals("none");
+		if (!checkRuntimeCoverage(library)) {
+			return;
+		}
+		if (library && !checkVendorNames()) {
 			return;
 		}
 		println("VICEROY OK");
 	}
+
+	/**
+	 * With the vendor library: entries its publics name, checked at a sample of each kind.
+	 * $$VMGETPAGE (1ebd) is not among them: VICEROY inserts an AND AX,3FFF as its second
+	 * instruction, so no reference variant's opening matches it.
+	 */
+	private static final String[][] VENDOR_NAMES = {
+		{ "210d:0e52", "$$VM_CALL" }, { "210d:1216", "$$VM_JMP" }, { "210d:1554", "$$VM_RET" },
+		{ "210d:1bc0", "$$VMRELEASE" }, { "210d:1cce", "_vm_longjmp" },
+		{ "210d:1df7", "_rtvm_this_section_hold" }, { "275d:0645", "$$RTLSETERROR" },
+		{ "275d:07d5", "$$RTL_PRELOAD" }, { "275d:0834", "$$RTLOVL_ALLOC_SAVE_FILE" },
+		{ "275d:0838", "$$RTLOVL_DELETE_SAVE_FILE" }, { "275d:0909", "$$RTLPATHSEARCH" },
+	};
+
+	private boolean checkVendorNames() {
+		var missing = new java.util.ArrayList<String>();
+		for (String[] entry : VENDOR_NAMES) {
+			boolean named = false;
+			for (var symbol : currentProgram.getSymbolTable().getSymbols(toAddr(entry[0]))) {
+				named |= symbol.getName().equals(entry[1]);
+			}
+			if (!named) {
+				missing.add(entry[0] + " " + entry[1]);
+			}
+		}
+		println("viceroy: vendor names " + (VENDOR_NAMES.length - missing.size()) + "/" +
+			VENDOR_NAMES.length + "; missing " + missing);
+		if (!missing.isEmpty()) {
+			println("UNEXPECTED: vendor library publics not placed where VICEROY has them");
+			return false;
+		}
+		return true;
+	}
+
+	/** What only the vendor library proves: three public entries nothing references. */
+	private static final String[] PROVEN_BY_THE_LIBRARY = { "210d:1cce", "275d:0834", "275d:0838" };
 
 	/**
 	 * Every routine of the RTLink runtime (the VM nucleus at 210d, RTLUTILS at 275d) that
@@ -143,7 +184,7 @@ public class RTLinkViceroyScript extends GhidraScript {
 	private static final String[] TAIL_CALLED_BLOCKS =
 		{ "210d:0668", "210d:06c9", "210d:1268", "210d:12ad", "210d:1407" };
 
-	private boolean checkRuntimeCoverage() {
+	private boolean checkRuntimeCoverage(boolean library) {
 		var functions = currentProgram.getFunctionManager();
 		var expected = new java.util.TreeSet<ghidra.program.model.address.Address>();
 		for (String entry : RUNTIME_ENTRIES) {
@@ -151,6 +192,11 @@ public class RTLinkViceroyScript extends GhidraScript {
 		}
 		for (String entry : NOT_IN_THESE_BYTES) {
 			expected.remove(toAddr(entry));
+		}
+		if (library) {
+			for (String entry : PROVEN_BY_THE_LIBRARY) {
+				expected.add(toAddr(entry));
+			}
 		}
 		for (String entry : BEYOND_THE_CARVING) {
 			expected.add(toAddr(entry));

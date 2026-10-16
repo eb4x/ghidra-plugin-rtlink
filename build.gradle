@@ -42,12 +42,18 @@ tasks.named('verify') { dependsOn 'smokeTest' }
 
 // Local only, never in verify: VICEROY.EXE is not redistributable. The default is the GOG
 // edition, the build the curated /COLONIZE/VICEROY.EXE was imported from; the DOSBox copy
-// under ~/dosbox/MPS is a different build, with every overlay 0x2000 lower.
+// under ~/dosbox/MPS is a different build, with every overlay 0x2000 lower. The vendor
+// library (-PrtlinkLibrary, default the RTLink/Plus distribution under ~/dosbox/RTLINK) is
+// used when it exists; -PrtlinkLibrary=none runs without it.
+def rtlinkLibrary = findProperty('rtlinkLibrary') ?:
+	"${System.getProperty('user.home')}/dosbox/RTLINK/RTLUTILS.LIB"
+def rtlinkLibraryArg = rtlinkLibrary != 'none' && file(rtlinkLibrary).isFile() ? rtlinkLibrary : 'none'
 ghidraHeadless('viceroyTest') {
-	description = 'Headless-import VICEROY.EXE and assert overlays, stubs and VM seeds (local only)'
+	description = 'Headless-import VICEROY.EXE and assert overlays, stubs, VM seeds and the runtime (local only)'
 	importFile = findProperty('rtlinkViceroy') ?:
 		"${System.getProperty('user.home')}/GOG Games/Sid Meiers Colonization/data/MPS/COLONIZE/VICEROY.EXE"
 	importSwitch = 'rtlinkViceroy'
-	postScript 'RTLinkViceroyScript.java'
+	preScript 'RTLinkLibraryOptionScript.java', rtlinkLibraryArg
+	postScript 'RTLinkViceroyScript.java', rtlinkLibraryArg
 	requiredLine = 'VICEROY OK'
 }

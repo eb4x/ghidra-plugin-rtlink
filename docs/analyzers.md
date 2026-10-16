@@ -1,8 +1,8 @@
 # The analyzers
 
-Six analyzers, each pinned to a different slot in the auto-analysis pipeline. An
+Seven analyzers, each pinned to a different slot in the auto-analysis pipeline. An
 analyzer registers exactly one `AnalyzerType` + `AnalysisPriority`, which is why this is
-six classes and not one. They share package-private statics and must stay in
+seven classes and not one. They share package-private statics and must stay in
 `ebbex.rtlink`. Listed in pipeline order.
 
 - **`RTLinkOverlayAnalyzer`** — BYTE, `FORMAT_ANALYSIS.after()`. Detects overlay data
@@ -58,6 +58,14 @@ six classes and not one. They share package-private statics and must stay in
   unreferenced. The test is always on the bytes in memory, never on the instruction
   (`00 00` is a real instruction). Unresolved dispatch stubs and NOP sleds are left
   strictly alone.
+- **`RTLinkLibrarySignatureAnalyzer`** — BYTE, `LOW_PRIORITY.after().after()` (after the
+  buried-code pass). Off until its `Vendor library` option names the user's own
+  `RTLUTILS.LIB`; then matches each module's public symbols against the resident code
+  (whole segments, else each entry's opening with fixups and relative branch distances
+  masked, kept unique, in vendor order and in one block), makes functions of the code
+  entries nothing reaches and names every placed entry. Runs last because whether a public
+  is code or a variable is read from the program's analysed state. See
+  `docs/vendor-signatures.md`.
 
 Also in the package: **`EmulatedFloatAnalyzer` / `EmulatedFloatPatcher`** — rewrites
 DOS emulated floating point (INT 34h–3Dh) into the x87 it encodes.
