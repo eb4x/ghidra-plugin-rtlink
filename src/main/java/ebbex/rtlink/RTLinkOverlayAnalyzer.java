@@ -1,9 +1,7 @@
 package ebbex.rtlink;
 
 import java.io.IOException;
-import java.math.BigInteger;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,10 +24,8 @@ import ghidra.program.database.function.OverlappingFunctionException;
 import ghidra.program.database.mem.FileBytes;
 import ghidra.program.model.address.*;
 import ghidra.program.model.data.DataUtilities;
-import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.*;
-import ghidra.program.model.reloc.Relocation.Status;
 import ghidra.program.model.symbol.*;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
@@ -78,7 +74,8 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		"Detects and loads RTLink/Plus overlay pages from DOS MZ executables. " +
 			"Creates overlay memory blocks, applies segment relocations, and " +
 			"creates cross-references from dispatch stubs to overlay functions.";
-	private static final int INITIAL_SEGMENT_VAL = 0x1000;
+	/** The segment {@code MzLoader} loads the image at. */
+	static final int INITIAL_SEGMENT_VAL = 0x1000;
 
 	private static final byte OPCODE_CALLF = X86.OPCODE_CALLF;
 	private static final byte OPCODE_JMPF = X86.OPCODE_JMPF;
@@ -158,7 +155,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 						log, monitor);
 				}
 			}
-			assignCodeSegments(program, log);
+			ModuleSegments.assign(program, log);
 			maybeAssumeDataSegment(program, log);
 			return true;
 		}
@@ -210,13 +207,13 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				createOverlayBlocks(program, fileBytes, allPages, log, monitor);
 			// Before the stub scan disassembles anything; again inside it, once the stubs
 			// have named the modules the relocation table cannot.
-			assignCodeSegments(program, log);
+			ModuleSegments.assign(program, log);
 
 			if (applyRelocations && !overlayBlocks.isEmpty()) {
 				monitor.setMessage("RTLink: Applying overlay relocations...");
 				for (OverlayBlockInfo info : overlayBlocks) {
 					monitor.checkCancelled();
-					applyOverlayRelocations(program, info.block(), info.page(), log);
+					OverlayRelocations.apply(program, info.block(), info.page(), log);
 				}
 			}
 
@@ -271,9 +268,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	}
 
 	// ---- Private implementation ----
-
-	private record OverlayBlockInfo(RTLinkOverlayPage page, MemoryBlock block) {
-	}
 
 	/** A resolved dispatch stub awaiting thunk creation once its target is a real function. */
 	private record StubTarget(Address stubAddr, Address targetAddr, int stubSize) {
@@ -453,10 +447,10 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			// comment; CS-relative absolute offsets in module code (e.g. switch jump
 			// tables) are relative to these paragraphs, not to the page start. The
 			// stub scan later contributes the modules the relocation table cannot
-			// name (see mergeStubModuleBases).
+			// name (see ModuleSegments.mergeStubBases).
 			MemoryBlock block = MemoryBlockUtils.createInitializedBlock(program, true,
 				blockName, overlayBase, fileBytes, codeFileOffset, codeSize,
-				blockComment(page, page.getModuleBases()), "RTLink", true, false, true, log);
+				ModuleSegments.blockComment(page, page.getModuleBases()), "RTLink", true, false, true, log);
 
 			if (block != null) {
 				result.add(new OverlayBlockInfo(page, block));
@@ -506,257 +500,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		return segment;
 	}
 
-	/**
-	 * Set CS over every module of every overlay block to the segment the module runs in:
-	 * the block's base paragraph plus the module's base paragraph.
-	 * <p>
-	 * In real mode {@code currentCS} reads the CS register from context (upstream PR
-	 * #9703). MzLoader sets it over each resident block but knows nothing of overlays, so
-	 * without this an overlay falls back to the default CS of its 64KB page: VICEROY's
-	 * {@code OVL24_0EC4} read its {@code JMP CS:[BX+0x156]} table through 0x3000 instead
-	 * of the module's 0x3ae7. Runs on every pass, like the DS assumption, so a One Shot
-	 * gives an already-analyzed program the context too.
-	 * <p>
-	 * The same value goes into the {@code cseg} context field where the language has
-	 * one (the dailydriver fork, not stock Ghidra): near rel16 branches then wrap inside
-	 * the module's 64KB segment instead of adding linearly. It is the Ghidra-side
-	 * segment, not the runtime swap-area frame; the two differ by a constant, so the
-	 * wrap boundary is the same. It only affects instructions decoded after it is set,
-	 * and cannot be set over decoded code at all (see {@link #setCodeSegmentField}).
-	 */
-	private static void assignCodeSegments(Program program, MessageLog log) {
-		Register cs = program.getLanguage().getRegister("CS");
-		if (cs == null) {
-			return;
-		}
-		Register cseg = program.getLanguage().getRegister("cseg");
-		ProgramContext context = program.getProgramContext();
-		int modules = 0;
-		int pages = 0;
-		try {
-			for (MemoryBlock block : program.getMemory().getBlocks()) {
-				List<Integer> bases = RTLinkProgram.moduleBases(program, block);
-				if (bases == null) {
-					continue;
-				}
-				modules += assignCodeSegments(context, cs, cseg, block, bases);
-				pages++;
-			}
-		}
-		catch (ContextChangeException e) {
-			log.appendMsg("RTLink: failed to set CS over the overlays: " + e.getMessage());
-			return;
-		}
-		if (pages > 0) {
-			Msg.info(RTLinkOverlayAnalyzer.class, String.format(
-				"RTLink/Plus: Set CS over %d overlay module(s) in %d page(s)", modules, pages));
-		}
-	}
-
-	static int assignCodeSegments(ProgramContext context, Register cs, Register cseg,
-			MemoryBlock block, List<Integer> recordedBases) throws ContextChangeException {
-		SortedSet<Integer> bases = new TreeSet<>(recordedBases);
-		bases.add(0); // the page's own start, which an early record may omit
-		Address start = block.getStart();
-		long frame = start.getOffset() >> 4;
-		int modules = 0;
-		for (int base : bases) {
-			Address from = start.add(base * 16L);
-			if (!block.contains(from)) {
-				break;
-			}
-			SortedSet<Integer> later = bases.tailSet(base + 1);
-			Address to = later.isEmpty() ? block.getEnd()
-					: min(block.getEnd(), start.add(later.first() * 16L - 1));
-			BigInteger segment = BigInteger.valueOf((frame + base) & 0xffffL);
-			context.setValue(cs, from, to, segment);
-			if (cseg != null) {
-				setCodeSegmentField(context, cseg, from, to, segment);
-			}
-			modules++;
-		}
-		return modules;
-	}
-
-	/**
-	 * Ghidra refuses a context-register write over a range that already holds instructions,
-	 * and {@code cseg} is a context field (CS is not). Such a range — a module first named
-	 * by the stub scan after its code was decoded, or a One Shot on an analyzed program —
-	 * keeps the {@code cseg} it has. Within one page that is harmless: a page is under 64KB,
-	 * so the lower module's segment gives the same near targets.
-	 */
-	private static void setCodeSegmentField(ProgramContext context, Register cseg,
-			Address from, Address to, BigInteger segment) {
-		try {
-			context.setValue(cseg, from, to, segment);
-		}
-		catch (ContextChangeException e) {
-			Msg.debug(RTLinkOverlayAnalyzer.class,
-				"RTLink: cseg left as is over " + from + "-" + to + ": code already decoded");
-		}
-	}
-
-	private static Address min(Address a, Address b) {
-		return a.compareTo(b) <= 0 ? a : b;
-	}
-
-	/** The module bases recorded for {@code block}, plus those {@code page}'s relocations name. */
-	private static SortedSet<Integer> recordedModuleBases(Program program, MemoryBlock block,
-			RTLinkOverlayPage page) {
-		SortedSet<Integer> bases = new TreeSet<>(page.getModuleBases());
-		List<Integer> recorded = RTLinkProgram.moduleBases(program, block);
-		if (recorded != null) {
-			bases.addAll(recorded);
-		}
-		return bases;
-	}
-
-	/** The overlay block's comment, naming {@code bases} as its module base paragraphs. */
-	private static String blockComment(RTLinkOverlayPage page, Collection<Integer> bases) {
-		StringBuilder comment = new StringBuilder(
-			String.format("RTLink/Plus overlay page %d (frame=0x%X)",
-				page.getPageIndex(), page.getFrameSize()));
-		if (bases.size() > 1) {
-			comment.append(", module base paragraphs:");
-			for (int base : bases) {
-				comment.append(String.format(" 0x%X", base));
-			}
-		}
-		return comment.toString();
-	}
-
-	/**
-	 * Fold the module bases observed in the dispatch stubs into each page's recorded set.
-	 * <p>
-	 * A page's relocation table only names a module that some relocation is <i>sited</i>
-	 * in, so a module carrying no segment fixups of its own is invisible there — yet the
-	 * 14-byte stubs that call into it still spell out its base paragraph. In VICEROY.EXE
-	 * this is the sole module of OVERLAY_03 (0x642) and the sixth of OVERLAY_29 (0x67);
-	 * both are confirmed by the segment list, whose per-page flag word marks OVERLAY_03
-	 * as multi-module even though its 652 relocations are all module 0.
-	 * <p>
-	 * Without this the two sets disagree and {@link RTLinkSwitchTableAnalyzer} — which
-	 * anchors a CS-relative displacement to the module containing the dispatch — cannot
-	 * place a switch table in such a module, so it (correctly, but needlessly) rejects it.
-	 */
-	private void mergeStubModuleBases(Program program, List<OverlayBlockInfo> overlayBlocks,
-			Map<String, SortedSet<Integer>> stubModuleBases) {
-		int pagesExtended = 0;
-		int basesAdded = 0;
-
-		for (OverlayBlockInfo info : overlayBlocks) {
-			String blockName = info.block().getName();
-			SortedSet<Integer> fromStubs = stubModuleBases.get(blockName);
-			if (fromStubs == null) {
-				continue;
-			}
-
-			// Against what is recorded, not the relocation table alone, so a re-run does
-			// not count the stub-only bases an earlier run already added.
-			SortedSet<Integer> merged = recordedModuleBases(program, info.block(), info.page());
-			int before = merged.size();
-			merged.addAll(fromStubs);
-			if (merged.size() == before) {
-				continue;
-			}
-
-			RTLinkProgram.recordModuleBases(program, blockName, merged);
-			info.block().setComment(blockComment(info.page(), merged));
-			pagesExtended++;
-			basesAdded += merged.size() - before;
-		}
-
-		if (pagesExtended > 0) {
-			// Msg.info only, never log.appendMsg: any content in the analysis MessageLog
-			// makes AutoAnalysisPlugin pop a "warnings/errors issued during analysis"
-			// dialog, and this is a clean-run success count.
-			Msg.info(this, String.format(
-				"RTLink/Plus: Added %d stub-only module base(s) across %d overlay page(s)",
-				basesAdded, pagesExtended));
-		}
-	}
-
-	static void applyOverlayRelocations(Program program, MemoryBlock block,
-			RTLinkOverlayPage page, MessageLog log) {
-		Memory memory = program.getMemory();
-		Address blockStart = block.getStart();
-		int pageDisplay = page.getPageIndex();
-
-		// The runtime fixup loop (210d:2e59 in VICEROY.EXE) addresses each patch
-		// site as (frame + seg_index):offset — page-linear seg_index*16 + offset —
-		// and adds a delta to the unrelocated segment word found there, regardless of
-		// seg_index. The two lists differ only in what that word points at, and hence
-		// in which delta it takes.
-		//
-		// List 1: the word is a segment in the RESIDENT IMAGE. It takes the image load
-		// delta, once. MzLoader bases the image at INITIAL_SEGMENT_VAL without setting
-		// the program image base, so getImageBase() would yield 0 here.
-		//
-		// List 2: the word is a PAGE-RELATIVE segment — a paragraph offset within the
-		// page (0 = the page's own base, or one of its module bases). Every site seen
-		// is the segment word of a statically encoded intra-page far call between two
-		// modules of the same page (CALLF module:offset). Verified two ways: 211 of 211
-		// list-2 sites across NEBULAR, ROE2MAIN and SPHERE hold a value below their
-		// page's paragraph count (list-1 sites essentially never do), and the runtime
-		// list-2 fixup call (VICEROY 210d:233f; byte-identical in NEBULAR and SPHERE)
-		// reads the count from header +0xA, rounds the start index up to a 4-entry
-		// group exactly as RTLinkPageHeader models, and adds currentFrame -
-		// previousFrame on every page move — the invariant is word = file word +
-		// current frame. Statically the page's "frame" is the overlay block's own base
-		// segment, so that is the delta to add here; the patched word then lands the
-		// call inside its own overlay block, which is also where the disassembler
-		// binds it.
-		//
-		// The two deltas coincided at 0x1000 before the overlays were rebased above
-		// the image; they are different quantities and differ in every program now, so
-		// derive each one. The block's start cannot be cast to SegmentedAddress (an
-		// overlay of a segmented space hands back a GenericAddress), so take its
-		// paragraph from the offset.
-		int loadDelta = INITIAL_SEGMENT_VAL;
-		int frameDelta = (int) (blockStart.getOffset() >>> 4) & 0xffff;
-
-		applyRelocationList(program, memory, blockStart, page.getRelocations(), loadDelta,
-			pageDisplay, log);
-		applyRelocationList(program, memory, blockStart, page.getSecondRelocations(),
-			frameDelta, pageDisplay, log);
-
-		// List 3 is not applied, and that is final rather than provisional: beyond being
-		// empty on every page of every binary seen, the RTLink/Plus 6.10 linker has been
-		// shown by construction to be incapable of emitting one (its resident-site patch
-		// path announces itself and then writes nothing — see RTLinkPageHeader's class
-		// comment and ~/dosbox/RTLTEST/HANDOFF.md). A nonzero count would mean a
-		// different linker version, and its sites would live in the resident image, not
-		// this block, with yet another base segment.
-	}
-
-	/**
-	 * Add {@code delta} to the unrelocated segment word at each of {@code relocations}'
-	 * sites, and record the fixups in the relocation table.
-	 */
-	private static void applyRelocationList(Program program, Memory memory, Address blockStart,
-			List<RTLinkRelocation> relocations, int delta, int pageDisplay, MessageLog log) {
-		for (RTLinkRelocation reloc : relocations) {
-			int siteOffset = reloc.getSiteOffset();
-
-			try {
-				Address relocAddr = blockStart.add(siteOffset);
-				short currentValue = memory.getShort(relocAddr);
-				int segmentValue = (Short.toUnsignedInt(currentValue) + delta) & 0xffff;
-
-				memory.setShort(relocAddr, (short) segmentValue);
-
-				program.getRelocationTable().add(relocAddr, Status.APPLIED, 0,
-					new long[] { reloc.getOffset(), reloc.getSegmentIndex(), segmentValue },
-					2, null);
-			}
-			catch (MemoryAccessException | AddressOutOfBoundsException e) {
-				log.appendMsg(String.format(
-					"RTLink: Failed to apply relocation at offset 0x%04X in page %d: %s",
-					siteOffset, pageDisplay, e.getMessage()));
-			}
-		}
-	}
-
 	/** Resolve the dispatch stubs and trampolines; true if it seeded the VM runtime entries. */
 	private boolean discoverAndProcessStubs(Program program,
 			List<OverlayBlockInfo> overlayBlocks, MessageLog log, TaskMonitor monitor)
@@ -778,9 +521,9 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		// The stubs are the only place a module carrying no relocations is named, so
 		// fold what they revealed into each page's module base set before the switch
 		// table analyzer reads it back.
-		mergeStubModuleBases(program, overlayBlocks, stubModuleBases);
+		ModuleSegments.mergeStubBases(program, overlayBlocks, stubModuleBases);
 		// Before anything below decodes overlay code: cseg cannot be set over it afterwards.
-		assignCodeSegments(program, log);
+		ModuleSegments.assign(program, log);
 
 		// Resident-target trampolines share the jump table with the CALLF+JMPF
 		// dispatch stubs, so only look for them once segment-0 stubs have
@@ -984,7 +727,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	 * relocation seg_index values ({@link RTLinkOverlayPage#getModuleBases()}) — a
 	 * module referenced only by stubs never appears there. Every module_word observed
 	 * here is collected into {@code stubModuleBases}, keyed by overlay block name, so
-	 * {@link #mergeStubModuleBases} can complete each page's set with exactly those
+	 * {@link ModuleSegments#mergeStubBases} can complete each page's set with exactly those
 	 * modules the relocation table cannot name.
 	 */
 	private int scanForJmpfStubs(Program program, List<OverlayBlockInfo> overlayBlocks,
@@ -1684,7 +1427,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				// existed, so overlay switch-table recovery works there on re-analysis.
 				// discoverAndProcessStubs() then merges in the stub-only modules.
 				RTLinkProgram.recordModuleBases(program, block.getName(),
-					recordedModuleBases(program, block, page));
+					ModuleSegments.recordedBases(program, block, page));
 			}
 
 			return discoverAndProcessStubs(program, overlayBlocks, log, monitor);

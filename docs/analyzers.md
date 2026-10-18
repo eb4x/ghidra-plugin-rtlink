@@ -12,7 +12,8 @@ seven classes and not one. They share package-private statics and must stay in
   only for resident blocks), sets the dailydriver fork's `cseg` context field to the same
   value where the language has it (near rel16 branches then wrap inside the module's
   64KB segment), and assumes DS=DGROUP. Runs on raw bytes, before disassembly. Passes
-  that stand on their own are their own classes: `DataSegmentAssumption` (DS=DGROUP),
+  that stand on their own are their own classes: `OverlayRelocations` (the page's segment
+  fixups), `ModuleSegments` (module bases and the CS over each), `DataSegmentAssumption` (DS=DGROUP),
   `VmRuntimeSeeds` (the entry stub's and the VM dispatch's targets), `HuskRepair` (functions
   with no code at their entry); `CodeSeeds` holds what the seeding passes share.
 - **`RTLinkSwitchTableAnalyzer`** — INSTRUCTION, `CODE_ANALYSIS.before()`. Recovers the

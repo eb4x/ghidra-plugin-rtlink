@@ -88,7 +88,7 @@ public class RTLinkOverlayPage {
 	 * group exactly as {@link RTLinkPageHeader#getSecondRelocOffset()} models, and adds
 	 * {@code currentFrame - previousFrame} on every page move) maintains the invariant
 	 * <i>word = file word + current frame</i> — so
-	 * {@code RTLinkOverlayAnalyzer.applyOverlayRelocations} applies them statically with
+	 * {@code OverlayRelocations.apply} applies them statically with
 	 * the overlay block's base segment as the frame. They are excluded from
 	 * {@link #getModuleBases()} only because nothing has needed their seg_index anchors
 	 * yet; the runtime addresses their sites (frame + seg_index):offset identically to

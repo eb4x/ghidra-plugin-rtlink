@@ -21,7 +21,7 @@ import ghidra.program.model.reloc.Relocation;
 import ghidra.program.model.reloc.Relocation.Status;
 
 /**
- * Regression test for {@link RTLinkOverlayAnalyzer#applyOverlayRelocations}: a page's two
+ * Regression test for {@link OverlayRelocations#apply}: a page's two
  * relocation lists take <b>two different deltas</b>.
  * <ul>
  * <li>List 1: the site holds a segment in the resident image, so it takes the MZ image
@@ -123,8 +123,7 @@ public class RTLinkOverlayRelocationTest extends AbstractGenericTest {
 			Program program = builder.getProgram();
 
 			MessageLog log = new MessageLog();
-			builder.withTransaction(() -> RTLinkOverlayAnalyzer.applyOverlayRelocations(program,
-				block, page, log));
+			builder.withTransaction(() -> OverlayRelocations.apply(program, block, page, log));
 			assertFalse(log.toString(), log.hasMessages());
 
 			Memory memory = program.getMemory();

@@ -19,7 +19,7 @@ import ghidra.program.model.listing.ProgramContext;
 import ghidra.program.model.mem.MemoryBlock;
 
 /**
- * {@link RTLinkOverlayAnalyzer#assignCodeSegments}: CS, and {@code cseg} where the
+ * {@link ModuleSegments#assign}: CS, and {@code cseg} where the
  * language has it, over each module of a page is the page's paragraph plus the module's
  * base. {@code cseg} exists only in the dailydriver fork; against stock Ghidra those
  * assertions are skipped.
@@ -120,7 +120,7 @@ public class RTLinkCodeSegmentTest extends AbstractGenericTest {
 		builder.withTransaction(() -> {
 			try {
 				modules[0] =
-					RTLinkOverlayAnalyzer.assignCodeSegments(context, cs, cseg, block, bases);
+					ModuleSegments.assign(context, cs, cseg, block, bases);
 			}
 			catch (Exception e) {
 				throw new RuntimeException(e);

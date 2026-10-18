@@ -27,7 +27,7 @@ import ghidra.util.task.TaskMonitor;
  * An address carrying a loader relocation is a patched <i>operand word</i> (MZ header
  * relocations and the RTLink overlay relocations both record the 2-byte segment word itself;
  * see {@code MzLoader.processRelocations} and
- * {@code RTLinkOverlayAnalyzer.applyOverlayRelocations}), so it can never be the first byte of
+ * {@code OverlayRelocations.apply}), so it can never be the first byte of
  * a real instruction. A CALL whose fall-through lands exactly on such a word therefore never
  * returns there, whatever its callee does. The corpus shape is MSC's startup error exit —
  * {@code MOV AX,0xFF; PUSH AX; PUSH CS; CALL word ptr [__exit_vector]} followed by an inline

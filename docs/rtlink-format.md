@@ -276,7 +276,7 @@ A module's base can be learned from two places, and **neither alone is complete*
   segment fixups of its own is invisible there;
 - the `module_word` of the 14-byte stubs that call into it.
 
-Union them (`mergeStubModuleBases`). The segment list's 0x40 flag agrees with the union, not
+Union them (`ModuleSegments.mergeStubBases`). The segment list's 0x40 flag agrees with the union, not
 with either source alone. VICEROY has 2 stub-only modules; NEBULAR 28 across 15 pages;
 SPHERE 30 across 21.
 
