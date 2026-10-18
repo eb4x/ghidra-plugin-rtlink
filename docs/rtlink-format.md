@@ -597,8 +597,7 @@ detail.
   bookmarks on stubs we resolve are cleared (they are fossils of the disassembler walking a
   `JMPF 0000:xxxx` before we got there).
 - **Everything is re-runnable.** All of them set `setSupportsOneTimeAnalysis()`; the overlay
-  analyzer's `repairStubThunks` path rebuilds its state from existing blocks, and tolerates
-  the legacy `OVERLAY_(record−1)` naming of programs imported before the fix.
+  analyzer's `repairStubThunks` path rebuilds its state from existing blocks.
 - **Report counts with `Msg.info`, never `log.appendMsg`** — any content in the analysis
   `MessageLog` makes `AutoAnalysisPlugin` pop a "warnings/errors issued during analysis"
   dialog, so the `MessageLog` is for genuine failures only.

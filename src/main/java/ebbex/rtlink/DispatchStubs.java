@@ -371,8 +371,8 @@ final class DispatchStubs {
 					// The stored value is a 1-based descriptor index: descriptor N is
 					// overlay record N - 1, so page_id 1 targets record 0 (a real code
 					// page — see RTLinkOverlayAnalyzer's class javadoc). pageNumber is the
-					// record index, shared by the OVLSTUB/OVL label convention and (since
-					// the record-0 fix) the OVERLAY_NN block names.
+					// record index, shared by the OVLSTUB/OVL labels and the OVERLAY_NN
+					// block names.
 					int descriptorIndex = pageId & PAGE_ID_MASK;
 					int pageNumber = descriptorIndex - 1;
 

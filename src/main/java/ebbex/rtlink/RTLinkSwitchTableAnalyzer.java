@@ -55,7 +55,7 @@ import ghidra.util.task.TaskMonitor;
  * <p>
  * <b>What this does.</b> It matches the dispatch idiom, reads the table at the block's true
  * paragraph, and lays down the correct {@code COMPUTED_JUMP} references itself. That both fixes the
- * flow and — because {@link DecompilerSwitchAnalyzer} skips any computed branch that already carries
+ * flow and — because {@code DecompilerSwitchAnalyzer} skips any computed branch that already carries
  * computed references — stops the stock analyzer from ever disassembling the bogus targets. It must
  * therefore run <i>before</i> {@code CODE_ANALYSIS}: once the wrong references and their wrong
  * disassembly exist, nothing rewrites them.

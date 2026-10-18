@@ -50,17 +50,8 @@ final class OverlayNames {
 		return max;
 	}
 
-	/**
-	 * The overlay block holding {@code record}'s code under the current width-padded
-	 * naming, or under the fixed-{@code %02d} naming of programs imported before the
-	 * width fix, or null.
-	 */
+	/** The overlay block holding {@code record}'s code, or null. */
 	static MemoryBlock findOverlayBlock(Memory memory, int record, int width) {
-		MemoryBlock block =
-			memory.getBlock(String.format("OVERLAY_%0" + width + "d", record));
-		if (block == null) {
-			block = memory.getBlock(String.format("OVERLAY_%02d", record));
-		}
-		return block;
+		return memory.getBlock(String.format("OVERLAY_%0" + width + "d", record));
 	}
 }

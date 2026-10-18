@@ -88,11 +88,6 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		"RTLink/Plus VM dispatch: continues at the body of the VM entry patched into the " +
 			"caller's return slot (MOV AX/MOV DX constant pair, near, this segment).";
 
-	/** What versions up to 0.6.0 wrote there; a re-run replaces it. */
-	private static final String LEGACY_DISPATCHER_COMMENT =
-		"RTLink/Plus overlay dispatcher: jump target is selected at runtime (overlay " +
-			"segment); static resolution intentionally suppressed.";
-
 	/** How many instructions back to look for the constant that feeds the jump register. */
 	private static final int FEEDER_WALK_LIMIT = 16;
 
@@ -187,8 +182,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 				new ClearFlowAndRepairCmd(target, false, true, true).applyTo(program, monitor);
 			}
 			int added = resolveBodies(program, jmp, monitor);
-			String plate = jmp.getComment(CommentType.PLATE);
-			if (plate == null || plate.equals(LEGACY_DISPATCHER_COMMENT)) {
+			if (jmp.getComment(CommentType.PLATE) == null) {
 				jmp.setComment(CommentType.PLATE, DISPATCHER_COMMENT);
 			}
 			if (!bogus.isEmpty() || added > 0) {

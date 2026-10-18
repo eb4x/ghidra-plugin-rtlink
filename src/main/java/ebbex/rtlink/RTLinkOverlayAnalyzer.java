@@ -508,32 +508,15 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 			// Rebuild the OverlayBlockInfo list from the existing blocks, mirroring
 			// createOverlayBlocks()'s skip logic so stub page indexing lines up.
-			// Programs imported before the record-0 fix name record i's block
-			// OVERLAY_(i-1) and have no block for record 0 at all. Detect that legacy
-			// scheme by the absence of a block for the last code-bearing record, and
-			// keep pairing each record with the block that holds its code, so One Shot
-			// still repairs old DBs (whose record-0 stubs stay unresolved — resolving
-			// them needs a re-import).
 			Memory memory = program.getMemory();
-			int lastCodeRecord = -1;
-			for (RTLinkOverlayPage page : allPages) {
-				if (page.getCodeSize() > 0) {
-					lastCodeRecord = page.getPageIndex();
-				}
-			}
 			int width = OverlayNames.width(allPages, fileBytes.getSize());
-			boolean legacyNames = lastCodeRecord >= 0 &&
-				OverlayNames.findOverlayBlock(memory, lastCodeRecord, width) == null;
 			List<OverlayBlockInfo> overlayBlocks = new ArrayList<>();
 			for (RTLinkOverlayPage page : allPages) {
 				if (page.getCodeSize() <= 0) {
 					continue;
 				}
-				int nameIndex = page.getPageIndex() - (legacyNames ? 1 : 0);
-				if (nameIndex < 0) {
-					continue; // legacy program: no block exists for record 0
-				}
-				MemoryBlock block = OverlayNames.findOverlayBlock(memory, nameIndex, width);
+				MemoryBlock block =
+					OverlayNames.findOverlayBlock(memory, page.getPageIndex(), width);
 				if (block == null) {
 					// Unexpected layout (blocks renamed/removed); leave the program alone.
 					return false;

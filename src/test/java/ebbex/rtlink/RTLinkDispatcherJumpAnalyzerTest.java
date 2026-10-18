@@ -159,20 +159,18 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	}
 
 	@Test
-	public void testLegacyCommentIsReplaced() throws Exception {
+	public void testExistingPlateCommentIsKept() throws Exception {
 		ProgramBuilder builder = dispatchProgram();
 		try {
 			Program program = builder.getProgram();
+			String own = "$$VM_UNK: dispatch to the selected entry";
 			builder.withTransaction(() -> program.getListing().getInstructionAt(builder.addr(JMP))
-					.setComment(CommentType.PLATE,
-						"RTLink/Plus overlay dispatcher: jump target is selected at runtime " +
-							"(overlay segment); static resolution intentionally suppressed."));
+					.setComment(CommentType.PLATE, own));
 
 			resolve(builder);
 
-			assertEquals(RTLinkDispatcherJumpAnalyzer.DISPATCHER_COMMENT,
-				program.getListing().getInstructionAt(builder.addr(JMP))
-						.getComment(CommentType.PLATE));
+			assertEquals(own, program.getListing().getInstructionAt(builder.addr(JMP))
+					.getComment(CommentType.PLATE));
 		}
 		finally {
 			builder.dispose();
