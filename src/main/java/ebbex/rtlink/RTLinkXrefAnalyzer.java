@@ -104,7 +104,7 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 
 	@Override
 	public boolean canAnalyze(Program program) {
-		return RTLinkOverlayAnalyzer.isSegmentedMzProgram(program);
+		return RTLinkProgram.isSegmentedMz(program);
 	}
 
 	/**
@@ -138,7 +138,7 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 	@Override
 	public void analysisEnded(Program program) {
 		// Called on every analyzer whose canAnalyze passed, enabled or not.
-		if (!RTLinkOverlayAnalyzer.isEnabled(program, NAME)) {
+		if (!RTLinkProgram.isAnalyzerEnabled(program, NAME)) {
 			return;
 		}
 		int removed = removeRuntimeDgroupRefs(program);
@@ -217,12 +217,12 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 	@Override
 	public boolean added(Program program, AddressSetView set, TaskMonitor monitor, MessageLog log)
 			throws CancelledException {
-		boolean doOverlayXrefs = RTLinkOverlayAnalyzer.isOverlayAnalyzed(program);
+		boolean doOverlayXrefs = RTLinkProgram.isOverlayAnalyzed(program);
 
 		ProgramContext context = program.getProgramContext();
 		Register ds = context.getRegister("DS");
 		boolean doDataXrefs =
-			RTLinkOverlayAnalyzer.isDataSegmentAssumed(program) && ds != null;
+			RTLinkProgram.isDataSegmentAssumed(program) && ds != null;
 
 		if (!doOverlayXrefs && !doDataXrefs) {
 			return false;

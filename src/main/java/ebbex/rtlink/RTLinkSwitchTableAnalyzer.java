@@ -33,11 +33,8 @@ import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.SourceType;
-import ghidra.program.model.util.PropertyMapManager;
-import ghidra.program.model.util.VoidPropertyMap;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
-import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.task.TaskMonitor;
 
 /**
@@ -117,9 +114,6 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 	/** The FSM's next state is a nibble ({@code SHR AL,4}), so 16 states bound everything. */
 	private static final int MAX_FSM_STATES = 16;
 
-	/** User property map marking every dispatch this pass resolved (see {@link #markDispatch}). */
-	private static final String DISPATCH_PROPERTY = "RTLink switch dispatch";
-
 	public RTLinkSwitchTableAnalyzer() {
 		super(NAME, DESCRIPTION, AnalyzerType.INSTRUCTION_ANALYZER);
 		// Before CODE_ANALYSIS, which is where DecompilerSwitchAnalyzer runs. It ignores any
@@ -132,13 +126,13 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 
 	@Override
 	public boolean canAnalyze(Program program) {
-		return RTLinkOverlayAnalyzer.isSegmentedMzProgram(program);
+		return RTLinkProgram.isSegmentedMz(program);
 	}
 
 	@Override
 	public boolean added(Program program, AddressSetView set, TaskMonitor monitor, MessageLog log)
 			throws CancelledException {
-		if (!RTLinkOverlayAnalyzer.isOverlayAnalyzed(program)) {
+		if (!RTLinkProgram.isOverlayAnalyzed(program)) {
 			return false; // canAnalyze accepts any segmented MZ; these tables are RTLink's
 		}
 		ReferenceManager refManager = program.getReferenceManager();
@@ -159,7 +153,10 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 					RefType.COMPUTED_JUMP, SourceType.ANALYSIS, Reference.MNEMONIC);
 				targets.addRange(destination, destination);
 			}
-			markDispatch(program, instruction.getMinAddress());
+			// The mark and the references are what RTLinkSwitchOverrideAnalyzer writes its
+			// override from: re-deriving the table later would read a program that has
+			// changed since (more functions, more code) and could disagree with them.
+			RTLinkProgram.markSwitchDispatch(program, instruction.getMinAddress());
 			dispatches.add(instruction);
 		}
 
@@ -188,32 +185,6 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 		Msg.info(this,
 			String.format("RTLink/Plus: Recovered %d switch table(s)", recovered));
 		return true;
-	}
-
-	/**
-	 * Mark {@code dispatch} as a switch this pass resolved. The mark and the dispatch's
-	 * {@code COMPUTED_JUMP} references are the record {@link RTLinkSwitchOverrideAnalyzer}
-	 * writes its override from: re-deriving the table later would read a program that has
-	 * changed since (more functions, more code), and could disagree with the references.
-	 */
-	static void markDispatch(Program program, Address dispatch) {
-		PropertyMapManager properties = program.getUsrPropertyManager();
-		VoidPropertyMap marks = properties.getVoidPropertyMap(DISPATCH_PROPERTY);
-		if (marks == null) {
-			try {
-				marks = properties.createVoidPropertyMap(DISPATCH_PROPERTY);
-			}
-			catch (DuplicateNameException e) {
-				throw new AssertionError(e); // just looked it up
-			}
-		}
-		marks.add(dispatch);
-	}
-
-	/** The dispatches {@link #markDispatch} marked within {@code set}. */
-	static AddressIterator markedDispatches(Program program, AddressSetView set) {
-		VoidPropertyMap marks = program.getUsrPropertyManager().getVoidPropertyMap(DISPATCH_PROPERTY);
-		return marks == null ? AddressIterator.EMPTY_ITERATOR : marks.getPropertyIterator(set);
 	}
 
 	/**
@@ -904,7 +875,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 		if (entries < 0) {
 			return null;
 		}
-		List<Integer> bases = moduleBases(program, block);
+		List<Integer> bases = RTLinkProgram.moduleBases(program, block);
 		if (bases == null) {
 			return null; // no record (block predates it and no re-analysis ran) — leave alone
 		}
@@ -965,28 +936,6 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 			return null;
 		}
 		return new ArrayList<>(destinations);
-	}
-
-	/**
-	 * The module base paragraphs {@link RTLinkOverlayAnalyzer} recorded for {@code block}
-	 * when it created the overlay, sorted ascending, or null if there is no (valid) record.
-	 */
-	static List<Integer> moduleBases(Program program, MemoryBlock block) {
-		String recorded = program.getOptions(Program.PROGRAM_INFO).getString(
-			RTLinkOverlayAnalyzer.MODULE_BASES_PREFIX + block.getName(), null);
-		if (recorded == null || recorded.isEmpty()) {
-			return null;
-		}
-		List<Integer> bases = new ArrayList<>();
-		for (String base : recorded.split(",")) {
-			try {
-				bases.add(Integer.parseInt(base.trim(), 16));
-			}
-			catch (NumberFormatException e) {
-				return null;
-			}
-		}
-		return bases;
 	}
 
 	/**

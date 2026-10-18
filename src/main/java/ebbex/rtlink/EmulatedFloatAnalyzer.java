@@ -84,7 +84,7 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 		// Record the verdict while the evidence still exists: the rewrite consumes the very
 		// bytes the detector counts, so a later canAnalyze() — a One Shot re-run, say —
 		// would otherwise find none and decline.
-		EmulatedFloatPatcher.recordEmulated(program);
+		RTLinkProgram.markFloatEmulated(program);
 
 		// Collect first, patch second: patching clears and re-disassembles code, which
 		// would invalidate a live InstructionIterator. Collect addresses, not instructions:

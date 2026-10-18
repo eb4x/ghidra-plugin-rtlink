@@ -215,8 +215,8 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 			runTablePass(builder);
 
 			Address dispatch = builder.addr(DISPATCH);
-			assertTrue("the dispatch is marked", RTLinkSwitchTableAnalyzer
-					.markedDispatches(program, new AddressSet(dispatch, dispatch))
+			assertTrue("the dispatch is marked", RTLinkProgram
+					.switchDispatches(program, new AddressSet(dispatch, dispatch))
 					.hasNext());
 			assertEquals("the override is written from the references", 1, writeOverrides(builder));
 			assertEquals("and left alone after that", 0, writeOverrides(builder));
@@ -246,8 +246,8 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 			runTablePass(builder);
 
 			Address dispatch = builder.addr(DISPATCH);
-			assertFalse(RTLinkSwitchTableAnalyzer
-					.markedDispatches(program, new AddressSet(dispatch, dispatch))
+			assertFalse(RTLinkProgram
+					.switchDispatches(program, new AddressSet(dispatch, dispatch))
 					.hasNext());
 		}
 		finally {
@@ -257,8 +257,7 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 
 	private static void markOverlayAnalyzed(ProgramBuilder builder) {
 		Program program = builder.getProgram();
-		builder.withTransaction(() -> program.getOptions(Program.PROGRAM_INFO)
-				.setBoolean(RTLinkOverlayAnalyzer.ANALYZED_FLAG, true));
+		builder.withTransaction(() -> RTLinkProgram.markOverlayAnalyzed(program));
 	}
 
 	private static void runTablePass(ProgramBuilder builder) throws Exception {

@@ -120,28 +120,19 @@ class EmulatedFloatPatcher {
 	 */
 	private static final int CLEAR_LOOKAHEAD = 12;
 
-	/**
-	 * PROGRAM_INFO property recording that this program was found to be float-emulated.
-	 * <p>
-	 * Needed because the detector reads the very bytes the patch destroys: once the
-	 * resident blocks have been rewritten, a fresh scan finds no emulator calls and would
-	 * report the program as not emulated — so an overlay block created later would never
-	 * be patched. The flag preserves the answer across that.
-	 */
-	private static final String EMULATED_FLAG = "DOS Emulated Floating Point";
-
 	private EmulatedFloatPatcher() {
 	}
 
 	/**
 	 * True if {@code program} is float-emulated: either it has already been recognized as
-	 * such (see {@link #EMULATED_FLAG}), or its resident code still carries enough emulator
-	 * calls to say so. Overlay blocks are not scanned — the question has to be answerable
-	 * before they exist, and a program whose float code lives entirely in overlays still
-	 * links the emulator's INT handlers into the resident image.
+	 * such ({@link RTLinkProgram#isFloatEmulated} — the rewrite consumes the very bytes this
+	 * counts, so the answer is recorded before it runs), or its resident code still carries
+	 * enough emulator calls to say so. Overlay blocks are not scanned — the question has to be
+	 * answerable before they exist, and a program whose float code lives entirely in overlays
+	 * still links the emulator's INT handlers into the resident image.
 	 */
 	static boolean isEmulated(Program program, TaskMonitor monitor) throws CancelledException {
-		if (program.getOptions(Program.PROGRAM_INFO).getBoolean(EMULATED_FLAG, false)) {
+		if (RTLinkProgram.isFloatEmulated(program)) {
 			return true;
 		}
 
@@ -157,11 +148,6 @@ class EmulatedFloatPatcher {
 			}
 		}
 		return false;
-	}
-
-	/** Record that {@code program} is float-emulated, before its calls are rewritten away. */
-	static void recordEmulated(Program program) {
-		program.getOptions(Program.PROGRAM_INFO).setBoolean(EMULATED_FLAG, true);
 	}
 
 	private static int countEmulatorCalls(Memory memory, MemoryBlock block, TaskMonitor monitor)

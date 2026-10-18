@@ -54,7 +54,7 @@ public class RTLinkLibrarySignatureAnalyzer extends AbstractAnalyzer {
 
 	@Override
 	public boolean canAnalyze(Program program) {
-		return RTLinkOverlayAnalyzer.isSegmentedMzProgram(program);
+		return RTLinkProgram.isSegmentedMz(program);
 	}
 
 	@Override

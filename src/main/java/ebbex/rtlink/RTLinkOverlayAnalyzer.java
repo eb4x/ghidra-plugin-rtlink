@@ -84,22 +84,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		"Detects and loads RTLink/Plus overlay pages from DOS MZ executables. " +
 			"Creates overlay memory blocks, applies segment relocations, and " +
 			"creates cross-references from dispatch stubs to overlay functions.";
-	/**
-	 * PROGRAM_INFO property set when overlay analysis completes; gates
-	 * {@link RTLinkXrefAnalyzer}'s far call/jump pass.
-	 */
-	static final String ANALYZED_FLAG = "RTLink Overlay Analyzed";
-	/** PROGRAM_INFO property set once DS (DGROUP) has been assumed, so re-runs don't redo it. */
-	static final String DS_ASSUMED_FLAG = "RTLink Data Segment Assumed";
-
-	/**
-	 * Program-info key prefix, completed with an overlay block's name, recording the
-	 * page's module base paragraphs as comma-separated hex — the anchor points that
-	 * CS-relative displacements in module code are relative to. Read back by
-	 * {@link RTLinkSwitchTableAnalyzer} to resolve overlay switch tables.
-	 */
-	static final String MODULE_BASES_PREFIX = "RTLink Module Bases ";
-
 	private static final int INITIAL_SEGMENT_VAL = 0x1000;
 
 	static final byte OPCODE_CALLF = (byte) 0x9A;
@@ -171,20 +155,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 	@Override
 	public boolean canAnalyze(Program program) {
-		return isSegmentedMzProgram(program);
-	}
-
-	/**
-	 * Returns true if {@code program} is an MZ executable with a segmented (16-bit
-	 * real mode) default address space — the only programs RTLink overlay analysis
-	 * applies to.
-	 */
-	static boolean isSegmentedMzProgram(Program program) {
-		if (!MzLoader.MZ_NAME.equals(program.getExecutableFormat())) {
-			return false;
-		}
-		return program.getAddressFactory()
-				.getDefaultAddressSpace() instanceof SegmentedAddressSpace;
+		return RTLinkProgram.isSegmentedMz(program);
 	}
 
 	@Override
@@ -198,7 +169,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			lastTxId = tx.getID();
 		}
 
-		if (isOverlayAnalyzed(program)) {
+		if (RTLinkProgram.isOverlayAnalyzed(program)) {
 			// Overlays were processed by a prior run; still retrofit what can be repaired
 			// in place on re-analysis so an already-analyzed program benefits without
 			// re-importing: disassemble and rebuild "husk" functions whose code the old
@@ -291,7 +262,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			monitor.setMessage("RTLink: Determining data segment (DGROUP)...");
 			maybeAssumeDataSegment(program, log);
 
-			program.getOptions(Program.PROGRAM_INFO).setBoolean(ANALYZED_FLAG, true);
+			RTLinkProgram.markOverlayAnalyzed(program);
 			return true;
 		}
 		catch (CancelledException e) {
@@ -429,18 +400,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		return false;
 	}
 
-	/** True if the analyzer named {@code name} is enabled in {@code program}'s analysis options. */
-	static boolean isEnabled(Program program, String name) {
-		return program.getOptions(Program.ANALYSIS_PROPERTIES).getBoolean(name, true);
-	}
-
-	static boolean isOverlayAnalyzed(Program program) {
-		return program.getOptions(Program.PROGRAM_INFO).getBoolean(ANALYZED_FLAG, false);
-	}
-
-	static boolean isDataSegmentAssumed(Program program) {
-		return program.getOptions(Program.PROGRAM_INFO).getBoolean(DS_ASSUMED_FLAG, false);
-	}
 
 	/**
 	 * Establish DS if the option is on.
@@ -504,7 +463,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			log.appendMsg("RTLink: failed to assume DS: " + e.getMessage());
 			return;
 		}
-		program.getOptions(Program.PROGRAM_INFO).setBoolean(DS_ASSUMED_FLAG, true);
+		RTLinkProgram.markDataSegmentAssumed(program);
 		// Msg.info only, never log.appendMsg: any content in the analysis MessageLog makes
 		// AutoAnalysisPlugin.analysisEnded() pop a "There were warnings/errors issued during
 		// analysis" dialog. The MessageLog above is for the paths where DS could not be assumed.
@@ -796,7 +755,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 			if (block != null) {
 				result.add(new OverlayBlockInfo(page, block));
-				recordModuleBases(program, blockName, page.getModuleBases());
+				RTLinkProgram.recordModuleBases(program, blockName, page.getModuleBases());
 			}
 			else {
 				log.appendMsg(
@@ -843,24 +802,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
-	 * Record {@code bases} as the module base paragraphs of {@code blockName} in program
-	 * info (see {@link #MODULE_BASES_PREFIX}) so {@link RTLinkSwitchTableAnalyzer} can
-	 * resolve module-relative switch-table displacements in the overlay block.
-	 */
-	private static void recordModuleBases(Program program, String blockName,
-			Collection<Integer> bases) {
-		StringBuilder text = new StringBuilder();
-		for (int base : bases) {
-			if (text.length() > 0) {
-				text.append(',');
-			}
-			text.append(Integer.toHexString(base));
-		}
-		program.getOptions(Program.PROGRAM_INFO)
-				.setString(MODULE_BASES_PREFIX + blockName, text.toString());
-	}
-
-	/**
 	 * Set CS over every module of every overlay block to the segment the module runs in:
 	 * the block's base paragraph plus the module's base paragraph.
 	 * <p>
@@ -889,7 +830,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		int pages = 0;
 		try {
 			for (MemoryBlock block : program.getMemory().getBlocks()) {
-				List<Integer> bases = RTLinkSwitchTableAnalyzer.moduleBases(program, block);
+				List<Integer> bases = RTLinkProgram.moduleBases(program, block);
 				if (bases == null) {
 					continue;
 				}
@@ -958,7 +899,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	private static SortedSet<Integer> recordedModuleBases(Program program, MemoryBlock block,
 			RTLinkOverlayPage page) {
 		SortedSet<Integer> bases = new TreeSet<>(page.getModuleBases());
-		List<Integer> recorded = RTLinkSwitchTableAnalyzer.moduleBases(program, block);
+		List<Integer> recorded = RTLinkProgram.moduleBases(program, block);
 		if (recorded != null) {
 			bases.addAll(recorded);
 		}
@@ -1014,7 +955,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				continue;
 			}
 
-			recordModuleBases(program, blockName, merged);
+			RTLinkProgram.recordModuleBases(program, blockName, merged);
 			info.block().setComment(blockComment(info.page(), merged));
 			pagesExtended++;
 			basesAdded += merged.size() - before;
@@ -1266,13 +1207,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
-	 * Program-info option recording how many VM-runtime function entries
-	 * {@link #seedVmRuntimeEntryPoints} seeded, so the headless smoke script can assert
-	 * the pass actually fired on a known-good target.
-	 */
-	static final String VM_SEED_COUNT_OPTION = "RTLink VM Runtime Seeds";
-
-	/**
 	 * The VM nucleus's constant-pair dispatch — the shape ending each of {@code $$VM_UNK}'s
 	 * two arms (transcribed from {@code vmnuc.asm} in the vendor's RTLUTILS.LIB, and present
 	 * byte-identically in the VICEROY variant that matches no reference build):
@@ -1363,7 +1297,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			monitor);
 
 		int count = (int) functionSeeds.getNumAddresses();
-		program.getOptions(Program.PROGRAM_INFO).setInt(VM_SEED_COUNT_OPTION, count);
+		RTLinkProgram.recordVmRuntimeSeeds(program, count);
 		Msg.info(RTLinkOverlayAnalyzer.class, String.format(
 			"RTLink/Plus: Seeded %d VM runtime function entr%s and %d dispatch flow target(s)",
 			count, count == 1 ? "y" : "ies", flowSeeds.getNumAddresses()));
@@ -2143,7 +2077,8 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		// AutoAnalysisManager calls this on every analyzer whose canAnalyze passed, enabled
 		// or not, and canAnalyze accepts any segmented MZ: act only where this analyzer is
 		// on and found RTLink overlays.
-		if (!isEnabled(program, NAME) || !isOverlayAnalyzed(program)) {
+		if (!RTLinkProgram.isAnalyzerEnabled(program, NAME) ||
+			!RTLinkProgram.isOverlayAnalyzed(program)) {
 			return;
 		}
 		// Repair husk functions now that every function is finally in place. added() runs at
@@ -2409,7 +2344,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				// Retrofit the module base record onto programs imported before it
 				// existed, so overlay switch-table recovery works there on re-analysis.
 				// discoverAndProcessStubs() then merges in the stub-only modules.
-				recordModuleBases(program, block.getName(),
+				RTLinkProgram.recordModuleBases(program, block.getName(),
 					recordedModuleBases(program, block, page));
 			}
 

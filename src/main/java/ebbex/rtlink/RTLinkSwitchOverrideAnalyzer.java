@@ -62,13 +62,13 @@ public class RTLinkSwitchOverrideAnalyzer extends AbstractAnalyzer {
 
 	@Override
 	public boolean canAnalyze(Program program) {
-		return RTLinkOverlayAnalyzer.isSegmentedMzProgram(program);
+		return RTLinkProgram.isSegmentedMz(program);
 	}
 
 	@Override
 	public boolean added(Program program, AddressSetView set, TaskMonitor monitor, MessageLog log)
 			throws CancelledException {
-		if (!RTLinkOverlayAnalyzer.isOverlayAnalyzed(program)) {
+		if (!RTLinkProgram.isOverlayAnalyzed(program)) {
 			return false; // canAnalyze accepts any segmented MZ; these switches are RTLink's
 		}
 		report(writeOverrides(program, set, log, monitor));
@@ -78,8 +78,8 @@ public class RTLinkSwitchOverrideAnalyzer extends AbstractAnalyzer {
 	@Override
 	public void analysisEnded(Program program) {
 		// Called on every analyzer whose canAnalyze passed, enabled or not.
-		if (!RTLinkOverlayAnalyzer.isEnabled(program, NAME) ||
-			!RTLinkOverlayAnalyzer.isOverlayAnalyzed(program)) {
+		if (!RTLinkProgram.isAnalyzerEnabled(program, NAME) ||
+			!RTLinkProgram.isOverlayAnalyzed(program)) {
 			return;
 		}
 		MessageLog log = new MessageLog();
@@ -102,7 +102,7 @@ public class RTLinkSwitchOverrideAnalyzer extends AbstractAnalyzer {
 	static int writeOverrides(Program program, AddressSetView set, MessageLog log,
 			TaskMonitor monitor) throws CancelledException {
 		int written = 0;
-		AddressIterator dispatches = RTLinkSwitchTableAnalyzer.markedDispatches(program, set);
+		AddressIterator dispatches = RTLinkProgram.switchDispatches(program, set);
 		while (dispatches.hasNext()) {
 			monitor.checkCancelled();
 			Address dispatch = dispatches.next();

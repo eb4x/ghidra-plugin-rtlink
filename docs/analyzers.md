@@ -78,13 +78,16 @@ DOS emulated floating point (INT 34h–3Dh) into the x87 it encodes.
 
 - All analyzers set `setSupportsOneTimeAnalysis()` so they can be re-run from
   Analysis → One Shot on an already-analyzed program.
-- `canAnalyze` accepts any segmented MZ (it is asked before analysis, when nothing is known
-  yet), so every RTLink analyzer's `added()` returns at once unless
-  `RTLinkOverlayAnalyzer` found overlays (`isOverlayAnalyzed`). `EmulatedFloatAnalyzer`
+- Analyzers hand results to one another only through the program, and every such record —
+  the program-info flags, the overlay module bases, the VM seed count, the switch dispatch
+  marks — is read and written through `RTLinkProgram`, along with the two gates below.
+- `canAnalyze` accepts any segmented MZ (`RTLinkProgram.isSegmentedMz`; it is asked before
+  analysis, when nothing is known yet), so every RTLink analyzer's `added()` returns at once
+  unless `RTLinkOverlayAnalyzer` found overlays (`isOverlayAnalyzed`). `EmulatedFloatAnalyzer`
   is the exception: DOS emulated float is not RTLink-specific.
 - `AutoAnalysisManager` calls `analysisEnded` on every analyzer whose `canAnalyze` passed,
   enabled or not, inside the analysis transaction: an `analysisEnded` that writes checks
-  its own enablement (`isEnabled`) and the same RTLink gate.
+  its own enablement (`isAnalyzerEnabled`) and the same RTLink gate.
 - Report success counts with `Msg.info`, never `log.appendMsg` — any content in the
   analysis `MessageLog` makes `AutoAnalysisPlugin` pop a "warnings/errors issued during
   analysis" dialog, so the `MessageLog` is for genuine failures only.

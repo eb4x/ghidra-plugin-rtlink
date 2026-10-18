@@ -51,10 +51,10 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 
 	/**
 	 * An overlay block {@code name} of {@code size} bytes, with {@code hex} at page offset
-	 * {@code at} and {@code bases} recorded as its module base paragraphs.
+	 * {@code at} and {@code bases} recorded as its module base paragraphs (none if empty).
 	 */
 	private static ProgramBuilder overlay(String name, int size, int at, String hex,
-			String bases) throws Exception {
+			List<Integer> bases) throws Exception {
 		ProgramBuilder builder = new ProgramBuilder("SWITCH", ProgramBuilder._X86_16_REAL_MODE);
 		boolean ok = false;
 		try {
@@ -64,8 +64,9 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 			try {
 				block.setExecute(true);
 				program.getMemory().setBytes(block.getStart().add(at), bytes(hex));
-				program.getOptions(Program.PROGRAM_INFO).setString(
-					RTLinkOverlayAnalyzer.MODULE_BASES_PREFIX + name, bases);
+				if (!bases.isEmpty()) {
+					RTLinkProgram.recordModuleBases(program, name, bases);
+				}
 			}
 			finally {
 				program.endTransaction(txId, true);
@@ -177,7 +178,7 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 	public void testAdjacentTableMayRunPastTheNextAnchor() throws Exception {
 		String hex = "2d 46 00 3d 09 00 77 1c d1 e0 93 2e ff a7 76 02 " +
 			"22 00 b4 00 ea 00 62 01 8e 01 c0 01 f2 01 26 02 5e 02 4c 01";
-		ProgramBuilder builder = overlay("OVERLAY_25", 0xa20, 0x316, hex, "0,b,33");
+		ProgramBuilder builder = overlay("OVERLAY_25", 0xa20, 0x316, hex, List.of(0, 0xb, 0x33));
 		try {
 			Program program = builder.getProgram();
 			MemoryBlock block = program.getMemory().getBlock("OVERLAY_25");
@@ -200,7 +201,7 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 		String hex = "2d 14 00 3d 78 00 77 2a b3 0a f6 f3 0a e4 75 22 " +
 			"d1 e0 93 2e ff a7 04 01 32 00 32 00 32 00 32 00 " +
 			"32 00 32 00 32 00 32 00 32 00 32 00 32 00 32 00 32 00 83 7e";
-		ProgramBuilder builder = overlay("OVERLAY_27", 0xcd0, 0xec, hex, "0");
+		ProgramBuilder builder = overlay("OVERLAY_27", 0xcd0, 0xec, hex, List.of(0));
 		try {
 			Program program = builder.getProgram();
 			MemoryBlock block = program.getMemory().getBlock("OVERLAY_27");
@@ -221,7 +222,7 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 	public void testByteOffsetIndexHalved() throws Exception {
 		String hex = "2d da ff a8 03 75 21 d1 e8 3d 12 00 77 1a 93 2e " +
 			"ff a7 0a 03 60 02 f2 01 1e 03 1e 03 1e 03 9c 01 8e 01 1e 03 60 01 56 01";
-		ProgramBuilder builder = overlay("OVERLAY_43", 0xd30, 0xce6, hex, "0,9f");
+		ProgramBuilder builder = overlay("OVERLAY_43", 0xd30, 0xce6, hex, List.of(0, 0x9f));
 		try {
 			Program program = builder.getProgram();
 			MemoryBlock block = program.getMemory().getBlock("OVERLAY_43");
@@ -243,7 +244,7 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 	public void testByteOffsetIndexRequiredEven() throws Exception {
 		String hex = "2d 43 00 a8 01 75 23 3d 16 00 77 1e 93 2e ff a7 " +
 			"60 02 4c 01 d0 01 10 02 78 02 7a 01 5a 01 6a 01 36 01 0a 01 78 02 22 01 2c 01";
-		ProgramBuilder builder = overlay("OVERLAY_38", 0x12d0, 0x124e, hex, "0,100");
+		ProgramBuilder builder = overlay("OVERLAY_38", 0x12d0, 0x124e, hex, List.of(0, 0x100));
 		try {
 			Program program = builder.getProgram();
 			MemoryBlock block = program.getMemory().getBlock("OVERLAY_38");
@@ -261,7 +262,7 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 	public void testOverlayWithoutModuleBasesIsLeftAlone() throws Exception {
 		String hex = "2d 46 00 3d 09 00 77 1c d1 e0 93 2e ff a7 76 02 " +
 			"22 00 b4 00 ea 00 62 01 8e 01 c0 01 f2 01 26 02 5e 02 4c 01";
-		ProgramBuilder builder = overlay("OVERLAY_25", 0xa20, 0x316, hex, "");
+		ProgramBuilder builder = overlay("OVERLAY_25", 0xa20, 0x316, hex, List.of());
 		try {
 			Program program = builder.getProgram();
 			MemoryBlock block = program.getMemory().getBlock("OVERLAY_25");

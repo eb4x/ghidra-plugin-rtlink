@@ -183,13 +183,13 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 
 	@Override
 	public boolean canAnalyze(Program program) {
-		return RTLinkOverlayAnalyzer.isSegmentedMzProgram(program);
+		return RTLinkProgram.isSegmentedMz(program);
 	}
 
 	@Override
 	public boolean added(Program program, AddressSetView set, TaskMonitor monitor,
 			MessageLog log) throws CancelledException {
-		if (!RTLinkOverlayAnalyzer.isOverlayAnalyzed(program)) {
+		if (!RTLinkProgram.isOverlayAnalyzed(program)) {
 			return false; // canAnalyze accepts any segmented MZ; these repairs are RTLink's
 		}
 		TransactionInfo tx = program.getCurrentTransactionInfo();
