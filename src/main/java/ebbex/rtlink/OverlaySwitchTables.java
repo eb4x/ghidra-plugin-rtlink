@@ -22,7 +22,7 @@ final class OverlaySwitchTables {
 	}
 
 	/**
-	 * Overlay variant of {@link CsSwitchTables#recoverResident}. The dispatch's module is the
+	 * Overlay variant of {@link ResidentSwitchTables#recover}. The dispatch's module is the
 	 * one whose recorded base paragraph is nearest at or below it, ending at the next base
 	 * (or the block end); the table displacement and every table entry are offsets from that
 	 * base, mirroring the module's runtime CS.
@@ -52,11 +52,11 @@ final class OverlaySwitchTables {
 	 * 1f95, 2078 and 2000 and left a dozen p-code errors chasing the result.
 	 */
 	static List<Address> recover(Program program, Instruction instruction, MemoryBlock block) {
-		int displacement = CsSwitchTables.displacement(instruction);
+		int displacement = CsDispatch.displacement(instruction);
 		if (displacement < 0) {
 			return null;
 		}
-		int entries = CsSwitchTables.entryCount(instruction, block);
+		int entries = CsDispatch.entryCount(instruction, block);
 		if (entries < 0) {
 			return null;
 		}
@@ -91,7 +91,7 @@ final class OverlaySwitchTables {
 		long tableEnd = tableOffset + 2L * entries;
 		// An adjacent table vouches for its own anchor, so the block is bound enough; a
 		// table anywhere else has only the anchor behind it and must fit the module window.
-		long limit = tableOffset == dispatchOffset + CsSwitchTables.DISPATCH_LENGTH ? blockSize
+		long limit = tableOffset == dispatchOffset + CsDispatch.DISPATCH_LENGTH ? blockSize
 				: moduleEnd;
 		if (tableEnd > limit) {
 			return null;

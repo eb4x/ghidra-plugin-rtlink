@@ -63,9 +63,9 @@ import ghidra.util.task.TaskMonitor;
  * recorded per block by {@link RTLinkOverlayAnalyzer} when the overlay is created; the module
  * containing the dispatch is the one whose base is nearest at or below it.
  * <p>
- * Each form is read by its own class ({@link CsSwitchTables}, {@link OverlaySwitchTables},
- * {@link DataSwitchTables}, {@link FormatterFsm}); this class only chooses between them and
- * lays down what they find.
+ * Each form is read by its own class ({@link ResidentSwitchTables}, {@link OverlaySwitchTables},
+ * {@link DataSwitchTables}, {@link FormatterFsm}; the CS-relative idiom they share is
+ * {@link CsDispatch}); this class only chooses between them and lays down what they find.
  */
 public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 
@@ -164,7 +164,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 		if (dataTable != null) {
 			return dataTable;
 		}
-		int displacement = CsSwitchTables.displacement(instruction);
+		int displacement = CsDispatch.displacement(instruction);
 		if (displacement < 0) {
 			return null;
 		}
@@ -175,7 +175,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 		if (fsmTable != null) {
 			return fsmTable;
 		}
-		return CsSwitchTables.recoverResident(program, instruction, block, displacement);
+		return ResidentSwitchTables.recover(program, instruction, block, displacement);
 	}
 
 	/** True if Ghidra already recorded a computed flow from this branch. */

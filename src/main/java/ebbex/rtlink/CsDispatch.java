@@ -1,100 +1,29 @@
 package ebbex.rtlink;
 
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
-
-import ghidra.program.model.address.Address;
-import ghidra.program.model.address.SegmentedAddress;
-import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.Instruction;
-import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.scalar.Scalar;
 
 /**
- * The CS-relative switch idiom, {@code JMP word ptr CS:[BX + disp16]}: its displacement,
- * the {@code CMP} guard that counts its table, and the table itself in a resident block
- * whose segment is not 64KB-page aligned — the case {@code currentCS} resolves against
- * the wrong paragraph (see {@link RTLinkSwitchTableAnalyzer}).
+ * The CS-relative switch idiom, {@code JMP word ptr CS:[BX + disp16]}: its displacement and
+ * the {@code CMP} guard that counts its table. {@link ResidentSwitchTables} and
+ * {@link OverlaySwitchTables} read the table itself.
  */
-final class CsSwitchTables {
+final class CsDispatch {
 
 	/** {@code JMP word ptr CS:[BX + disp16]} — CS prefix, opcode FF /4, mod=10 r/m=111. */
 	private static final byte[] DISPATCH_OPCODE = { 0x2e, (byte) 0xff, (byte) 0xa7 };
 	static final int DISPATCH_LENGTH = 5;
 
 	/** Instructions to look back over for the {@code CMP} that bounds the switch index. */
-	static final int GUARD_SCAN_LIMIT = 8;
+	private static final int GUARD_SCAN_LIMIT = 8;
 
 	/** Refuse absurd tables rather than trusting a mis-parsed guard. */
 	static final int MAX_TABLE_ENTRIES = 512;
 
-	private CsSwitchTables() {
-	}
-
-	/**
-	 * The table of a resident dispatch at {@code displacement}, read at the block's true
-	 * paragraph, or null. Page-aligned blocks are left alone: {@code currentCS} already
-	 * resolves them correctly.
-	 */
-	static List<Address> recoverResident(Program program, Instruction instruction,
-			MemoryBlock block, int displacement) {
-		if (!isUnalignedSegment(block)) {
-			return null;
-		}
-		int entries = entryCount(instruction, block);
-		if (entries < 0) {
-			return null;
-		}
-
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
-		int segment = ((SegmentedAddress) block.getStart()).getSegment();
-
-		// The table and every entry must live inside the segment they are addressed from; a
-		// 16-bit offset that would wrap means the guard was misread, so give up rather than
-		// invent targets.
-		long lastByte = (long) displacement + 2L * entries - 1;
-		if (lastByte > 0xffffL) {
-			return null;
-		}
-		Address table = space.getAddress(segment, displacement);
-		if (!block.contains(table) || !block.contains(space.getAddress(segment, (int) lastByte))) {
-			return null;
-		}
-
-		Set<Address> destinations = new LinkedHashSet<>();
-		try {
-			for (int i = 0; i < entries; i++) {
-				int offset = program.getMemory().getShort(table.add(2L * i)) & 0xffff;
-				Address destination = space.getAddress(segment, offset);
-				if (!block.contains(destination)) {
-					return null;
-				}
-				destinations.add(destination);
-			}
-		}
-		catch (MemoryAccessException e) {
-			return null;
-		}
-		return new ArrayList<>(destinations);
-	}
-
-	/**
-	 * True if {@code block} is based at a paragraph that is not a 64KB-page boundary —
-	 * exactly the case {@code currentCS} gets wrong. Page-aligned blocks already resolve
-	 * correctly and must not be touched.
-	 */
-	private static boolean isUnalignedSegment(MemoryBlock block) {
-		if (!(block.getStart() instanceof SegmentedAddress start)) {
-			return false;
-		}
-		int pageSegment = (int) ((start.getOffset() >> 4) & 0xf000L);
-		return start.getSegment() != pageSegment;
+	private CsDispatch() {
 	}
 
 	/** The {@code disp16} of a {@code JMP word ptr CS:[BX + disp16]}, or -1 if not one. */
@@ -229,8 +158,9 @@ final class CsSwitchTables {
 	 * The dispatch opcode ({@link #DISPATCH_OPCODE}) is always a {@code word ptr} read, so a
 	 * valid table indexed by a bare register is necessarily byte-offset (a case index would
 	 * have to be doubled first, which the caller already checked for). An unusual doubling
-	 * this misses would under-count, and {@link OverlaySwitchTables} validates every
-	 * resolved entry, so a wrong count can only fail to recover, never plant flow.
+	 * this misses would under-count, and both readers ({@link ResidentSwitchTables},
+	 * {@link OverlaySwitchTables}) validate every resolved entry, so a wrong count can only
+	 * fail to recover, never plant flow.
 	 */
 	private static int countFromByteOffsetIndex(Instruction before, Register index,
 			MemoryBlock block) {

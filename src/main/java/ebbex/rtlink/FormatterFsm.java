@@ -33,6 +33,9 @@ final class FormatterFsm {
 	/** The FSM's next state is a nibble ({@code SHR AL,4}), so 16 states bound everything. */
 	private static final int MAX_FSM_STATES = 16;
 
+	/** A single reachable state is no switch. */
+	private static final int MIN_FSM_STATES = 2;
+
 	private FormatterFsm() {
 	}
 
@@ -61,7 +64,7 @@ final class FormatterFsm {
 	 *   SHL BX,1
 	 *   JMP word ptr CS:[BX + disp16]      ; VICEROY 1d1d:19c0
 	 * </pre>
-	 * No instruction bounds the final index, so {@link CsSwitchTables#entryCount} cannot
+	 * No instruction bounds the final index, so {@link CsDispatch#entryCount} cannot
 	 * count this and the decompiler, left to itself, fabricates cases for the full byte range
 	 * of the {@code XLAT} load (its range analysis honors only {@code INT_AND} masks, not the
 	 * {@code SHR}). But the bound is in the FSM's own data: the table serves two purposes at
@@ -94,7 +97,7 @@ final class FormatterFsm {
 
 		// SHL BX,1 (or ADD BX,BX)
 		Instruction scale = previousInBlock(dispatch, block);
-		if (scale == null || !CsSwitchTables.isDoublingOf(scale, bx)) {
+		if (scale == null || !CsDispatch.isDoublingOf(scale, bx)) {
 			return null;
 		}
 		// MOV BX,AX
@@ -230,7 +233,7 @@ final class FormatterFsm {
 		}
 
 		int states = stateCount(tableBytes);
-		if (states < DataSwitchTables.MIN_DATA_TABLE_ENTRIES) {
+		if (states < MIN_FSM_STATES) {
 			return null; // covers -1 too: a transition escaped the proven table region
 		}
 

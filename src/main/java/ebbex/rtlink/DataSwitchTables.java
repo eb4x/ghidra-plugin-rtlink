@@ -30,12 +30,15 @@ final class DataSwitchTables {
 	private static final byte DATA_DISPATCH_OPCODE = (byte) 0xFF;
 	private static final int DATA_DISPATCH_REG_OPCODE = 4;
 
+	/** Instructions to look back over for the {@code ADD} and {@code MOV} that build the pointer. */
+	private static final int POINTER_SCAN_LIMIT = 8;
+
 	/**
 	 * A DGROUP table is bounded by its entries rather than by a guard, so a single valid
 	 * entry proves nothing — that is one plausible word, which data is full of. Two
 	 * consecutive ones landing inside the dispatching function is already a strong signal.
 	 */
-	static final int MIN_DATA_TABLE_ENTRIES = 2;
+	private static final int MIN_DATA_TABLE_ENTRIES = 2;
 
 	private DataSwitchTables() {
 	}
@@ -78,7 +81,7 @@ final class DataSwitchTables {
 		int tableOffset = -1;
 		Instruction instruction = dispatch.getPrevious();
 		boolean indexAdded = false;
-		for (int i = 0; i < CsSwitchTables.GUARD_SCAN_LIMIT && instruction != null; i++) {
+		for (int i = 0; i < POINTER_SCAN_LIMIT && instruction != null; i++) {
 			if (!block.contains(instruction.getMinAddress())) {
 				return null;
 			}
@@ -144,7 +147,7 @@ final class DataSwitchTables {
 		Listing listing = program.getListing();
 		Set<Address> destinations = new LinkedHashSet<>();
 		try {
-			for (int i = 0; i < CsSwitchTables.MAX_TABLE_ENTRIES; i++) {
+			for (int i = 0; i < CsDispatch.MAX_TABLE_ENTRIES; i++) {
 				int offset = program.getMemory().getShort(table.add(2L * i)) & 0xffff;
 				Address destination = space.getAddress(segment, offset);
 				// The first entry that is not a case target of this function ends the
@@ -182,7 +185,7 @@ final class DataSwitchTables {
 	/**
 	 * The base register of a {@code JMP word ptr [reg]} — a computed jump through memory
 	 * with no segment override and no displacement — or null if {@code dispatch} is not one.
-	 * A {@code CS:} override means the CS-relative form, which {@link CsSwitchTables}
+	 * A {@code CS:} override means the CS-relative form, which {@link CsDispatch}
 	 * handles; a displacement means a single function pointer, not a table.
 	 */
 	private static Register dataDispatchRegister(Instruction dispatch) {

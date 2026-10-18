@@ -22,11 +22,12 @@ seven classes and not one. They share package-private statics and must stay in
   CS-/module-relative switch tables and fixes their *references*. Must run before
   `DecompilerSwitchAnalyzer`, which skips any computed branch that already has
   computed refs — winning that race is what keeps bogus targets from being
-  disassembled into other segments. Each table form is its own class: `CsSwitchTables`
-  (the `JMP CS:[BX+disp16]` idiom, its `CMP` guard count, resident tables),
+  disassembled into other segments. Each table form is its own class:
+  `ResidentSwitchTables` (resident segments that are not 64KB-page aligned),
   `OverlaySwitchTables` (module-relative tables in overlay pages), `DataSwitchTables`
-  (DGROUP tables behind `JMP [reg]`), `FormatterFsm` (the `XLAT`-indexed printf FSM);
-  `CaseRange` bounds a dispatch's case targets by its function.
+  (DGROUP tables behind `JMP [reg]`), `FormatterFsm` (the `XLAT`-indexed printf FSM).
+  `CsDispatch` is the `JMP CS:[BX+disp16]` idiom and its `CMP` guard count, shared by
+  the first two; `CaseRange` bounds a dispatch's case targets by its function.
 - **`RTLinkDispatcherJumpAnalyzer`** — BYTE, `DATA_ANALYSIS.before()`. Resolves the VM
   nucleus' constant-pair dispatch (`MOV AX,entry ; MOV DX,body ; … ; MOV [SI-4],AX ;
   JMP DX`). `JMP DX` is a near jump: its targets are `CS:imm` for the `MOV DX`
