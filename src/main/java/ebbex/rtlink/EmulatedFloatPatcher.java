@@ -137,40 +137,18 @@ class EmulatedFloatPatcher {
 		Memory memory = program.getMemory();
 		int calls = 0;
 		for (MemoryBlock block : memory.getBlocks()) {
-			if (block.isOverlay() || !block.isExecute() || !block.isInitialized()) {
+			if (!CodeSeeds.isResidentCode(block)) {
 				continue;
 			}
-			calls += countEmulatorCalls(memory, block, monitor);
+			calls += CodeSeeds.scan(memory, block, new byte[] { OPCODE_INT }, null, monitor, at -> {
+				int vector = Byte.toUnsignedInt(memory.getByte(at.add(1)));
+				return vector >= FIRST_ESC_INT && vector <= LAST_ESC_INT;
+			});
 			if (calls >= MIN_EMULATOR_CALLS) {
 				return true;
 			}
 		}
 		return false;
-	}
-
-	private static int countEmulatorCalls(Memory memory, MemoryBlock block, TaskMonitor monitor)
-			throws CancelledException {
-		int calls = 0;
-		Address addr = block.getStart();
-		Address end = block.getEnd();
-		while (addr != null && addr.compareTo(end) < 0) {
-			monitor.checkCancelled();
-			addr = memory.findBytes(addr, end, new byte[] { OPCODE_INT }, null, true, monitor);
-			if (addr == null) {
-				break;
-			}
-			try {
-				int vector = Byte.toUnsignedInt(memory.getByte(addr.add(1)));
-				if (vector >= FIRST_ESC_INT && vector <= LAST_ESC_INT) {
-					calls++;
-				}
-			}
-			catch (MemoryAccessException | AddressOutOfBoundsException e) {
-				// past the end of the block; nothing to count
-			}
-			addr = addr.add(1);
-		}
-		return calls;
 	}
 
 	/**

@@ -161,41 +161,19 @@ final class DispatchStubs {
 		Map<Long, Integer> counts = new HashMap<>();
 		Map<Long, Integer> stubSegments = new HashMap<>();
 
-		for (MemoryBlock block : memory.getBlocks()) {
-			if (block.isOverlay() || !block.isExecute() || !block.isInitialized()) {
-				continue;
+		CodeSeeds.scanResident(memory, new byte[] { X86.OPCODE_CALLF }, monitor, callf -> {
+			Address jmpfAddr = callf.add(5);
+			if (!CodeSeeds.isResidentCode(memory, jmpfAddr) ||
+				memory.getByte(jmpfAddr) != X86.OPCODE_JMPF) {
+				return false;
 			}
-
-			Address searchAddr = block.getStart();
-			Address blockEnd = block.getEnd();
-
-			while (searchAddr != null && searchAddr.compareTo(blockEnd) < 0) {
-				monitor.checkCancelled();
-
-				searchAddr = memory.findBytes(searchAddr, blockEnd,
-					new byte[] { X86.OPCODE_CALLF }, null, true, monitor);
-				if (searchAddr == null) {
-					break;
-				}
-
-				try {
-					Address jmpfAddr = searchAddr.add(5);
-					if (CodeSeeds.isResidentCode(memory, jmpfAddr) &&
-						memory.getByte(jmpfAddr) == X86.OPCODE_JMPF) {
-						int off = Short.toUnsignedInt(memory.getShort(searchAddr.add(1)));
-						int seg = Short.toUnsignedInt(memory.getShort(searchAddr.add(3)));
-						long target = space.getAddress(seg, off).getOffset();
-						counts.merge(target, 1, Integer::sum);
-						stubSegments.putIfAbsent(target, seg);
-					}
-				}
-				catch (MemoryAccessException | AddressOutOfBoundsException e) {
-					// skip
-				}
-
-				searchAddr = searchAddr.add(1);
-			}
-		}
+			int off = Short.toUnsignedInt(memory.getShort(callf.add(1)));
+			int seg = Short.toUnsignedInt(memory.getShort(callf.add(3)));
+			long target = space.getAddress(seg, off).getOffset();
+			counts.merge(target, 1, Integer::sum);
+			stubSegments.putIfAbsent(target, seg);
+			return true;
+		});
 
 		Map<Long, Integer> dispatchers = new HashMap<>();
 		for (Map.Entry<Long, Integer> e : counts.entrySet()) {
@@ -301,132 +279,94 @@ final class DispatchStubs {
 		SegmentedAddressSpace space = X86.space(program);
 		Map<Integer, OverlayBlockInfo> blocksByRecord = blocksByRecord(overlayBlocks);
 		int width = OverlayNames.width(OverlayNames.maxRecordIndex(overlayBlocks));
-		int count = 0;
-		int moduleResolved = 0;
+		int[] moduleResolved = { 0 };
 
-		for (MemoryBlock block : memory.getBlocks()) {
-			if (block.isOverlay() || !block.isExecute() || !block.isInitialized()) {
-				continue;
+		int count = CodeSeeds.scanResident(memory, new byte[] { X86.OPCODE_JMPF }, monitor, jmpf -> {
+			// Need 5 bytes before (CALLF) and 7 bytes after (JMPF + page_id)
+			Address callfAddr = jmpf.subtract(5);
+			Address pageIdAddr = jmpf.add(5);
+			if (!CodeSeeds.isResidentCode(memory, callfAddr) ||
+				!CodeSeeds.isResidentCode(memory, pageIdAddr.add(1))) {
+				return false;
 			}
 
-			Address searchAddr = block.getStart();
-			Address blockEnd = block.getEnd();
-
-			while (searchAddr != null && searchAddr.compareTo(blockEnd) < 0) {
-				monitor.checkCancelled();
-
-				searchAddr = memory.findBytes(searchAddr, blockEnd,
-					new byte[] { X86.OPCODE_JMPF }, null, true, monitor);
-				if (searchAddr == null) {
-					break;
-				}
-
-				try {
-					// Need 5 bytes before (CALLF) and 7 bytes after (JMPF + page_id)
-					Address callfAddr = searchAddr.subtract(5);
-					Address pageIdAddr = searchAddr.add(5);
-
-					if (!CodeSeeds.isResidentCode(memory, callfAddr) ||
-						!CodeSeeds.isResidentCode(memory, pageIdAddr.add(1))) {
-						searchAddr = searchAddr.add(1);
-						continue;
-					}
-
-					int targetSegment =
-						Short.toUnsignedInt(memory.getShort(searchAddr.add(3)));
-					if (targetSegment != 0x0000) {
-						searchAddr = searchAddr.add(1);
-						continue;
-					}
-
-					// Validate CALLF opcode and that it targets a discovered dispatcher.
-					byte callfOpcode = memory.getByte(callfAddr);
-					int callfOffset =
-						Short.toUnsignedInt(memory.getShort(callfAddr.add(1)));
-					int callfSegment =
-						Short.toUnsignedInt(memory.getShort(callfAddr.add(3)));
-					long callfTarget = space.getAddress(callfSegment, callfOffset).getOffset();
-					if (callfOpcode != X86.OPCODE_CALLF || !dispatchers.contains(callfTarget)) {
-						searchAddr = searchAddr.add(1);
-						continue;
-					}
-
-					int jmpfOffset =
-						Short.toUnsignedInt(memory.getShort(searchAddr.add(1)));
-					int pageId = Short.toUnsignedInt(memory.getShort(pageIdAddr));
-					// The stored value is a 1-based descriptor index: descriptor N is
-					// overlay record N - 1, so page_id 1 targets record 0 (a real code
-					// page — see RTLinkOverlayAnalyzer's class javadoc). pageNumber is the
-					// record index, shared by the OVLSTUB/OVL labels and the OVERLAY_NN
-					// block names.
-					int descriptorIndex = pageId & PAGE_ID_MASK;
-					int pageNumber = descriptorIndex - 1;
-
-					OverlayBlockInfo target = blocksByRecord.get(pageNumber);
-					if (target == null) {
-						searchAddr = searchAddr.add(1);
-						continue;
-					}
-
-					// Distinguish the 12- and 14-byte stub forms (see the method javadoc):
-					// the bytes at +12 either begin the next stub (12-byte form, module 0)
-					// or hold the target module's base paragraph within the page.
-					int stubSize = 12;
-					int moduleBase = 0;
-					Address moduleWordAddr = callfAddr.add(12);
-					if (CodeSeeds.isResidentCode(memory, moduleWordAddr.add(1)) &&
-						!isDispatcherCallf(memory, space, dispatchers, moduleWordAddr)) {
-						int word = Short.toUnsignedInt(memory.getShort(moduleWordAddr));
-						if (word < target.page().getHeader().getTotalParagraphs()) {
-							stubSize = 14;
-							moduleBase = word;
-						}
-					}
-					int targetOffset = jmpfOffset + moduleBase * 16;
-
-					Address targetAddr = target.block().getStart().add(targetOffset);
-
-					if (!target.block().contains(targetAddr)) {
-						searchAddr = searchAddr.add(1);
-						continue;
-					}
-
-					// Only now that the stub has fully checked out is its module_word
-					// trustworthy enough to record as one of the page's module bases.
-					if (moduleBase != 0) {
-						stubModuleBases
-								.computeIfAbsent(target.block().getName(), k -> new TreeSet<>())
-								.add(moduleBase);
-					}
-
-					Address stubAddr = callfAddr;
-					refManager.addMemoryReference(stubAddr, targetAddr,
-						RefType.UNCONDITIONAL_CALL, SourceType.ANALYSIS, 0);
-
-					CodeSeeds.label(symbolTable,
-						String.format(OverlayNames.STUB_PREFIX + "%0" + width + "d_%04X",
-							pageNumber, targetOffset),
-						stubAddr);
-					CodeSeeds.label(symbolTable,
-						String.format("OVL%0" + width + "d_%04X", pageNumber, targetOffset),
-						targetAddr);
-
-					overlayEntryPoints.add(targetAddr);
-					pendingThunks.add(new StubTarget(stubAddr, targetAddr, stubSize));
-					if (moduleBase != 0) {
-						moduleResolved++;
-					}
-					count++;
-				}
-				catch (MemoryAccessException | AddressOutOfBoundsException e) {
-					// skip
-				}
-
-				searchAddr = searchAddr.add(1);
+			int targetSegment = Short.toUnsignedInt(memory.getShort(jmpf.add(3)));
+			if (targetSegment != 0x0000) {
+				return false;
 			}
-		}
-		if (moduleResolved > 0) {
-			Msg.debug(RTLinkOverlayAnalyzer.class, "RTLink/Plus: " + moduleResolved +
+
+			// Validate CALLF opcode and that it targets a discovered dispatcher.
+			byte callfOpcode = memory.getByte(callfAddr);
+			int callfOffset = Short.toUnsignedInt(memory.getShort(callfAddr.add(1)));
+			int callfSegment = Short.toUnsignedInt(memory.getShort(callfAddr.add(3)));
+			long callfTarget = space.getAddress(callfSegment, callfOffset).getOffset();
+			if (callfOpcode != X86.OPCODE_CALLF || !dispatchers.contains(callfTarget)) {
+				return false;
+			}
+
+			int jmpfOffset = Short.toUnsignedInt(memory.getShort(jmpf.add(1)));
+			int pageId = Short.toUnsignedInt(memory.getShort(pageIdAddr));
+			// The stored value is a 1-based descriptor index: descriptor N is
+			// overlay record N - 1, so page_id 1 targets record 0 (a real code
+			// page — see RTLinkOverlayAnalyzer's class javadoc). pageNumber is the
+			// record index, shared by the OVLSTUB/OVL labels and the OVERLAY_NN
+			// block names.
+			int descriptorIndex = pageId & PAGE_ID_MASK;
+			int pageNumber = descriptorIndex - 1;
+
+			OverlayBlockInfo target = blocksByRecord.get(pageNumber);
+			if (target == null) {
+				return false;
+			}
+
+			// Distinguish the 12- and 14-byte stub forms (see the method javadoc):
+			// the bytes at +12 either begin the next stub (12-byte form, module 0)
+			// or hold the target module's base paragraph within the page.
+			int stubSize = 12;
+			int moduleBase = 0;
+			Address moduleWordAddr = callfAddr.add(12);
+			if (CodeSeeds.isResidentCode(memory, moduleWordAddr.add(1)) &&
+				!isDispatcherCallf(memory, space, dispatchers, moduleWordAddr)) {
+				int word = Short.toUnsignedInt(memory.getShort(moduleWordAddr));
+				if (word < target.page().getHeader().getTotalParagraphs()) {
+					stubSize = 14;
+					moduleBase = word;
+				}
+			}
+			int targetOffset = jmpfOffset + moduleBase * 16;
+
+			Address targetAddr = target.block().getStart().add(targetOffset);
+			if (!target.block().contains(targetAddr)) {
+				return false;
+			}
+
+			// Only now that the stub has fully checked out is its module_word
+			// trustworthy enough to record as one of the page's module bases.
+			if (moduleBase != 0) {
+				stubModuleBases
+						.computeIfAbsent(target.block().getName(), k -> new TreeSet<>())
+						.add(moduleBase);
+				moduleResolved[0]++;
+			}
+
+			Address stubAddr = callfAddr;
+			refManager.addMemoryReference(stubAddr, targetAddr,
+				RefType.UNCONDITIONAL_CALL, SourceType.ANALYSIS, 0);
+
+			CodeSeeds.label(symbolTable,
+				String.format(OverlayNames.STUB_PREFIX + "%0" + width + "d_%04X",
+					pageNumber, targetOffset),
+				stubAddr);
+			CodeSeeds.label(symbolTable,
+				String.format("OVL%0" + width + "d_%04X", pageNumber, targetOffset),
+				targetAddr);
+
+			overlayEntryPoints.add(targetAddr);
+			pendingThunks.add(new StubTarget(stubAddr, targetAddr, stubSize));
+			return true;
+		});
+		if (moduleResolved[0] > 0) {
+			Msg.debug(RTLinkOverlayAnalyzer.class, "RTLink/Plus: " + moduleResolved[0] +
 				" stub(s) resolved through a nonzero module base");
 		}
 		return count;
@@ -486,76 +426,39 @@ final class DispatchStubs {
 
 		Memory memory = program.getMemory();
 		SegmentedAddressSpace space = X86.space(program);
-		int count = 0;
-
-		for (MemoryBlock block : memory.getBlocks()) {
-			if (block.isOverlay() || !block.isExecute() || !block.isInitialized()) {
-				continue;
+		int count = CodeSeeds.scanResident(memory, new byte[] { X86.OPCODE_JMPF }, monitor, jmpf -> {
+			Address callfAddr = jmpf.subtract(5);
+			if (!CodeSeeds.isResidentCode(memory, callfAddr) ||
+				!CodeSeeds.isResidentCode(memory, jmpf.add(4))) {
+				return false;
 			}
 
-			Address searchAddr = block.getStart();
-			Address blockEnd = block.getEnd();
-
-			while (searchAddr != null && searchAddr.compareTo(blockEnd) < 0) {
-				monitor.checkCancelled();
-
-				searchAddr = memory.findBytes(searchAddr, blockEnd,
-					new byte[] { X86.OPCODE_JMPF }, null, true, monitor);
-				if (searchAddr == null) {
-					break;
-				}
-
-				try {
-					Address callfAddr = searchAddr.subtract(5);
-					if (!CodeSeeds.isResidentCode(memory, callfAddr) ||
-						!CodeSeeds.isResidentCode(memory, searchAddr.add(4))) {
-						searchAddr = searchAddr.add(1);
-						continue;
-					}
-
-					int targetSegment =
-						Short.toUnsignedInt(memory.getShort(searchAddr.add(3)));
-					if (targetSegment == 0x0000) {
-						// Unrelocated segment: an overlay dispatch stub, not a
-						// trampoline (handled by scanForJmpfStubs).
-						searchAddr = searchAddr.add(1);
-						continue;
-					}
-
-					if (!isDispatcherCallf(memory, space, dispatchers, callfAddr)) {
-						searchAddr = searchAddr.add(1);
-						continue;
-					}
-
-					int targetOffset =
-						Short.toUnsignedInt(memory.getShort(searchAddr.add(1)));
-					Address targetAddr = space.getAddress(targetSegment, targetOffset);
-
-					MemoryBlock targetBlock = memory.getBlock(targetAddr);
-					if (targetBlock == null || targetBlock.isOverlay() ||
-						!targetBlock.isExecute() || !targetBlock.isInitialized()) {
-						searchAddr = searchAddr.add(1);
-						continue;
-					}
-
-					// A jump back into the trampoline's own bytes is not a trampoline.
-					long delta = targetAddr.getOffset() - callfAddr.getOffset();
-					if (delta >= 0 && delta < 10) {
-						searchAddr = searchAddr.add(1);
-						continue;
-					}
-
-					trampolineTargets.add(targetAddr);
-					pendingThunks.add(new StubTarget(callfAddr, targetAddr, 10));
-					count++;
-				}
-				catch (MemoryAccessException | AddressOutOfBoundsException e) {
-					// skip
-				}
-
-				searchAddr = searchAddr.add(1);
+			int targetSegment = Short.toUnsignedInt(memory.getShort(jmpf.add(3)));
+			if (targetSegment == 0x0000) {
+				// Unrelocated segment: an overlay dispatch stub, not a
+				// trampoline (handled by scanForJmpfStubs).
+				return false;
 			}
-		}
+			if (!isDispatcherCallf(memory, space, dispatchers, callfAddr)) {
+				return false;
+			}
+
+			int targetOffset = Short.toUnsignedInt(memory.getShort(jmpf.add(1)));
+			Address targetAddr = space.getAddress(targetSegment, targetOffset);
+			if (!CodeSeeds.isResidentCode(memory, targetAddr)) {
+				return false;
+			}
+
+			// A jump back into the trampoline's own bytes is not a trampoline.
+			long delta = targetAddr.getOffset() - callfAddr.getOffset();
+			if (delta >= 0 && delta < 10) {
+				return false;
+			}
+
+			trampolineTargets.add(targetAddr);
+			pendingThunks.add(new StubTarget(callfAddr, targetAddr, 10));
+			return true;
+		});
 
 		if (count > 0) {
 			Msg.debug(RTLinkOverlayAnalyzer.class,

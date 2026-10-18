@@ -204,22 +204,15 @@ final class VmRuntimeSeeds {
 
 		for (Map.Entry<MemoryBlock, Set<Integer>> e : segsByBlock.entrySet()) {
 			MemoryBlock block = e.getKey();
-			Address searchAddr = block.getStart();
-			while (searchAddr != null && searchAddr.compareTo(block.getEnd()) < 0) {
-				monitor.checkCancelled();
-				searchAddr = memory.findBytes(searchAddr, block.getEnd(), VM_DISPATCH_PATTERN,
-					VM_DISPATCH_MASK, true, monitor);
-				if (searchAddr == null) {
-					break;
-				}
+			CodeSeeds.scan(memory, block, VM_DISPATCH_PATTERN, VM_DISPATCH_MASK, monitor, match -> {
 				for (int seg : e.getValue()) {
-					collectDispatchImms(memory, space, block, disassembler, searchAddr, seg,
+					collectDispatchImms(memory, space, block, disassembler, match, seg,
 						VM_DISPATCH_FUNCTION_IMMS, functionSeeds);
-					collectDispatchImms(memory, space, block, disassembler, searchAddr, seg,
+					collectDispatchImms(memory, space, block, disassembler, match, seg,
 						VM_DISPATCH_FLOW_IMMS, flowSeeds);
 				}
-				searchAddr = searchAddr.add(1);
-			}
+				return true;
+			});
 		}
 	}
 

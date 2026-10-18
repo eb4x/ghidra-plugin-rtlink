@@ -198,8 +198,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		for (long imm : loadedImmediates(program, jmp, jmp.getRegister(0))) {
 			Address body =
 				((SegmentedAddressSpace) at.getAddressSpace()).getAddress(segment, (int) imm);
-			MemoryBlock block = program.getMemory().getBlock(body);
-			if (block == null || !block.isExecute() || !block.isInitialized()) {
+			if (!CodeSeeds.isResidentCode(program.getMemory(), body)) {
 				continue;
 			}
 			if (!CodeEvidence.refersTo(jmp, body, RefType::isJump)) {
