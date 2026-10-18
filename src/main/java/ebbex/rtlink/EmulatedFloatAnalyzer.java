@@ -143,9 +143,13 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 	 * Done at the end of analysis, for the same reason {@link RTLinkOverlayAnalyzer} does:
 	 * this pass runs early, and later passes go on stamping marks of their own.
 	 * <p>
-	 * Only the disassembler's own marks, and only in code a rewrite cleared or re-decoded:
-	 * elsewhere a mark inside an instruction can be a genuine conflict, such as a branch
-	 * into the middle of one.
+	 * Only the disassembler's own marks, and only those a rewrite explains: a mark in code a
+	 * rewrite cleared or re-decoded that now sits inside an instruction, or a mark whose
+	 * "flow from" source lies in such code and no longer flows there. The wreckage jumps
+	 * backwards as well as forwards, so its marks land outside the rewritten windows too —
+	 * ROE2MAIN's {@code OVERLAY_069::046888}, "flow from {@code 0468c2}", which the rewrite
+	 * turned into the middle of a {@code FILD}. Elsewhere a mark inside an instruction can be
+	 * a genuine conflict, such as a branch into the middle of one, and stays.
 	 */
 	@Override
 	public void analysisEnded(Program program) {
@@ -162,8 +166,7 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 		Iterator<Bookmark> iterator = bookmarks.getBookmarksIterator(BookmarkType.ERROR);
 		while (iterator.hasNext()) {
 			Bookmark bookmark = iterator.next();
-			if (!touched.contains(bookmark.getAddress()) ||
-				!Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory())) {
+			if (!Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory())) {
 				continue;
 			}
 			// "Maximum run of repeated byte instructions" marks a run the disassembler did
@@ -172,7 +175,13 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 			if (bookmark.getComment().startsWith(REPEATED_BYTE_RUN)) {
 				continue;
 			}
-			if (listing.getInstructionContaining(bookmark.getAddress()) != null) {
+			Address at = bookmark.getAddress();
+			boolean coveredHere =
+				touched.contains(at) && listing.getInstructionContaining(at) != null;
+			Address source = flowSource(program, bookmark.getComment());
+			boolean causeGone = source != null && touched.contains(source) &&
+				!flowsTo(listing.getInstructionAt(source), at);
+			if (coveredHere || causeGone) {
 				stale.add(bookmark);
 			}
 		}
@@ -186,5 +195,35 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 					"emulator calls' mis-decode",
 				stale.size()));
 		}
+	}
+
+	/** Comment marker the disassembler puts before the address a failed flow came from. */
+	private static final String FLOW_FROM = "(flow from ";
+
+	/** The address in a Bad Instruction mark's "(flow from X)", or null. */
+	private static Address flowSource(Program program, String comment) {
+		int start = comment.lastIndexOf(FLOW_FROM);
+		int end = start < 0 ? -1 : comment.indexOf(')', start);
+		if (end < 0) {
+			return null;
+		}
+		return program.getAddressFactory().getAddress(
+			comment.substring(start + FLOW_FROM.length(), end));
+	}
+
+	/** True if {@code source} is an instruction that falls through or flows to {@code target}. */
+	private static boolean flowsTo(Instruction source, Address target) {
+		if (source == null) {
+			return false;
+		}
+		if (target.equals(source.getFallThrough())) {
+			return true;
+		}
+		for (Address flow : source.getFlows()) {
+			if (flow.equals(target)) {
+				return true;
+			}
+		}
+		return false;
 	}
 }

@@ -276,27 +276,28 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 	// ---------------------------------------------------------------- DGROUP data table
 
 	/**
-	 * ROE2MAIN's {@code 122e:5280} shape in miniature: {@code MOV DI,0x10; XOR CX,CX;
-	 * MOV CL,[BX+SI+5]; ADD DI,CX; JMP word ptr [DI]}, its table in DGROUP at
-	 * {@code 2000:0010}. The function runs from the call target {@code 0x10} to the next one,
-	 * {@code 0x40}; the fourth word, {@code 0x50}, lies past it and ends the table.
+	 * ROE2MAIN {@code 122e:5280}: {@code MOV DI,0xb26a; XOR CX,CX; MOV CL,[BX+SI+5]; ADD DI,CX;
+	 * JMP word ptr [DI]}, its table in DGROUP ({@code 35f5}) at {@code b26a}: four cases
+	 * ({@code 52ae 5282 528a 52a3}) and then {@code 0x0078}, a valid instruction address in the
+	 * same block but in another function. The dispatching function runs from the call target
+	 * {@code 51d5} to the next one, {@code 530c}, which is what ends the table. The two calls at
+	 * {@code 5300} stand in for the program's callers of those entries.
 	 */
 	@Test
 	public void testDgroupTableBoundedByTheCallingFunction() throws Exception {
-		ProgramBuilder builder = resident("0x1000:0x0000", 0x60,
-			"e8 0d 00 c3 e8 39 00 c3 00 00 00 00 00 00 00 00 " +
-				"bf 10 00 33 c9 8a 48 05 03 f9 ff 25 c3 c3 c3");
+		ProgramBuilder builder = resident("0x122e:0x51d0", 0x140, "c3");
 		try {
 			Program program = builder.getProgram();
-			builder.createUninitializedMemory("DATA_PAD", "0x2000:0x0000", 0x10);
-			MemoryBlock data = builder.createMemory("DATA", "0x2000:0x0010", 0x10);
-			builder.setBytes("0x2000:0x0010", "1c 00 1d 00 1e 00 50 00");
-			builder.setRegisterValue("DS", "0x1000:0x0000", "0x1000:0x005f", 0x2000);
-			assertFalse(data.isExecute());
-			decode(program, builder.addr("0x1000:0x0000"), 8);
-			decode(program, builder.addr("0x1000:0x0010"), 12);
-			assertEquals(List.of(builder.addr("0x1000:0x001c"), builder.addr("0x1000:0x001d"),
-				builder.addr("0x1000:0x001e")), recover(program, builder.addr("0x1000:0x001a")));
+			builder.setBytes("0x122e:0x5276", "bf 6a b2 33 c9 8a 48 05 03 f9 ff 25");
+			builder.setBytes("0x122e:0x5300", "e8 d2 fe e8 06 00 c3"); // CALL 51d5; CALL 530c
+			builder.createMemory("DGROUP", "0x35f5:0xb26a", 0x10);
+			builder.setBytes("0x35f5:0xb26a", "ae 52 82 52 8a 52 a3 52 78 00");
+			builder.setRegisterValue("DS", "0x122e:0x51d0", "0x122e:0x530f", 0x35f5);
+			decode(program, builder.addr("0x122e:0x5276"), 12);
+			decode(program, builder.addr("0x122e:0x5300"), 7);
+			assertEquals(List.of(builder.addr("0x122e:0x52ae"), builder.addr("0x122e:0x5282"),
+				builder.addr("0x122e:0x528a"), builder.addr("0x122e:0x52a3")),
+				recover(program, builder.addr("0x122e:0x5280")));
 		}
 		finally {
 			builder.dispose();

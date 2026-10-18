@@ -131,8 +131,8 @@ public class EmulatedFloatAnalyzerTest extends AbstractGenericTest {
 		ProgramBuilder builder = program(OUT_OF_PHASE);
 		try {
 			Program program = builder.getProgram();
-			builder.setBytes("0x1000:0x0100", "b8 00 00 c3");
-			builder.disassemble("0x1000:0x0100", 4, false);
+			builder.setBytes("0x1000:0x0100", "b8 00 00 c3 b8 00 00 c3");
+			builder.disassemble("0x1000:0x0100", 8, false);
 			BookmarkManager bookmarks = program.getBookmarkManager();
 			builder.withTransaction(() -> {
 				// Stale: the mis-decode's mark, inside what the rewrite re-decodes.
@@ -140,7 +140,15 @@ public class EmulatedFloatAnalyzerTest extends AbstractGenericTest {
 					Disassembler.ERROR_BOOKMARK_CATEGORY, "conflicting instruction");
 				// Elsewhere: a mark inside an instruction the rewrite never touched.
 				bookmarks.setBookmark(builder.addr("0x1000:0x0101"), BookmarkType.ERROR,
-					Disassembler.ERROR_BOOKMARK_CATEGORY, "conflicting instruction");
+					Disassembler.ERROR_BOOKMARK_CATEGORY,
+					"Failed to disassemble at 1000:0101 due to conflicting instruction at " +
+						"1000:0100 (flow from 1000:0101)");
+				// Elsewhere too, but caused by the wreckage: its flow came from 1000:0003, the
+				// out-of-phase INT 3Bh, which the rewrite turned into a displacement byte.
+				bookmarks.setBookmark(builder.addr("0x1000:0x0105"), BookmarkType.ERROR,
+					Disassembler.ERROR_BOOKMARK_CATEGORY,
+					"Failed to disassemble at 1000:0105 due to conflicting instruction at " +
+						"1000:0104 (flow from 1000:0003)");
 			});
 
 			analyze(program, new EmulatedFloatAnalyzer());
@@ -150,6 +158,9 @@ public class EmulatedFloatAnalyzerTest extends AbstractGenericTest {
 					Disassembler.ERROR_BOOKMARK_CATEGORY));
 			assertNotNull("a mark outside the rewrite stays",
 				bookmarks.getBookmark(builder.addr("0x1000:0x0101"), BookmarkType.ERROR,
+					Disassembler.ERROR_BOOKMARK_CATEGORY));
+			assertNull("a mark whose cause the rewrite removed is swept",
+				bookmarks.getBookmark(builder.addr("0x1000:0x0105"), BookmarkType.ERROR,
 					Disassembler.ERROR_BOOKMARK_CATEGORY));
 		}
 		finally {

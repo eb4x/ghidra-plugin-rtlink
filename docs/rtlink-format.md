@@ -928,11 +928,20 @@ Games (measured with the current analyzers, fresh imports):
 | VICEROY.EXE | 31 | 658 | 371 | 39 | 0 | 1 |
 | NEBULAR.EXE | 79 | 831 | 22 | 83 | 90 | 5 |
 | SPHERE.EXE | 105 | 869 | 65 | 124 | 67 | 5 |
-| ROE2MAIN.EXE | 171 | 1997 | 136 | 59 | 54 | 4 |
+| ROE2MAIN.EXE | 171 | 1997 | 136 | 59 | 54 | 27 |
 | XANTH.EXE | — (sections) | — | — | — | — | — |
 
 (All measured from fresh Ghidra imports. XANTH imports with **no** overlay blocks — see
 below.)
+
+ROE2MAIN's 27 are not a regression from the 2 that 0.8.1 left. Until 0.8.2 the emulated-float
+sweep removed every Bad Instruction mark sitting inside an instruction, program-wide, and so
+hid conflicts it had nothing to do with. It now removes only the marks a rewrite explains.
+Of the 27, 19 in segment `109d` are genuine overlapping code: `PUSH CS ; CALL 05c4`, where
+`05c4` is the `CF` (`IRET`) inside `OR BH,0` (`80 CF 00`) at `05c3`. 6 in overlays 056, 062 and
+069 sit inside real instructions that nothing flows to any more, so some pass decoded from there
+and the seed has since gone; they lie outside every rewrite window. The last 2 are the ones
+0.8.1 left too.
 
 **ROE2MAIN is the stress case**: 171 records, 671 KB of overlay code, and 1997 stubs — three
 times VICEROY's. Stub and trampoline recovery matched a file-level census exactly on the
