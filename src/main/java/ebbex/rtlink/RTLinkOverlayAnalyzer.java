@@ -317,8 +317,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			List<RTLinkOverlayPage> pages, MessageLog log, TaskMonitor monitor)
 			throws Exception {
 		List<OverlayBlockInfo> result = new ArrayList<>();
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
+		SegmentedAddressSpace space = X86.space(program);
 		Address overlayBase = space.getAddress(overlayBaseSegment(program), 0);
 		long fileSize = fileBytes.getSize();
 		int width = OverlayNames.width(pages, fileBytes.getSize());

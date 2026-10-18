@@ -88,10 +88,11 @@ final class ConflictArbitration {
 				continue; // already repaired (idempotency for one-shot re-runs)
 			}
 
-			int length = pseudoLength(program, buried);
-			if (length <= 0) {
+			PseudoInstruction decoded = CodeSeeds.decode(new PseudoDisassembler(program), buried);
+			if (decoded == null || decoded.getLength() <= 0) {
 				continue; // the buried bytes do not decode; nothing to arbitrate
 			}
+			int length = decoded.getLength();
 
 			AddressSet junkStarts = collectJunkClearStarts(program, buried, length);
 			if (junkStarts == null) {
@@ -157,18 +158,6 @@ final class ConflictArbitration {
 		}
 		Address named = program.getAddressFactory().getAddress(comment.substring(start, end));
 		return named != null && !named.equals(bookmark.getAddress());
-	}
-
-	/** The decoded length of the buried instruction, or -1 if it does not decode. */
-	private static int pseudoLength(Program program, Address buried) {
-		try {
-			// Null, not an exception, is how undecodable bytes are reported.
-			PseudoInstruction decoded = new PseudoDisassembler(program).disassemble(buried);
-			return decoded == null ? -1 : decoded.getLength();
-		}
-		catch (Exception e) {
-			return -1;
-		}
 	}
 
 	/**

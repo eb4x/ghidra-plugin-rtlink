@@ -87,7 +87,7 @@ final class ModuleSegments {
 			}
 			SortedSet<Integer> later = bases.tailSet(base + 1);
 			Address to = later.isEmpty() ? block.getEnd()
-					: min(block.getEnd(), start.add(later.first() * 16L - 1));
+					: Address.min(block.getEnd(), start.add(later.first() * 16L - 1));
 			BigInteger segment = BigInteger.valueOf((frame + base) & 0xffffL);
 			context.setValue(cs, from, to, segment);
 			if (cseg != null) {
@@ -114,10 +114,6 @@ final class ModuleSegments {
 			Msg.debug(RTLinkOverlayAnalyzer.class,
 				"RTLink: cseg left as is over " + from + "-" + to + ": code already decoded");
 		}
-	}
-
-	private static Address min(Address a, Address b) {
-		return a.compareTo(b) <= 0 ? a : b;
 	}
 
 	/** The module bases recorded for {@code block}, plus those {@code page}'s relocations name. */

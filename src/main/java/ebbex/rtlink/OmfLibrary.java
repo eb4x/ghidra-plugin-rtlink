@@ -36,10 +36,6 @@ final class OmfLibrary {
 		boolean masked(int offset) {
 			return !known[offset] || fixed[offset];
 		}
-
-		boolean isCode() {
-			return className.toUpperCase(java.util.Locale.ROOT).contains("CODE");
-		}
 	}
 
 	record Module(String name, List<Segment> segments, List<Public> publics) {

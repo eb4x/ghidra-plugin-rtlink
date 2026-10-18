@@ -1,11 +1,14 @@
 package ebbex.rtlink;
 
+import ghidra.program.model.address.Address;
 import ghidra.program.model.address.SegmentedAddress;
+import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.lang.RegisterValue;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryAccessException;
+import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.scalar.Scalar;
 
 /**
@@ -75,6 +78,12 @@ final class X86 {
 		}
 	}
 
+	/** The previous instruction if it exists and is still inside {@code block}, else null. */
+	static Instruction previousInBlock(Instruction instruction, MemoryBlock block) {
+		Instruction previous = instruction.getPrevious();
+		return previous != null && block.contains(previous.getMinAddress()) ? previous : null;
+	}
+
 	// ---------------------------------------------------------------- registers
 
 	/** True if {@code a} and {@code b} share bits: {@code AX} and {@code AH}, not {@code AH} and {@code AL}. */
@@ -134,6 +143,11 @@ final class X86 {
 
 	// ---------------------------------------------------------------- segments
 
+	/** The program's segmented (real-mode) default address space. */
+	static SegmentedAddressSpace space(Program program) {
+		return (SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
+	}
+
 	/**
 	 * The CS {@code instruction} runs with: the value asserted in context (the MZ loader over
 	 * each resident block, the overlay analyzer over each overlay module), else the segment of
@@ -147,5 +161,18 @@ final class X86 {
 			return value.getUnsignedValue().intValue() & 0xffff;
 		}
 		return at.getSegment();
+	}
+
+	/**
+	 * The DS asserted in context at {@code at}, or null where none is. Only the overlay
+	 * analyzer's DGROUP pass sets DS over code, so a value both names the data segment and
+	 * confirms the assumption holds there.
+	 */
+	static Integer dataSegment(Program program, Address at) {
+		Register ds = program.getLanguage().getRegister("DS");
+		RegisterValue value =
+			ds == null ? null : program.getProgramContext().getRegisterValue(ds, at);
+		return value != null && value.hasValue() ? value.getUnsignedValue().intValue() & 0xffff
+				: null;
 	}
 }

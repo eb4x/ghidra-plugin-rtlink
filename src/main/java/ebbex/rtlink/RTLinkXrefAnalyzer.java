@@ -153,11 +153,7 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 	 *         Package-private so tests can drive it directly.
 	 */
 	static int removeRuntimeDgroupRefs(Program program) {
-		Register ds = program.getProgramContext().getRegister("DS");
-		if (ds == null) {
-			return 0;
-		}
-		Integer dgroup = assumedDgroup(program, ds);
+		Integer dgroup = assumedDgroup(program);
 		if (dgroup == null) {
 			return 0;
 		}
@@ -195,15 +191,11 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 	 * The DGROUP segment, read back from the DS context the overlay analyzer asserted over
 	 * compiler-generated code. Null if DS was never assumed (nothing to clean up).
 	 */
-	private static Integer assumedDgroup(Program program, Register ds) {
-		ProgramContext context = program.getProgramContext();
+	private static Integer assumedDgroup(Program program) {
 		for (MemoryBlock block : program.getMemory().getBlocks()) {
-			if (!block.isExecute()) {
-				continue;
-			}
-			RegisterValue value = context.getRegisterValue(ds, block.getStart());
-			if (value != null && value.hasValue()) {
-				return value.getUnsignedValue().intValue() & 0xffff;
+			Integer ds = block.isExecute() ? X86.dataSegment(program, block.getStart()) : null;
+			if (ds != null) {
+				return ds;
 			}
 		}
 		return null;
@@ -226,8 +218,7 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 		Memory memory = program.getMemory();
 		Listing listing = program.getListing();
 		ReferenceManager refManager = program.getReferenceManager();
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
+		SegmentedAddressSpace space = X86.space(program);
 
 		int overlayCount = 0;
 		Counts counts = new Counts();
@@ -414,9 +405,8 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 			if (dest.length != 1 || !(dest[0] instanceof Register reg)) {
 				return 0;
 			}
-			boolean allowed = mnemonic.equals("ADD")
-				? isGeneralRegister(reg)
-				: isAddressRegister(reg);
+			boolean allowed = (mnemonic.equals("ADD") ? GENERAL_REGISTERS : ADDRESS_REGISTERS)
+					.contains(reg.getName());
 			if (!allowed) {
 				return 0;
 			}
@@ -563,7 +553,7 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 				// From p-code, not operand indices: stock 12.1.3/12.1.4 swap MOV Sreg's
 				// displayed operands (see X86).
 				Register dst = X86.movDestination(cur);
-				if (dst != null && isSegmentRegister(dst) &&
+				if (dst != null && SEGMENT_REGISTERS.contains(dst.getName()) &&
 					reg.equals(X86.movSourceRegister(cur))) {
 					return true;
 				}
@@ -577,17 +567,12 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 		return false;
 	}
 
-	private static boolean isAddressRegister(Register reg) {
-		String name = reg.getName();
-		return name.equals("BX") || name.equals("SI") || name.equals("DI");
-	}
+	private static final Set<String> ADDRESS_REGISTERS = Set.of("BX", "SI", "DI");
 
 	/** Any 16-bit general register an {@code ADD reg,imm16} may compute into (not SP/BP). */
-	private static boolean isGeneralRegister(Register reg) {
-		String name = reg.getName();
-		return name.equals("AX") || name.equals("BX") || name.equals("CX") ||
-			name.equals("DX") || name.equals("SI") || name.equals("DI");
-	}
+	private static final Set<String> GENERAL_REGISTERS = Set.of("AX", "BX", "CX", "DX", "SI", "DI");
+
+	private static final Set<String> SEGMENT_REGISTERS = Set.of("ES", "SS", "CS", "FS", "GS", "DS");
 
 	/**
 	 * True if the target lands in a mapped non-executable block.  DGROUP globals
@@ -602,7 +587,8 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 	/** True if the operand carries an explicit non-DS segment register (override prefix). */
 	private static boolean hasSegmentOverride(Object[] opObjects, Register ds) {
 		for (Object obj : opObjects) {
-			if (obj instanceof Register reg && reg != ds && isSegmentRegister(reg)) {
+			if (obj instanceof Register reg && reg != ds &&
+				SEGMENT_REGISTERS.contains(reg.getName())) {
 				return true;
 			}
 		}
@@ -638,12 +624,6 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 
 	/** Base registers of BP and SP, whatever the language's widest form is. */
 	private static final Set<String> STACK_BASES = Set.of("BP", "EBP", "RBP", "SP", "ESP", "RSP");
-
-	private static boolean isSegmentRegister(Register reg) {
-		String name = reg.getName();
-		return name.equals("ES") || name.equals("SS") || name.equals("CS") ||
-			name.equals("FS") || name.equals("GS") || name.equals("DS");
-	}
 
 	private static Scalar firstScalar(Object[] opObjects) {
 		for (Object obj : opObjects) {

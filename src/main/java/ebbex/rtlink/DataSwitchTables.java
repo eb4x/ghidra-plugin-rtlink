@@ -11,7 +11,6 @@ import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.SegmentedAddress;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.lang.Register;
-import ghidra.program.model.lang.RegisterValue;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
@@ -79,12 +78,9 @@ final class DataSwitchTables {
 		// in, and the constant table base it is added to. Any other write of the base
 		// register in between means this is not the idiom.
 		int tableOffset = -1;
-		Instruction instruction = dispatch.getPrevious();
+		Instruction instruction = X86.previousInBlock(dispatch, block);
 		boolean indexAdded = false;
 		for (int i = 0; i < POINTER_SCAN_LIMIT && instruction != null; i++) {
-			if (!block.contains(instruction.getMinAddress())) {
-				return null;
-			}
 			if (!indexAdded) {
 				if ("ADD".equals(instruction.getMnemonicString()) &&
 					base.equals(instruction.getRegister(0)) &&
@@ -107,29 +103,20 @@ final class DataSwitchTables {
 			else if (X86.changes(instruction, base)) {
 				return null;
 			}
-			instruction = instruction.getPrevious();
+			instruction = X86.previousInBlock(instruction, block);
 		}
 		if (tableOffset < 0) {
 			return null;
 		}
 
-		// The table is at DS:offset. DS is only set over code by RTLinkOverlayAnalyzer's
-		// DGROUP pass, so a value here both names the segment and confirms the assumption
-		// holds at this instruction.
-		Register ds = program.getLanguage().getRegister("DS");
+		// The table is at DS:offset.
+		Integer ds = X86.dataSegment(program, dispatch.getMinAddress());
 		if (ds == null) {
 			return null;
 		}
-		RegisterValue dsValue =
-			program.getProgramContext().getRegisterValue(ds, dispatch.getMinAddress());
-		if (dsValue == null || !dsValue.hasValue()) {
-			return null;
-		}
 
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
-		Address table = space.getAddress(dsValue.getUnsignedValue().intValue() & 0xffff,
-			tableOffset);
+		SegmentedAddressSpace space = X86.space(program);
+		Address table = space.getAddress(ds, tableOffset);
 		if (!program.getMemory().contains(table)) {
 			return null;
 		}

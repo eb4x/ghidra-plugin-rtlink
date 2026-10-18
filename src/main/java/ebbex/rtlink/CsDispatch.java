@@ -97,11 +97,8 @@ final class CsDispatch {
 
 		long divisor = 1;
 		Register pendingDivisor = null; // divide crossed, its constant not yet seen
-		Instruction instruction = scale.getPrevious();
+		Instruction instruction = X86.previousInBlock(scale, block);
 		for (int i = 0; i < GUARD_SCAN_LIMIT && instruction != null; i++) {
-			if (!block.contains(instruction.getMinAddress())) {
-				return -1;
-			}
 			if ("CMP".equals(instruction.getMnemonicString()) &&
 				index.equals(instruction.getRegister(0))) {
 				Scalar bound = instruction.getScalar(1);
@@ -129,7 +126,7 @@ final class CsDispatch {
 			else if (X86.changes(instruction, index)) {
 				return -1; // the compared value is not the value that indexes the table
 			}
-			instruction = instruction.getPrevious();
+			instruction = X86.previousInBlock(instruction, block);
 		}
 		return -1;
 	}
@@ -189,7 +186,7 @@ final class CsDispatch {
 			return false;
 		}
 		if ("SHL".equals(mnemonic)) {
-			return isOne(instruction.getScalar(1));
+			return X86.isScalar(instruction.getScalar(1), 1);
 		}
 		return "ADD".equals(mnemonic) && index.equals(instruction.getRegister(1));
 	}
@@ -219,9 +216,5 @@ final class CsDispatch {
 			return second;
 		}
 		return name.equals(second.getName()) ? first : null;
-	}
-
-	private static boolean isOne(Scalar scalar) {
-		return scalar != null && scalar.getUnsignedValue() == 1;
 	}
 }

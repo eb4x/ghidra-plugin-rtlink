@@ -38,8 +38,7 @@ final class ResidentSwitchTables {
 			return null;
 		}
 
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
+		SegmentedAddressSpace space = X86.space(program);
 		int segment = ((SegmentedAddress) block.getStart()).getSegment();
 
 		// The table and every entry must live inside the segment they are addressed from; a

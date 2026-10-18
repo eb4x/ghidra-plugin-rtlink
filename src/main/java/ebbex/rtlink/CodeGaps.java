@@ -272,14 +272,7 @@ final class CodeGaps {
 		Address at = start;
 		long consumed = 0;
 		while (consumed < length) {
-			PseudoInstruction instruction;
-			try {
-				// Undecodable bytes come back as null here, not as an exception.
-				instruction = pseudo.disassemble(at);
-			}
-			catch (Exception e) {
-				instruction = null;
-			}
+			PseudoInstruction instruction = CodeSeeds.decode(pseudo, at);
 			if (instruction == null) {
 				return null; // does not decode: not code
 			}

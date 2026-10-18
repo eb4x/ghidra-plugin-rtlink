@@ -148,8 +148,7 @@ final class VmRuntimeSeeds {
 			return;
 		}
 		Memory memory = program.getMemory();
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
+		SegmentedAddressSpace space = X86.space(program);
 		try {
 			if (memory.getByte(entry) != X86.OPCODE_CALLF ||
 				memory.getByte(entry.add(5)) != X86.OPCODE_JMPF) {
@@ -203,8 +202,7 @@ final class VmRuntimeSeeds {
 			return;
 		}
 		Memory memory = program.getMemory();
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
+		SegmentedAddressSpace space = X86.space(program);
 
 		Map<MemoryBlock, Set<Integer>> segsByBlock = new HashMap<>();
 		for (Map.Entry<Long, Integer> e : dispatchers.entrySet()) {

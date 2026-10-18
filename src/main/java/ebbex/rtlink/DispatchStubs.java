@@ -160,8 +160,7 @@ final class DispatchStubs {
 	static Map<Long, Integer> discoverDispatchers(Program program, TaskMonitor monitor)
 			throws CancelledException {
 		Memory memory = program.getMemory();
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
+		SegmentedAddressSpace space = X86.space(program);
 		Map<Long, Integer> counts = new HashMap<>();
 		Map<Long, Integer> stubSegments = new HashMap<>();
 
@@ -311,8 +310,7 @@ final class DispatchStubs {
 		Memory memory = program.getMemory();
 		ReferenceManager refManager = program.getReferenceManager();
 		SymbolTable symbolTable = program.getSymbolTable();
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
+		SegmentedAddressSpace space = X86.space(program);
 		Map<Integer, OverlayBlockInfo> blocksByRecord = blocksByRecord(overlayBlocks);
 		int width = OverlayNames.width(OverlayNames.maxRecordIndex(overlayBlocks));
 		int count = 0;
@@ -499,8 +497,7 @@ final class DispatchStubs {
 		}
 
 		Memory memory = program.getMemory();
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
+		SegmentedAddressSpace space = X86.space(program);
 		int count = 0;
 
 		for (MemoryBlock block : memory.getBlocks()) {

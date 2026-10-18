@@ -342,7 +342,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 			}
 			boolean sameBlock =
 				jumpBlock != null && jumpBlock.equals(program.getMemory().getBlock(target));
-			if (resolvesAgainstPage(target, pageBase, immediates) ||
+			if (immediates.contains(physical(target) - pageBase) ||
 				(sameBlock && resolvesFromImmediate(target, immediates))) {
 				matched.add(ref);
 			}
@@ -355,12 +355,6 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 
 	private static long physical(SegmentedAddress address) {
 		return (long) address.getSegment() * 16 + address.getSegmentOffset();
-	}
-
-	/** True when {@code target} is {@code pageBase + imm} for one of {@code immediates}. */
-	private static boolean resolvesAgainstPage(SegmentedAddress target, long pageBase,
-			Set<Long> immediates) {
-		return immediates.contains(physical(target) - pageBase);
 	}
 
 	/**

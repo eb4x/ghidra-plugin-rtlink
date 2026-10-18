@@ -10,7 +10,6 @@ import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.SegmentedAddress;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.lang.Register;
-import ghidra.program.model.lang.RegisterValue;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
@@ -96,47 +95,47 @@ final class FormatterFsm {
 		}
 
 		// SHL BX,1 (or ADD BX,BX)
-		Instruction scale = previousInBlock(dispatch, block);
+		Instruction scale = X86.previousInBlock(dispatch, block);
 		if (scale == null || !CsDispatch.isDoublingOf(scale, bx)) {
 			return null;
 		}
 		// MOV BX,AX
-		Instruction widen = previousInBlock(scale, block);
+		Instruction widen = X86.previousInBlock(scale, block);
 		if (widen == null || !"MOV".equals(widen.getMnemonicString()) ||
 			!bx.equals(widen.getRegister(0)) || !ax.equals(widen.getRegister(1))) {
 			return null;
 		}
 		// CBW
-		Instruction extend = previousInBlock(widen, block);
+		Instruction extend = X86.previousInBlock(widen, block);
 		if (extend == null || !"CBW".equals(extend.getMnemonicString())) {
 			return null;
 		}
 		// MOV [BP-x],AL — the state variable's slot
-		Instruction store = previousInBlock(extend, block);
+		Instruction store = X86.previousInBlock(extend, block);
 		Scalar stateSlot = store == null ? null : bpDisplacement(store, 0);
 		if (stateSlot == null || !"MOV".equals(store.getMnemonicString()) ||
 			!al.equals(store.getRegister(1))) {
 			return null;
 		}
 		// SHR AL,CL
-		Instruction shift = previousInBlock(store, block);
+		Instruction shift = X86.previousInBlock(store, block);
 		if (shift == null || !"SHR".equals(shift.getMnemonicString()) ||
 			!al.equals(shift.getRegister(0)) || !cl.equals(shift.getRegister(1))) {
 			return null;
 		}
 		// INC CL
-		Instruction bump = previousInBlock(shift, block);
+		Instruction bump = X86.previousInBlock(shift, block);
 		if (bump == null || !"INC".equals(bump.getMnemonicString()) ||
 			!cl.equals(bump.getRegister(0))) {
 			return null;
 		}
 		// XLAT — the transition lookup
-		Instruction translate = previousInBlock(bump, block);
+		Instruction translate = X86.previousInBlock(bump, block);
 		if (translate == null || !isPlainXlat(translate)) {
 			return null;
 		}
 		// ADD AL,[BP-x] — same slot the next state is stored back to
-		Instruction stateIn = previousInBlock(translate, block);
+		Instruction stateIn = X86.previousInBlock(translate, block);
 		Scalar indexSlot = stateIn == null ? null : bpDisplacement(stateIn, 1);
 		if (indexSlot == null || !"ADD".equals(stateIn.getMnemonicString()) ||
 			!al.equals(stateIn.getRegister(0)) ||
@@ -144,13 +143,13 @@ final class FormatterFsm {
 			return null;
 		}
 		// SHL AL,CL
-		Instruction classScale = previousInBlock(stateIn, block);
+		Instruction classScale = X86.previousInBlock(stateIn, block);
 		if (classScale == null || !"SHL".equals(classScale.getMnemonicString()) ||
 			!al.equals(classScale.getRegister(0)) || !cl.equals(classScale.getRegister(1))) {
 			return null;
 		}
 		// MOV CL,3
-		Instruction three = previousInBlock(classScale, block);
+		Instruction three = X86.previousInBlock(classScale, block);
 		if (three == null || !"MOV".equals(three.getMnemonicString()) ||
 			!cl.equals(three.getRegister(0)) || !X86.isScalar(three.getScalar(1), 3)) {
 			return null;
@@ -164,7 +163,7 @@ final class FormatterFsm {
 		int tableOffset = -1;
 		boolean sawClassLookup = false;
 		boolean sawClassMask = false;
-		Instruction instruction = previousInBlock(three, block);
+		Instruction instruction = X86.previousInBlock(three, block);
 		for (int i = 0; i < FSM_PROLOGUE_SCAN_LIMIT && instruction != null; i++) {
 			String mnemonic = instruction.getMnemonicString();
 			if ("MOV".equals(mnemonic) && bx.equals(instruction.getRegister(0))) {
@@ -196,7 +195,7 @@ final class FormatterFsm {
 				}
 				classLimit = (int) bound.getUnsignedValue();
 			}
-			instruction = previousInBlock(instruction, block);
+			instruction = X86.previousInBlock(instruction, block);
 		}
 		if (tableOffset < 0 || classLimit < 0 || !sawClassLookup || !sawClassMask) {
 			return null;
@@ -205,19 +204,12 @@ final class FormatterFsm {
 		// The table is at DS:tableOffset; the CMP proves bytes 0..classLimit of it. This
 		// reads memory directly, not p-code, so it does not depend on XLAT's p-code
 		// getting the segment right.
-		Register ds = program.getLanguage().getRegister("DS");
+		Integer ds = X86.dataSegment(program, dispatch.getMinAddress());
 		if (ds == null) {
 			return null;
 		}
-		RegisterValue dsValue =
-			program.getProgramContext().getRegisterValue(ds, dispatch.getMinAddress());
-		if (dsValue == null || !dsValue.hasValue()) {
-			return null;
-		}
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
-		Address table = space.getAddress(dsValue.getUnsignedValue().intValue() & 0xffff,
-			tableOffset);
+		SegmentedAddressSpace space = X86.space(program);
+		Address table = space.getAddress(ds, tableOffset);
 		MemoryBlock tableBlock = program.getMemory().getBlock(table);
 		if (tableBlock == null || !tableBlock.isInitialized()) {
 			return null;
@@ -327,17 +319,6 @@ final class FormatterFsm {
 			}
 		}
 		return highest + 1;
-	}
-
-	/**
-	 * The previous instruction if it exists and is still inside {@code block}, else null.
-	 */
-	private static Instruction previousInBlock(Instruction instruction, MemoryBlock block) {
-		Instruction previous = instruction.getPrevious();
-		if (previous == null || !block.contains(previous.getMinAddress())) {
-			return null;
-		}
-		return previous;
 	}
 
 	/**
