@@ -201,25 +201,15 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 	}
 
 	/**
-	 * A program analyzed before dispatches were marked already carries the table pass's
-	 * computed references, so the pass skips the dispatch. The migration marks it when those
-	 * references are exactly the recovered table, and the override pass then writes the
-	 * override once, from them.
+	 * The table pass marks the dispatch and lays down its references; the override pass
+	 * writes the override once, from them, and leaves it alone after that.
 	 */
 	@Test
-	public void testDispatchResolvedByAnEarlierBuildIsMarkedAndOverridden() throws Exception {
+	public void testDispatchIsMarkedAndOverriddenOnce() throws Exception {
 		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
 		try {
 			Program program = builder.getProgram();
-			List<Address> destinations = recover(builder);
 			markOverlayAnalyzed(builder);
-			builder.withTransaction(() -> {
-				for (Address destination : destinations) {
-					program.getReferenceManager()
-							.addMemoryReference(builder.addr(DISPATCH), destination,
-								RefType.COMPUTED_JUMP, SourceType.ANALYSIS, Reference.MNEMONIC);
-				}
-			});
 			builder.createFunction("0x1100:0x0040");
 
 			runTablePass(builder);
@@ -236,7 +226,7 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 		}
 	}
 
-	/** References that are not the recovered table — stock's guess — leave it unmarked. */
+	/** A dispatch that already has computed references — stock's guess — is not taken over. */
 	@Test
 	public void testDispatchWithForeignReferencesIsNotMarked() throws Exception {
 		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);

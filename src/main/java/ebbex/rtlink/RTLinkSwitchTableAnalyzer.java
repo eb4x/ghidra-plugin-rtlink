@@ -144,7 +144,6 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 		ReferenceManager refManager = program.getReferenceManager();
 		AddressSet targets = new AddressSet();
 		List<Instruction> dispatches = new ArrayList<>();
-		int migrated = 0;
 
 		InstructionIterator instructions = program.getListing().getInstructions(set, true);
 		while (instructions.hasNext()) {
@@ -152,13 +151,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 			Instruction instruction = instructions.next();
 
 			List<Address> destinations = recoverTable(program, instruction);
-			if (destinations == null) {
-				continue;
-			}
-			if (hasComputedReference(refManager, instruction)) {
-				if (migrateDispatchMark(program, refManager, instruction, destinations)) {
-					migrated++;
-				}
+			if (destinations == null || hasComputedReference(refManager, instruction)) {
 				continue;
 			}
 			for (Address destination : destinations) {
@@ -170,10 +163,6 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 			dispatches.add(instruction);
 		}
 
-		if (migrated > 0) {
-			Msg.info(this, String.format(
-				"RTLink/Plus: Marked %d switch dispatch(es) resolved by an earlier build", migrated));
-		}
 		int recovered = dispatches.size();
 		if (recovered == 0) {
 			return true;
@@ -219,36 +208,6 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 			}
 		}
 		marks.add(dispatch);
-	}
-
-	/**
-	 * MIGRATION (0.8.2), for programs analyzed before dispatches were marked — the curated
-	 * {@code /COLONIZE/VICEROY.EXE}. Delete once viceroy confirms it has been migrated.
-	 * <p>
-	 * Such a dispatch already carries its computed references, so the pass above skips it
-	 * and it would never be marked, leaving the override pass blind to it. Mark it when its
-	 * computed-jump targets are exactly the table recovered now: that proves an earlier run
-	 * of this pass laid them down, and not {@code DecompilerSwitchAnalyzer}'s guess. Returns
-	 * true if it marked one.
-	 */
-	private static boolean migrateDispatchMark(Program program, ReferenceManager refManager,
-			Instruction dispatch, List<Address> destinations) {
-		Address at = dispatch.getMinAddress();
-		if (markedDispatches(program, new AddressSet(at, at)).hasNext()) {
-			return false;
-		}
-		Set<Address> existing = new LinkedHashSet<>();
-		for (Reference reference : refManager.getReferencesFrom(at)) {
-			if (reference.getReferenceType().isComputed() &&
-				reference.getReferenceType().isJump()) {
-				existing.add(reference.getToAddress());
-			}
-		}
-		if (!existing.equals(new LinkedHashSet<>(destinations))) {
-			return false;
-		}
-		markDispatch(program, at);
-		return true;
 	}
 
 	/** The dispatches {@link #markDispatch} marked within {@code set}. */
