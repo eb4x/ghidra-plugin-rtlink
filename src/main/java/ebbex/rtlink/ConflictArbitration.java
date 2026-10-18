@@ -1,7 +1,6 @@
 package ebbex.rtlink;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 
 import ghidra.app.cmd.disassemble.DisassembleCommand;
@@ -9,13 +8,11 @@ import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.plugin.core.clear.ClearFlowAndRepairCmd;
 import ghidra.app.util.PseudoDisassembler;
 import ghidra.app.util.PseudoInstruction;
-import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Bookmark;
 import ghidra.program.model.listing.BookmarkManager;
-import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
@@ -74,16 +71,10 @@ final class ConflictArbitration {
 		BookmarkManager bookmarks = program.getBookmarkManager();
 		Listing listing = program.getListing();
 
-		List<Bookmark> conflicts = new ArrayList<>();
-		Iterator<Bookmark> iterator = bookmarks.getBookmarksIterator(BookmarkType.ERROR);
-		while (iterator.hasNext()) {
-			Bookmark bookmark = iterator.next();
-			if (Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory()) &&
-				bookmark.getComment().startsWith(FAILED_AT) &&
-				bookmark.getComment().contains("due to conflicting instruction")) {
-				conflicts.add(bookmark);
-			}
-		}
+		List<Bookmark> conflicts = ErrorMarks.collect(program,
+			bookmark -> bookmark.getComment().startsWith(FAILED_AT) &&
+				bookmark.getComment().contains("due to conflicting instruction"),
+			monitor);
 
 		int repaired = 0;
 		for (Bookmark bookmark : conflicts) {
@@ -143,24 +134,11 @@ final class ConflictArbitration {
 	 * gone, and the code it blocked is recovered by {@link CodeGaps}).
 	 */
 	static int sweepRepaired(Program program, TaskMonitor monitor) throws CancelledException {
-		BookmarkManager bookmarks = program.getBookmarkManager();
 		Listing listing = program.getListing();
-
-		List<Bookmark> stale = new ArrayList<>();
-		Iterator<Bookmark> iterator = bookmarks.getBookmarksIterator(BookmarkType.ERROR);
-		while (iterator.hasNext()) {
-			monitor.checkCancelled();
-			Bookmark bookmark = iterator.next();
-			if (Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory()) &&
-				bookmark.getComment().startsWith(FAILED_AT) &&
-				listing.getInstructionAt(bookmark.getAddress()) != null) {
-				stale.add(bookmark);
-			}
-		}
-		for (Bookmark bookmark : stale) {
-			bookmarks.removeBookmark(bookmark);
-		}
-		return stale.size();
+		return ErrorMarks.remove(program,
+			bookmark -> bookmark.getComment().startsWith(FAILED_AT) &&
+				listing.getInstructionAt(bookmark.getAddress()) != null,
+			monitor);
 	}
 
 	/**

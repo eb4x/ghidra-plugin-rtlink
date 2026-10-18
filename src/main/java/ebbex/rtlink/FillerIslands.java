@@ -1,20 +1,15 @@
 package ebbex.rtlink;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
 import ghidra.app.plugin.core.clear.ClearFlowAndRepairCmd;
-import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
-import ghidra.program.model.listing.Bookmark;
-import ghidra.program.model.listing.BookmarkManager;
-import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
@@ -129,25 +124,13 @@ final class FillerIslands {
 	 */
 	private static void sweepBookmarksInFill(Program program, TaskMonitor monitor)
 			throws CancelledException {
-		BookmarkManager bookmarks = program.getBookmarkManager();
 		Listing listing = program.getListing();
-
-		List<Bookmark> fossils = new ArrayList<>();
-		Iterator<Bookmark> iterator = bookmarks.getBookmarksIterator(BookmarkType.ERROR);
-		while (iterator.hasNext()) {
-			monitor.checkCancelled();
-			Bookmark bookmark = iterator.next();
+		ErrorMarks.remove(program, bookmark -> {
 			Address at = bookmark.getAddress();
-			if (Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory()) &&
-				listing.getInstructionContaining(at) == null &&
+			return listing.getInstructionContaining(at) == null &&
 				listing.getDefinedDataContaining(at) == null &&
-				fillerIsland(program, at) != null) {
-				fossils.add(bookmark);
-			}
-		}
-		for (Bookmark fossil : fossils) {
-			bookmarks.removeBookmark(fossil);
-		}
+				fillerIsland(program, at) != null;
+		}, monitor);
 	}
 
 	/**

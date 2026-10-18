@@ -14,15 +14,11 @@ import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
 import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.importer.MessageLog;
-import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.SegmentedAddress;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.lang.Register;
-import ghidra.program.model.listing.Bookmark;
-import ghidra.program.model.listing.BookmarkManager;
-import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
@@ -33,7 +29,6 @@ import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.SourceType;
-import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
@@ -160,7 +155,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 				if (targetInsn == null) {
 					// The bogus flow never decoded (it ran into real code); its only trace is
 					// the "Failed to disassemble" mark at the target, now an orphan.
-					removeOrphanedErrorBookmarks(program, target);
+					ErrorMarks.removeUnreached(program, target);
 					continue;
 				}
 				if (CodeEvidence.isEvidenced(program, targetInsn)) {
@@ -207,7 +202,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 			if (block == null || !block.isExecute() || !block.isInitialized()) {
 				continue;
 			}
-			if (!hasReferenceTo(jmp, body)) {
+			if (!CodeEvidence.refersTo(jmp, body, RefType::isJump)) {
 				references.addMemoryReference(jmp.getMinAddress(), body, RefType.COMPUTED_JUMP,
 					SourceType.ANALYSIS, Reference.MNEMONIC);
 				added++;
@@ -218,36 +213,6 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 			}
 		}
 		return added;
-	}
-
-	private static boolean hasReferenceTo(Instruction jmp, Address target) {
-		for (Reference ref : jmp.getReferencesFrom()) {
-			if (ref.getToAddress().equals(target) && ref.getReferenceType().isJump()) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	/**
-	 * Drop the disassembler's ERROR marks at {@code target} once nothing flows there any more.
-	 * A bogus target that collided with real code decodes nothing and leaves only the mark
-	 * {@code "Failed to disassemble at <target> due to conflicting instruction ..."}; with the
-	 * reference deleted, no flow explains it. A target some other flow still reaches keeps its
-	 * marks: they may describe that flow.
-	 */
-	private static void removeOrphanedErrorBookmarks(Program program, Address target) {
-		for (Reference reference : program.getReferenceManager().getReferencesTo(target)) {
-			if (reference.getReferenceType().isFlow()) {
-				return;
-			}
-		}
-		BookmarkManager bookmarks = program.getBookmarkManager();
-		for (Bookmark bookmark : bookmarks.getBookmarks(target, BookmarkType.ERROR)) {
-			if (Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory())) {
-				bookmarks.removeBookmark(bookmark);
-			}
-		}
 	}
 
 	/**

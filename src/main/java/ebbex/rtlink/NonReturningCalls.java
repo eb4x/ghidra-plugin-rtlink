@@ -7,14 +7,10 @@ import java.util.Set;
 
 import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.plugin.core.clear.ClearFlowAndRepairCmd;
-import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.lang.Register;
-import ghidra.program.model.listing.Bookmark;
-import ghidra.program.model.listing.BookmarkManager;
-import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.FlowOverride;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
@@ -155,21 +151,11 @@ final class NonReturningCalls {
 	 * exit, now terminal, no longer explains.
 	 */
 	private static void dropFallThroughMarks(Program program, Address after) {
-		for (Reference reference : program.getReferenceManager().getReferencesTo(after)) {
-			if (reference.getReferenceType().isFlow()) {
-				return;
-			}
-		}
 		Instruction above = program.getListing().getInstructionContaining(after.previous());
 		if (above != null && after.equals(above.getFallThrough())) {
 			return;
 		}
-		BookmarkManager bookmarks = program.getBookmarkManager();
-		for (Bookmark bookmark : bookmarks.getBookmarks(after, BookmarkType.ERROR)) {
-			if (Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory())) {
-				bookmarks.removeBookmark(bookmark);
-			}
-		}
+		ErrorMarks.removeUnreached(program, after);
 	}
 
 	/**

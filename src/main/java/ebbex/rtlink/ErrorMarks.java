@@ -1,10 +1,26 @@
 package ebbex.rtlink;
 
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.function.Predicate;
+
+import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
+import ghidra.program.model.listing.Bookmark;
+import ghidra.program.model.listing.BookmarkManager;
+import ghidra.program.model.listing.BookmarkType;
+import ghidra.program.model.listing.Program;
+import ghidra.util.exception.CancelledException;
+import ghidra.util.task.TaskMonitor;
 
-/** Where the disassembler's ERROR marks for a stretch of junk lie. */
+/**
+ * The disassembler's own ERROR marks ("Bad Instruction"): where they lie for a stretch of
+ * junk, and sweeping the ones a repair has made stale. The disassembler never takes a mark
+ * back, so every pass that clears or re-decodes code has to.
+ */
 final class ErrorMarks {
 
 	private ErrorMarks() {
@@ -23,5 +39,47 @@ final class ErrorMarks {
 			marked.add(after, after);
 		}
 		return marked;
+	}
+
+	/** The disassembler's ERROR marks that {@code keep} accepts, collected before any is removed. */
+	static List<Bookmark> collect(Program program, Predicate<Bookmark> keep, TaskMonitor monitor)
+			throws CancelledException {
+		List<Bookmark> marks = new ArrayList<>();
+		Iterator<Bookmark> iterator =
+			program.getBookmarkManager().getBookmarksIterator(BookmarkType.ERROR);
+		while (iterator.hasNext()) {
+			monitor.checkCancelled();
+			Bookmark bookmark = iterator.next();
+			if (Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory()) &&
+				keep.test(bookmark)) {
+				marks.add(bookmark);
+			}
+		}
+		return marks;
+	}
+
+	/** Remove the disassembler's ERROR marks that {@code stale} accepts; returns how many. */
+	static int remove(Program program, Predicate<Bookmark> stale, TaskMonitor monitor)
+			throws CancelledException {
+		List<Bookmark> marks = collect(program, stale, monitor);
+		BookmarkManager bookmarks = program.getBookmarkManager();
+		marks.forEach(bookmarks::removeBookmark);
+		return marks.size();
+	}
+
+	/**
+	 * Remove the disassembler's ERROR marks at {@code at} once no flow reaches it: a mark there
+	 * describes the flow that used to, and one that still does may be described by it.
+	 */
+	static void removeUnreached(Program program, Address at) {
+		if (CodeEvidence.hasFlowReferenceTo(program, at)) {
+			return;
+		}
+		BookmarkManager bookmarks = program.getBookmarkManager();
+		for (Bookmark bookmark : bookmarks.getBookmarks(at, BookmarkType.ERROR)) {
+			if (Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory())) {
+				bookmarks.removeBookmark(bookmark);
+			}
+		}
 	}
 }

@@ -73,7 +73,7 @@ final class FarVectorFlows {
 			}
 			// Since GP-7349 Ghidra resolves the vector itself and plants the reference, but
 			// a target only that reference reaches may still be undecoded: done means both.
-			boolean referenced = hasReferenceTo(instruction, target);
+			boolean referenced = CodeEvidence.refersTo(instruction, target, RefType::isFlow);
 			boolean decoded = listing.getInstructionAt(target) != null;
 			if (referenced && decoded) {
 				continue; // idempotent for one-shot re-runs
@@ -143,15 +143,5 @@ final class FarVectorFlows {
 		catch (MemoryAccessException | AddressOutOfBoundsException e) {
 			return null;
 		}
-	}
-
-	/** True if a flow out of this instruction already goes to {@code target}. */
-	private static boolean hasReferenceTo(Instruction instruction, Address target) {
-		for (Reference reference : instruction.getReferencesFrom()) {
-			if (reference.getReferenceType().isFlow() && reference.getToAddress().equals(target)) {
-				return true;
-			}
-		}
-		return false;
 	}
 }

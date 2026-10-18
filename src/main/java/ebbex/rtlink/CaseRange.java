@@ -9,8 +9,7 @@ import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
-import ghidra.program.model.symbol.Reference;
-import ghidra.program.model.symbol.ReferenceManager;
+import ghidra.program.model.symbol.RefType;
 
 /**
  * Where the case targets of a dispatch may lie: the function that contains it, bounded
@@ -63,17 +62,15 @@ final class CaseRange {
 	 */
 	private static Address nearestCallTarget(Program program, MemoryBlock block, Address from,
 			boolean forward) {
-		ReferenceManager references = program.getReferenceManager();
-		AddressIterator targets = references.getReferenceDestinationIterator(from, forward);
+		AddressIterator targets =
+			program.getReferenceManager().getReferenceDestinationIterator(from, forward);
 		while (targets.hasNext()) {
 			Address target = targets.next();
 			if (!block.contains(target)) {
 				return null; // left the block: no call target this side of it
 			}
-			for (Reference reference : references.getReferencesTo(target)) {
-				if (reference.getReferenceType().isCall()) {
-					return target;
-				}
+			if (CodeEvidence.hasReferenceTo(program, target, RefType::isCall)) {
+				return target;
 			}
 		}
 		return null;

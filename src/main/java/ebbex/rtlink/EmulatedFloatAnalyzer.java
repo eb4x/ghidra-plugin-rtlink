@@ -1,26 +1,20 @@
 package ebbex.rtlink;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 
 import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
 import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.importer.MessageLog;
-import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.lang.Processor;
-import ghidra.program.model.listing.Bookmark;
-import ghidra.program.model.listing.BookmarkManager;
-import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
-import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
@@ -154,37 +148,29 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 		AddressSetView touched = rewrittenCode;
 		rewrittenCode = new AddressSet();
 
-		BookmarkManager bookmarks = program.getBookmarkManager();
 		Listing listing = program.getListing();
-		List<Bookmark> stale = new ArrayList<>();
-
-		Iterator<Bookmark> iterator = bookmarks.getBookmarksIterator(BookmarkType.ERROR);
-		while (iterator.hasNext()) {
-			Bookmark bookmark = iterator.next();
-			if (!Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory())) {
-				continue;
-			}
-			// "Maximum run of repeated byte instructions" marks a run the disassembler did
-			// decode; it is a judgement about the code, not a failure to read it, so an
-			// instruction being present there says nothing about whether it is still true.
-			if (bookmark.getComment().startsWith(REPEATED_BYTE_RUN)) {
-				continue;
-			}
-			Address at = bookmark.getAddress();
-			boolean coveredHere =
-				touched.contains(at) && listing.getInstructionContaining(at) != null;
-			Address source = flowSource(program, bookmark.getComment());
-			boolean causeGone = source != null && touched.contains(source) &&
-				!flowsTo(listing.getInstructionAt(source), at);
-			if (coveredHere || causeGone) {
-				stale.add(bookmark);
-			}
+		int stale;
+		try {
+			stale = ErrorMarks.remove(program, bookmark -> {
+				// "Maximum run of repeated byte instructions" marks a run the disassembler did
+				// decode; it is a judgement about the code, not a failure to read it, so an
+				// instruction being present there says nothing about whether it is still true.
+				if (bookmark.getComment().startsWith(REPEATED_BYTE_RUN)) {
+					return false;
+				}
+				Address at = bookmark.getAddress();
+				boolean coveredHere =
+					touched.contains(at) && listing.getInstructionContaining(at) != null;
+				Address source = flowSource(program, bookmark.getComment());
+				boolean causeGone = source != null && touched.contains(source) &&
+					!flowsTo(listing.getInstructionAt(source), at);
+				return coveredHere || causeGone;
+			}, TaskMonitor.DUMMY);
 		}
-
-		for (Bookmark bookmark : stale) {
-			bookmarks.removeBookmark(bookmark);
+		catch (CancelledException e) {
+			return; // DUMMY monitor never cancels
 		}
-		RTLinkProgram.report(this, stale.size(),
+		RTLinkProgram.report(this, stale,
 			"Emulated FP: Cleared %d stale Bad Instruction bookmark(s) left by the " +
 				"emulator calls' mis-decode");
 	}

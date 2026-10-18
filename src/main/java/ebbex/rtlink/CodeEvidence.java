@@ -1,9 +1,12 @@
 package ebbex.rtlink;
 
+import java.util.function.Predicate;
+
 import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
@@ -41,8 +44,23 @@ final class CodeEvidence {
 
 	/** True if any flow reference — call, jump, fall-through override — reaches {@code address}. */
 	static boolean hasFlowReferenceTo(Program program, Address address) {
+		return hasReferenceTo(program, address, RefType::isFlow);
+	}
+
+	/** True if a reference whose type {@code kind} accepts reaches {@code address}. */
+	static boolean hasReferenceTo(Program program, Address address, Predicate<RefType> kind) {
 		for (Reference reference : program.getReferenceManager().getReferencesTo(address)) {
-			if (reference.getReferenceType().isFlow()) {
+			if (kind.test(reference.getReferenceType())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** True if a reference whose type {@code kind} accepts goes from {@code source} to {@code target}. */
+	static boolean refersTo(Instruction source, Address target, Predicate<RefType> kind) {
+		for (Reference reference : source.getReferencesFrom()) {
+			if (reference.getToAddress().equals(target) && kind.test(reference.getReferenceType())) {
 				return true;
 			}
 		}
@@ -54,17 +72,10 @@ final class CodeEvidence {
 	 * and something calls it: recovered code with the strongest evidence there is.
 	 */
 	static void promoteIfCalled(Program program, Address target, TaskMonitor monitor) {
-		if (program.getListing().getInstructionAt(target) == null) {
-			return;
-		}
-		if (program.getFunctionManager().getFunctionContaining(target) != null) {
-			return;
-		}
-		for (Reference reference : program.getReferenceManager().getReferencesTo(target)) {
-			if (reference.getReferenceType().isCall()) {
-				new CreateFunctionCmd(target).applyTo(program, monitor);
-				return;
-			}
+		if (program.getListing().getInstructionAt(target) != null &&
+			program.getFunctionManager().getFunctionContaining(target) == null &&
+			hasReferenceTo(program, target, RefType::isCall)) {
+			new CreateFunctionCmd(target).applyTo(program, monitor);
 		}
 	}
 }

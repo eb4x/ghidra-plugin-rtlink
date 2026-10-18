@@ -118,7 +118,8 @@ final class FarCodePointers {
 				monitor.checkCancelled();
 				if (previous == null ||
 					!instruction.getMinAddress().equals(previous.getFallThrough()) ||
-					isJumpTarget(program, instruction.getMinAddress())) {
+					CodeEvidence.hasReferenceTo(program, instruction.getMinAddress(),
+						RefType::isJump)) {
 					scan.reset();
 				}
 				scan.step(instruction);
@@ -140,11 +141,7 @@ final class FarCodePointers {
 	private static boolean claim(Program program, Instruction source, Address target,
 			TaskMonitor monitor) {
 		boolean changed = false;
-		boolean referenced = false;
-		for (Reference reference : source.getReferencesFrom()) {
-			referenced |= reference.getToAddress().equals(target);
-		}
-		if (!referenced) {
+		if (!CodeEvidence.refersTo(source, target, type -> true)) {
 			program.getReferenceManager().addMemoryReference(source.getMinAddress(), target,
 				RefType.DATA, SourceType.ANALYSIS, Reference.MNEMONIC);
 		}
@@ -180,15 +177,6 @@ final class FarCodePointers {
 			RefType type = reference.getReferenceType();
 			if (!reference.getFromAddress().equals(pointer) &&
 				(type.isRead() || type.isWrite() || type.isData())) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private static boolean isJumpTarget(Program program, Address address) {
-		for (Reference reference : program.getReferenceManager().getReferencesTo(address)) {
-			if (reference.getReferenceType().isJump()) {
 				return true;
 			}
 		}

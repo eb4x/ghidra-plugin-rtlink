@@ -12,8 +12,6 @@ import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.reloc.Relocation.Status;
-import ghidra.program.model.symbol.Reference;
-import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
@@ -315,16 +313,12 @@ class EmulatedFloatPatcher {
 		if (afterPatch == null || afterPatch.compareTo(last) > 0) {
 			return starts;
 		}
-		ReferenceManager references = program.getReferenceManager();
-		AddressIterator cleared = references
+		AddressIterator cleared = program.getReferenceManager()
 				.getReferenceDestinationIterator(new AddressSet(afterPatch, last), true);
 		while (cleared.hasNext()) {
 			Address destination = cleared.next();
-			for (Reference reference : references.getReferencesTo(destination)) {
-				if (reference.getReferenceType().isFlow()) {
-					starts.add(destination);
-					break;
-				}
+			if (CodeEvidence.hasFlowReferenceTo(program, destination)) {
+				starts.add(destination);
 			}
 		}
 		return starts;
