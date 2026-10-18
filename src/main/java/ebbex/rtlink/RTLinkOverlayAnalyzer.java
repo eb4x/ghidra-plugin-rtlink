@@ -522,11 +522,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 					return false;
 				}
 				overlayBlocks.add(new OverlayBlockInfo(page, block));
-				// Retrofit the module base record onto programs imported before it
-				// existed, so overlay switch-table recovery works there on re-analysis.
-				// DispatchStubs.resolve() then merges in the stub-only modules.
-				RTLinkProgram.recordModuleBases(program, block.getName(),
-					ModuleSegments.recordedBases(program, block, page));
 			}
 
 			return DispatchStubs.resolve(program, overlayBlocks, resolvedStubBodies, log,

@@ -121,7 +121,7 @@ final class ModuleSegments {
 	}
 
 	/** The module bases recorded for {@code block}, plus those {@code page}'s relocations name. */
-	static SortedSet<Integer> recordedBases(Program program, MemoryBlock block,
+	private static SortedSet<Integer> recordedBases(Program program, MemoryBlock block,
 			RTLinkOverlayPage page) {
 		SortedSet<Integer> bases = new TreeSet<>(page.getModuleBases());
 		List<Integer> recorded = RTLinkProgram.moduleBases(program, block);
