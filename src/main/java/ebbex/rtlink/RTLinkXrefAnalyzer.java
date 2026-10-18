@@ -304,41 +304,33 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 			return 0;
 		}
 
-		try {
-			byte[] bytes = instr.getBytes();
-			if (bytes.length < 5) {
-				return 0;
-			}
-
-			boolean isFarCall = bytes[0] == X86.OPCODE_CALLF;
-			boolean isFarJump = bytes[0] == X86.OPCODE_JMPF;
-
-			if (!isFarCall && !isFarJump) {
-				return 0;
-			}
-
-			int offset = (bytes[1] & 0xFF) | ((bytes[2] & 0xFF) << 8);
-			int segment = (bytes[3] & 0xFF) | ((bytes[4] & 0xFF) << 8);
-
-			Address targetAddr = mainSpace.getAddress(segment, offset);
-			MemoryBlock targetBlock = memory.getBlock(targetAddr);
-			if (targetBlock != null && !targetBlock.isOverlay()) {
-				RefType refType = isFarCall
-					? RefType.UNCONDITIONAL_CALL
-					: RefType.UNCONDITIONAL_JUMP;
-				refManager.addMemoryReference(instr.getAddress(), targetAddr,
-					refType, SourceType.ANALYSIS, 0);
-				if (targetBlock.isExecute() && targetBlock.isInitialized() &&
-					listing.getUndefinedDataAt(targetAddr) != null) {
-					undefinedTargets.add(targetAddr);
-				}
-				return 1;
-			}
+		byte[] bytes = X86.bytes(instr);
+		if (bytes.length < 5) {
+			return 0;
 		}
-		catch (MemoryAccessException e) {
-			// skip
+
+		boolean isFarCall = bytes[0] == X86.OPCODE_CALLF;
+		boolean isFarJump = bytes[0] == X86.OPCODE_JMPF;
+
+		if (!isFarCall && !isFarJump) {
+			return 0;
 		}
-		return 0;
+
+		Address targetAddr = mainSpace.getAddress(X86.word(bytes, 3), X86.word(bytes, 1));
+		MemoryBlock targetBlock = memory.getBlock(targetAddr);
+		if (targetBlock == null || targetBlock.isOverlay()) {
+			return 0;
+		}
+		RefType refType = isFarCall
+			? RefType.UNCONDITIONAL_CALL
+			: RefType.UNCONDITIONAL_JUMP;
+		refManager.addMemoryReference(instr.getAddress(), targetAddr,
+			refType, SourceType.ANALYSIS, 0);
+		if (targetBlock.isExecute() && targetBlock.isInitialized() &&
+			listing.getUndefinedDataAt(targetAddr) != null) {
+			undefinedTargets.add(targetAddr);
+		}
+		return 1;
 	}
 
 	/** Per-run counters for the data pass, reported separately in {@link #added}. */
@@ -525,13 +517,7 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 				return null;
 			}
 			if (cur.getMnemonicString().equals("XLAT")) {
-				byte[] bytes;
-				try {
-					bytes = cur.getBytes();
-				}
-				catch (MemoryAccessException e) {
-					return null;
-				}
+				byte[] bytes = X86.bytes(cur);
 				if (bytes.length != 2 || bytes[1] != (byte) 0xd7) {
 					return null; // bare XLAT: the DS resolution stands
 				}

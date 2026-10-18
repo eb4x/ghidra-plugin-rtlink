@@ -333,7 +333,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 			if (i + 3 >= bytes.length) {
 				return false;
 			}
-			disp = (short) ((bytes[i + 2] & 0xff) | ((bytes[i + 3] & 0xff) << 8));
+			disp = (short) X86.word(bytes, i + 2);
 		}
 		return disp < 0; // a return-slot patch stores below the frame pointer
 	}

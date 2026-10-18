@@ -1,5 +1,7 @@
 package ebbex.rtlink;
 
+import java.util.Arrays;
+
 import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.program.model.address.Address;
@@ -57,11 +59,15 @@ final class FarVectorFlows {
 
 		for (Instruction instruction : listing.getInstructions(true)) {
 			monitor.checkCancelled();
-			boolean isCall = matchesBytes(instruction, FAR_CALL_VECTOR);
-			if (!isCall && !matchesBytes(instruction, FAR_JUMP_VECTOR)) {
+			int offset = vectorOffset(instruction, FAR_CALL_VECTOR);
+			boolean isCall = offset >= 0;
+			if (!isCall) {
+				offset = vectorOffset(instruction, FAR_JUMP_VECTOR);
+			}
+			if (offset < 0) {
 				continue;
 			}
-			Address target = farPointerAt(program, instruction, vectorOffset(instruction));
+			Address target = farPointerAt(program, instruction, offset);
 			if (target == null) {
 				continue;
 			}
@@ -96,15 +102,14 @@ final class FarVectorFlows {
 		return resolved;
 	}
 
-	/** The {@code disp16} of a {@code JMPF/CALLF CS:[imm16]}, read from its bytes. */
-	private static int vectorOffset(Instruction instruction) {
-		try {
-			byte[] bytes = instruction.getBytes();
-			return (bytes[3] & 0xff) | ((bytes[4] & 0xff) << 8);
-		}
-		catch (MemoryAccessException e) {
+	/** The {@code disp16} after {@code pattern} if the instruction is exactly that plus a disp16, else -1. */
+	private static int vectorOffset(Instruction instruction, byte[] pattern) {
+		byte[] bytes = X86.bytes(instruction);
+		if (bytes.length != pattern.length + 2 ||
+			!Arrays.equals(bytes, 0, pattern.length, pattern, 0, pattern.length)) {
 			return -1;
 		}
+		return X86.word(bytes, pattern.length);
 	}
 
 	/**
@@ -112,7 +117,7 @@ final class FarVectorFlows {
 	 * not initialized, not mapped, or does not point at executable memory.
 	 */
 	private static Address farPointerAt(Program program, Instruction instruction, int offset) {
-		if (offset < 0 || !(instruction.getMinAddress() instanceof SegmentedAddress at)) {
+		if (!(instruction.getMinAddress() instanceof SegmentedAddress at)) {
 			return null;
 		}
 		SegmentedAddressSpace space = (SegmentedAddressSpace) at.getAddressSpace();
@@ -148,24 +153,5 @@ final class FarVectorFlows {
 			}
 		}
 		return false;
-	}
-
-	/** True when the instruction's first bytes are exactly {@code pattern}. */
-	private static boolean matchesBytes(Instruction instruction, byte[] pattern) {
-		try {
-			byte[] bytes = instruction.getBytes();
-			if (bytes.length != pattern.length + 2) {
-				return false; // pattern plus its disp16
-			}
-			for (int i = 0; i < pattern.length; i++) {
-				if (bytes[i] != pattern[i]) {
-					return false;
-				}
-			}
-			return true;
-		}
-		catch (MemoryAccessException e) {
-			return false;
-		}
 	}
 }

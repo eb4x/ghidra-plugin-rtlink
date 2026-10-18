@@ -345,16 +345,9 @@ final class FormatterFsm {
 	 * table the lookup reads, so an overridden {@code XLAT} must not match the FSM idiom.
 	 */
 	private static boolean isPlainXlat(Instruction instruction) {
-		if (!"XLAT".equals(instruction.getMnemonicString())) {
-			return false;
-		}
-		try {
-			byte[] bytes = instruction.getBytes();
-			return bytes.length == 1 && bytes[0] == (byte) 0xd7;
-		}
-		catch (MemoryAccessException e) {
-			return false;
-		}
+		byte[] bytes = X86.bytes(instruction);
+		return "XLAT".equals(instruction.getMnemonicString()) && bytes.length == 1 &&
+			bytes[0] == (byte) 0xd7;
 	}
 
 	/**

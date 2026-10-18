@@ -1,8 +1,9 @@
 package ebbex.rtlink;
 
+import java.util.Arrays;
+
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.Instruction;
-import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.scalar.Scalar;
 
@@ -31,22 +32,13 @@ final class CsDispatch {
 		if (!instruction.getFlowType().isComputed() || !instruction.getFlowType().isJump()) {
 			return -1;
 		}
-		byte[] bytes;
-		try {
-			bytes = instruction.getBytes();
-		}
-		catch (MemoryAccessException e) {
+		byte[] bytes = X86.bytes(instruction);
+		if (bytes.length != DISPATCH_LENGTH ||
+			!Arrays.equals(bytes, 0, DISPATCH_OPCODE.length, DISPATCH_OPCODE, 0,
+				DISPATCH_OPCODE.length)) {
 			return -1;
 		}
-		if (bytes.length != DISPATCH_LENGTH) {
-			return -1;
-		}
-		for (int i = 0; i < DISPATCH_OPCODE.length; i++) {
-			if (bytes[i] != DISPATCH_OPCODE[i]) {
-				return -1;
-			}
-		}
-		return (bytes[3] & 0xff) | ((bytes[4] & 0xff) << 8);
+		return X86.word(bytes, 3);
 	}
 
 	/**

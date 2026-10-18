@@ -192,13 +192,7 @@ final class DataSwitchTables {
 		if (!dispatch.getFlowType().isComputed() || !dispatch.getFlowType().isJump()) {
 			return null;
 		}
-		byte[] bytes;
-		try {
-			bytes = dispatch.getBytes();
-		}
-		catch (MemoryAccessException e) {
-			return null;
-		}
+		byte[] bytes = X86.bytes(dispatch);
 		// FF /4 with mod=00 and no SIB/disp16: exactly [BX], [SI], [DI] or [BX+SI]-style.
 		if (bytes.length != 2 || bytes[0] != DATA_DISPATCH_OPCODE) {
 			return null;

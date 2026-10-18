@@ -339,13 +339,7 @@ class EmulatedFloatPatcher {
 	 * assumption about how the operand happens to be modelled.
 	 */
 	static int emulatorVector(Instruction insn) {
-		byte[] bytes;
-		try {
-			bytes = insn.getBytes();
-		}
-		catch (MemoryAccessException e) {
-			return -1;
-		}
+		byte[] bytes = X86.bytes(insn);
 		if (bytes.length != 2 || bytes[0] != OPCODE_INT) {
 			return -1;
 		}
@@ -360,18 +354,12 @@ class EmulatedFloatPatcher {
 	private static int displacementLength(Memory memory, Address addr)
 			throws MemoryAccessException {
 		int modrm = Byte.toUnsignedInt(memory.getByte(addr));
-		int mod = modrm >> 6;
-		int rm = modrm & 0x7;
-		switch (mod) {
-			case 0:
-				return rm == 0x6 ? 2 : 0; // [disp16] is the only mod-0 form with a displacement
-			case 1:
-				return 1;
-			case 2:
-				return 2;
-			default:
-				return 0; // mod 3: register operand, no memory reference
-		}
+		return switch (modrm >> 6) {
+			case 0 -> (modrm & 0x7) == 0x6 ? 2 : 0; // [disp16]: the only mod-0 form with one
+			case 1 -> 1;
+			case 2 -> 2;
+			default -> 0; // mod 3: register operand, no memory reference
+		};
 	}
 
 }

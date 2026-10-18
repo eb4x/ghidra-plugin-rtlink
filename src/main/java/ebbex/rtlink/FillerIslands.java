@@ -230,17 +230,12 @@ final class FillerIslands {
 
 	/** True when every byte of {@code instruction} is the fill byte. */
 	private static boolean isFillerInstruction(Instruction instruction) {
-		try {
-			byte[] bytes = instruction.getBytes();
-			for (byte value : bytes) {
-				if (value != FILLER_BYTE) {
-					return false;
-				}
+		byte[] bytes = X86.bytes(instruction);
+		for (byte value : bytes) {
+			if (value != FILLER_BYTE) {
+				return false;
 			}
-			return bytes.length > 0;
 		}
-		catch (MemoryAccessException e) {
-			return false;
-		}
+		return bytes.length > 0;
 	}
 }

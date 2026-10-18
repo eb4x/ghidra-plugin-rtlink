@@ -21,7 +21,6 @@ import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.symbol.FlowType;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
@@ -337,7 +336,7 @@ final class NonReturningCalls {
 	 * the operands Ghidra happens to display.
 	 */
 	private static boolean isDosExit(Program program, Instruction instruction) {
-		if (!hasBytes(instruction, 0xcd, 0x21)) {
+		if (!startsWith(X86.bytes(instruction), 0xcd, 0x21)) {
 			return false;
 		}
 		Register ah = program.getRegister("AH");
@@ -352,34 +351,25 @@ final class NonReturningCalls {
 				return false;
 			}
 			if (X86.writes(previous, ah)) {
-				return hasBytes(previous, 0xb4, 0x4c) ||
-					(hasBytes(previous, 0xb8) && byteAt(previous, 2) == 0x4c);
+				byte[] bytes = X86.bytes(previous);
+				return startsWith(bytes, 0xb4, 0x4c) ||
+					(startsWith(bytes, 0xb8) && bytes.length > 2 && bytes[2] == 0x4c);
 			}
 			at = previous;
 		}
 		return false;
 	}
 
-	/** True if {@code instruction}'s bytes start with {@code expected}. */
-	private static boolean hasBytes(Instruction instruction, int... expected) {
-		if (instruction.getLength() < expected.length) {
+	/** True if {@code bytes} start with {@code expected}. */
+	private static boolean startsWith(byte[] bytes, int... expected) {
+		if (bytes.length < expected.length) {
 			return false;
 		}
 		for (int i = 0; i < expected.length; i++) {
-			if (byteAt(instruction, i) != expected[i]) {
+			if ((bytes[i] & 0xff) != expected[i]) {
 				return false;
 			}
 		}
 		return true;
-	}
-
-	/** The unsigned byte at {@code offset} into {@code instruction}, or -1 past its end. */
-	private static int byteAt(Instruction instruction, int offset) {
-		try {
-			return offset < instruction.getLength() ? instruction.getByte(offset) & 0xff : -1;
-		}
-		catch (MemoryAccessException e) {
-			return -1;
-		}
 	}
 }
