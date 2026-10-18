@@ -81,6 +81,46 @@ public class EmulatedFloatAnalyzerTest extends AbstractGenericTest {
 		}
 	}
 
+	/**
+	 * {@code INT 3Ch} under each segment: bits 7-6 of the byte after it pick the prefix, and
+	 * the ESC is that byte with both set again. {@code FLD qword ptr <seg>:[BX]} = {@code DD 07}.
+	 */
+	@Test
+	public void testSegmentOverrideForms() throws Exception {
+		int[][] forms = { // byte after INT 3Ch, expected prefix
+			{ 0xdd, 0x26 }, { 0x5d, 0x36 }, { 0x9d, 0x2e }, { 0x1d, 0x3e } };
+		for (int[] form : forms) {
+			ProgramBuilder builder = program(String.format("cd 3c %02x 07 c3", form[0]));
+			try {
+				Program program = builder.getProgram();
+				analyze(program, new EmulatedFloatAnalyzer());
+				byte[] bytes = new byte[4];
+				program.getMemory().getBytes(builder.addr("0x1000:0x0000"), bytes);
+				assertArrayEquals(String.format("INT 3Ch form %02x", form[0]),
+					new byte[] { (byte) 0x9b, (byte) form[1], (byte) 0xdd, 0x07 }, bytes);
+			}
+			finally {
+				builder.dispose();
+			}
+		}
+	}
+
+	/** A byte after INT 3Ch that is no ESC under any segment leaves the INT alone. */
+	@Test
+	public void testUnknownSegmentOverrideFormIsLeftAlone() throws Exception {
+		ProgramBuilder builder = program("cd 3c 00 07 c3");
+		try {
+			Program program = builder.getProgram();
+			analyze(program, new EmulatedFloatAnalyzer());
+			byte[] bytes = new byte[2];
+			program.getMemory().getBytes(builder.addr("0x1000:0x0000"), bytes);
+			assertArrayEquals(new byte[] { (byte) 0xcd, 0x3c }, bytes);
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
 	@Test
 	public void testSweepKeepsMarksOutsideTheRewrite() throws Exception {
 		ProgramBuilder builder = program(OUT_OF_PHASE);

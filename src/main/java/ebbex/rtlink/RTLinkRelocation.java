@@ -16,9 +16,10 @@ import ghidra.util.exception.DuplicateNameException;
  * </pre>
  *
  * The patched word lives at page-linear byte offset {@code seg_index * 16 + offset}
- * (see {@link #getSiteOffset()}). The runtime fixup loop adds the same load delta to
- * the unrelocated segment word at every site, regardless of seg_index — seg_index
- * only relocates the site address, it never selects a different fixup value.
+ * (see {@link #getSiteOffset()}). Within one list, the runtime fixup loop adds the same
+ * value to the unrelocated segment word at every site, regardless of seg_index — seg_index
+ * only relocates the site address, it never selects a different fixup value. Which value
+ * depends on the list: the load delta for the first, the page frame for the second.
  */
 public class RTLinkRelocation implements StructConverter {
 

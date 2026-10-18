@@ -9,6 +9,7 @@ import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
 import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.importer.MessageLog;
+import ghidra.framework.model.TransactionInfo;
 import ghidra.framework.options.Options;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Program;
@@ -72,11 +73,13 @@ public class RTLinkLibrarySignatureAnalyzer extends AbstractAnalyzer {
 		if (library.isEmpty()) {
 			return true;
 		}
-		long txId = program.getCurrentTransactionInfo().getID();
-		if (txId == lastTxId) {
-			return true; // the functions it makes re-trigger byte analysis; once per txn
+		TransactionInfo tx = program.getCurrentTransactionInfo();
+		if (tx != null) {
+			if (tx.getID() == lastTxId) {
+				return true; // the functions it makes re-trigger byte analysis; once per txn
+			}
+			lastTxId = tx.getID();
 		}
-		lastTxId = txId;
 
 		Path path = Path.of(library);
 		List<OmfLibrary.Module> modules;

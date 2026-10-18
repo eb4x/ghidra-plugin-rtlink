@@ -412,8 +412,9 @@ by the JMPF segment: stubs carry the unrelocated `0000`, trampolines a real segm
 convert each into a thunk of its target; left as plain functions they wreck decompilation at
 every call site (a stub has no `RET`).
 
-**INT 3Fh stubs** (`CD 3F` + overlay id + offset) are the older Microsoft-style form.
-`scanForInt3fStubs` handles them; no binary in the corpus uses them.
+**INT 3Fh stubs** (`CD 3F` + overlay id + offset) are the older Microsoft-style form. No
+binary in the corpus uses them, and their layout was never confirmed, so nothing handles
+them (a speculative scan was removed in 0.8.5).
 
 ### Smart vectoring — the return-address resolver
 
@@ -553,9 +554,10 @@ both.
 
 ## How our analyzers model this
 
-Six analyzers, each pinned to a different slot in the auto-analysis pipeline (an analyzer
-registers exactly one `AnalyzerType` + `AnalysisPriority`, which is why this is six classes
-and not one). All live in `src/main/java/ebbex/rtlink/`.
+Seven analyzers, each pinned to a different slot in the auto-analysis pipeline (an analyzer
+registers exactly one `AnalyzerType` + `AnalysisPriority`, which is why this is seven
+classes and not one). All live in `src/main/java/ebbex/rtlink/`; `docs/analyzers.md` has the
+detail.
 
 | Analyzer | Type / priority | Does |
 |---|---|---|
@@ -564,7 +566,8 @@ and not one). All live in `src/main/java/ebbex/rtlink/`.
 | `RTLinkSwitchOverrideAnalyzer` | INSTRUCTION, `FUNCTION_ANALYSIS.after()` | Writes decompiler jump-table overrides for those tables, from the dispatches the table pass marked and the references it laid down. Cannot merge with the above: override symbols need a defined `FunctionDB` to hang a namespace off, which does not exist that early |
 | `RTLinkXrefAnalyzer` | INSTRUCTION, `REFERENCE_ANALYSIS.after()` | The DS-relative data references, overlay far call/jump xrefs, and address-of immediates that Ghidra's own passes decline to make on 16-bit segmented programs |
 | `RTLinkFlowRepairAnalyzer` | BYTE, `LOW_PRIORITY.after()` | Recovers buried code once every other pass has planted its flows and every conflict is bookmarked — see [Buried code](#buried-code-and-why-nothing-may-be-left-undisassembled) |
-| `RTLinkDispatcherJumpAnalyzer` | BYTE, `DATA_ANALYSIS.before()` | Neutralizes the bogus current-segment computed jump the stock constant-reference pass plants on the overlay VM dispatcher trampoline: deletes only the same-block refs and the junk they caused, and leaves the `JMP` honestly unresolved so the string pass reclaims the text it destroyed |
+| `RTLinkDispatcherJumpAnalyzer` | BYTE, `DATA_ANALYSIS.before()` | Resolves the VM nucleus' constant-pair dispatch (`MOV DX,body ; … ; JMP DX`) to its `CS:imm` entry bodies, deleting the computed-jump refs stock resolved against the wrong segment and the junk they seeded |
+| `RTLinkLibrarySignatureAnalyzer` | BYTE, `LOW_PRIORITY.after().after()` | Off until given the user's `RTLUTILS.LIB`; then names the vendor library's publics in resident code (see `docs/vendor-signatures.md`) |
 
 ### Modeling decisions worth knowing
 
@@ -961,7 +964,7 @@ Three interrupts carry more than the `ESC n` in their number:
 | call | is | patch |
 |---|---|---|
 | `INT 34h`–`INT 3Bh` | `ESC 0`–`ESC 7` (`D8`–`DF`), modrm follows | `9B D8+n` |
-| `INT 3Ch` | an ESC with a **segment override**; bit 7 of the next byte picks it — set (`D8`–`DF`) = `ES:`, clear (`58`–`5F`) = `SS:` and the ESC is that byte with bit 7 restored | `9B 26` / `9B 36` (+ restore the opcode) |
+| `INT 3Ch` | an ESC with a **segment override**; bits 7–6 of the next byte pick it — `11` (`D8`–`DF`) = `ES:`, `01` (`58`–`5F`) = `SS:`, `10` (`98`–`9F`) = `CS:`, `00` (`18`–`1F`) = `DS:` — and the ESC is that byte with both bits set again (the linker's FJxRQQ fixups add `40h`/`80h`/`C0h` to it, carry discarded; only ES: and SS: occur in the corpus) | `9B 26` / `9B 36` / `9B 2E` / `9B 3E` (+ restore the opcode) |
 | `INT 3Dh` | `FWAIT` — no operand bytes | `9B 90` |
 
 Neither segment form is a guess. Every `ES:` site is preceded by `LES SI,[BP+8]` or

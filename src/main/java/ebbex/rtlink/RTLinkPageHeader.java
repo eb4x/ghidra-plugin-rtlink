@@ -51,13 +51,12 @@ import ghidra.util.exception.DuplicateNameException;
  * lands on a paragraph boundary (4 entries × 4 bytes = 16). See {@link #getRelocOffset()}
  * and friends.
  * <p>
- * <b>Only the first list is applied.</b> The other two are parsed and exposed (see
- * {@link RTLinkOverlayPage#getSecondRelocations()}) but never written to memory, because
- * they do not take the image-base delta. The runtime applies the first list at initial
- * load; the second and third are driven only from the page-move path, and their addend is
- * a <i>difference</i> against a runtime structure rather than the load delta. Nothing is
- * added to those sites at image-base time, so leaving them alone is what a static image
- * should do. {@code reloc_count_3} is zero on all 281 pages across VICEROY, NEBULAR and
+ * <b>The first two lists are applied, with different addends; the third never is.</b> The
+ * runtime applies the first list at initial load, adding the image-base delta. The second
+ * is driven from the page-move path and keeps <i>word = file word + current frame</i>, so
+ * it is applied statically with the overlay block's base segment as the frame (see
+ * {@link RTLinkOverlayPage#getSecondRelocations()}). {@code reloc_count_3} is zero on all
+ * 281 pages across VICEROY, NEBULAR and
  * ROE2MAIN — and it has since been established <b>by construction</b> (RTLink/Plus 6.10 +
  * a purpose-built probe; see {@code ~/dosbox/RTLTEST/HANDOFF.md}) that the 6.10 linker
  * cannot emit a list-3 entry at all: for a resident site holding a paged symbol's segment

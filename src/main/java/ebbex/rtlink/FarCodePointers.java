@@ -20,6 +20,7 @@ import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
+import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.SourceType;
@@ -155,6 +156,9 @@ final class FarCodePointers {
 				listing.getDefinedDataContaining(target) != null) {
 				return false; // the bytes are already something else: no claim on them
 			}
+			if (usedAsData(program, target, source.getMinAddress())) {
+				return false; // a far pointer to CS-resident data: an EXEC block, a buffer
+			}
 			new DisassembleCommand(target, null, true).applyTo(program, monitor);
 			if (listing.getInstructionAt(target) == null) {
 				return false;
@@ -165,6 +169,23 @@ final class FarCodePointers {
 			changed |= new CreateFunctionCmd(target).applyTo(program, monitor);
 		}
 		return changed;
+	}
+
+	/**
+	 * True if anything but the pointer itself reads, writes or points at {@code target} as
+	 * data. The same {@code CS:imm} pair builds a far pointer to a buffer or an EXEC parameter
+	 * block as to a handler, and the bytes of such data are what the program's own loads and
+	 * stores reference; a handler's entry is only ever jumped or called to.
+	 */
+	private static boolean usedAsData(Program program, Address target, Address pointer) {
+		for (Reference reference : program.getReferenceManager().getReferencesTo(target)) {
+			RefType type = reference.getReferenceType();
+			if (!reference.getFromAddress().equals(pointer) &&
+				(type.isRead() || type.isWrite() || type.isData())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static boolean isJumpTarget(Program program, Address address) {
@@ -235,10 +256,41 @@ final class FarCodePointers {
 			int op = bytes[i] & 0xff;
 			if (!apply(instruction, bytes, i, op, segment)) {
 				invalidateWrites(instruction);
+				if (storesToMemory(instruction)) {
+					slots.clear(); // STOSW, a byte MOV, ADD [m],..: a tracked word may be gone
+				}
 			}
+			forgetSlotsAddressedThrough(instruction);
 			if (!instruction.getFlowType().hasFallthrough()) {
 				reset();
 			}
+		}
+
+		/**
+		 * A slot is keyed by its addressing mode, not by an address, so once {@code BX},
+		 * {@code BP}, {@code SI} or {@code DI} changes, the slots addressed through it name
+		 * other words: {@code MOV [DI],imm ; ADD DI,4 ; MOV [DI+2],CS} is not a pointer.
+		 */
+		private void forgetSlotsAddressedThrough(Instruction instruction) {
+			for (Object result : instruction.getResultObjects()) {
+				if (!(result instanceof Register written)) {
+					continue;
+				}
+				for (int reg : ADDRESS_REGISTERS) {
+					if (overlaps(written, registers[reg])) {
+						slots.keySet().removeIf(slot -> addressesThrough(slot, reg));
+					}
+				}
+			}
+		}
+
+		private static boolean storesToMemory(Instruction instruction) {
+			for (PcodeOp op : instruction.getPcode()) {
+				if (op.getOpcode() == PcodeOp.STORE) {
+					return true;
+				}
+			}
+			return false;
 		}
 
 		/** Model the instructions that move CS or constants; false for anything else. */
@@ -500,6 +552,29 @@ final class FarCodePointers {
 
 	private static boolean overlaps(Register a, Register b) {
 		return a.contains(b) || b.contains(a);
+	}
+
+	private static final int BX = 3;
+	private static final int BP = 5;
+	private static final int SI = 6;
+	private static final int DI = 7;
+
+	/** The registers a 16-bit ModRM can address through. */
+	private static final int[] ADDRESS_REGISTERS = { BX, BP, SI, DI };
+
+	/** True if {@code slot}'s 16-bit ModRM r/m field addresses through register {@code reg}. */
+	private static boolean addressesThrough(Slot slot, int reg) {
+		return switch (slot.base()) {
+			case 0 -> reg == BX || reg == SI; // [BX+SI]
+			case 1 -> reg == BX || reg == DI; // [BX+DI]
+			case 2 -> reg == BP || reg == SI; // [BP+SI]
+			case 3 -> reg == BP || reg == DI; // [BP+DI]
+			case 4 -> reg == SI;
+			case 5 -> reg == DI;
+			case 6 -> reg == BP;
+			case 7 -> reg == BX;
+			default -> false; // DIRECT
+		};
 	}
 
 	/** The memory word a 16-bit ModRM at {@code b[m]} addresses. */

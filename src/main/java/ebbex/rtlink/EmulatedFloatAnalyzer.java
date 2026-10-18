@@ -25,7 +25,7 @@ import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Rewrites the DOS floating-point emulator's {@code INT 34h}-{@code INT 3Ch} calls into the
+ * Rewrites the DOS floating-point emulator's {@code INT 34h}-{@code INT 3Dh} calls into the
  * x87 instructions they stand for, so 16-bit float code disassembles.
  * <p>
  * See {@link EmulatedFloatPatcher} for the encoding, the evidence for it, and why the
@@ -49,7 +49,7 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 
 	private static final String NAME = "DOS Emulated Floating Point";
 	private static final String DESCRIPTION =
-		"Rewrites the Microsoft/Borland floating-point emulator's INT 34h-3Ch calls into " +
+		"Rewrites the Microsoft/Borland floating-point emulator's INT 34h-3Dh calls into " +
 			"the x87 instructions they encode (CD 3n modrm -> 9B D8+n modrm), the same " +
 			"patch the DOS runtime applies when a coprocessor is present, so the code " +
 			"disassembles as floating point instead of derailing on the operand bytes.";

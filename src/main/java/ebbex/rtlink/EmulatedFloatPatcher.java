@@ -51,8 +51,6 @@ class EmulatedFloatPatcher {
 	private static final byte OPCODE_INT = (byte) 0xCD;
 	private static final byte OPCODE_WAIT = (byte) 0x9B;
 	private static final byte OPCODE_NOP = (byte) 0x90;
-	private static final byte PREFIX_ES = (byte) 0x26;
-	private static final byte PREFIX_SS = (byte) 0x36;
 
 	/** {@code INT 34h}..{@code INT 3Bh} stand for {@code ESC 0}..{@code ESC 7} = D8..DF. */
 	private static final int FIRST_ESC_INT = 0x34;
@@ -62,21 +60,38 @@ class EmulatedFloatPatcher {
 	/**
 	 * {@code INT 3Ch} stands for an ESC carrying a <b>segment override</b>: the real
 	 * instruction is {@code WAIT; <seg>: ESC...}, and the ESC opcode is the byte after the
-	 * INT rather than being encoded in the interrupt number. <b>Bit 7 of that byte selects
-	 * the segment</b>:
+	 * INT rather than being encoded in the interrupt number. <b>Bits 7-6 of that byte select
+	 * the segment</b>, and the ESC is the byte with both set again ({@code 11011xxx}):
 	 * <ul>
-	 * <li>set ({@code D8}-{@code DF}) — {@code ES:}; the opcode is already the ESC.
-	 * Every such site is preceded by {@code LES SI,[BP+8]} or {@code MOV ES,[..]}: the
-	 * program has just loaded a far pointer and is dereferencing it.</li>
-	 * <li>clear ({@code 58}-{@code 5F}) — {@code SS:}; the opcode is the ESC with bit 7
-	 * cleared, and restoring it is part of the patch. Every one of ROE2MAIN's 154 such
+	 * <li>{@code 11} ({@code D8}-{@code DF}) — {@code ES:}; the byte already is the ESC.
+	 * Every such site in ROE2MAIN is preceded by {@code LES SI,[BP+8]} or
+	 * {@code MOV ES,[..]}: the program has just loaded a far pointer and dereferences it.</li>
+	 * <li>{@code 01} ({@code 58}-{@code 5F}) — {@code SS:}. Every one of ROE2MAIN's 154 such
 	 * sites has modrm {@code rm=7}, i.e. <b>{@code [BX]}</b> — and the code before it is
 	 * always {@code SUB SP,8; MOV BX,SP}. {@code [BX]} defaults to {@code DS}, so
 	 * addressing that stack temp <em>requires</em> the {@code SS:} override. Restored they
 	 * read {@code FLD/FST/FSTP qword ptr [BX]} — a double being passed by value.</li>
+	 * <li>{@code 10} ({@code 98}-{@code 9F}) — {@code CS:}.</li>
+	 * <li>{@code 00} ({@code 18}-{@code 1F}) — {@code DS:}.</li>
 	 * </ul>
+	 * The encoding is the linker's: Microsoft's emulator fixups turn {@code 9B <seg>} into
+	 * {@code CD 3C} (FIERQQ, FISRQQ, FICRQQ, FIARQQ) and add {@code 80h}, {@code C0h} or
+	 * {@code 40h} to the ESC byte (FJSRQQ, FJCRQQ, FJARQQ), carry discarded — so only the
+	 * top two bits change. The CS: and DS: forms follow from the fixup values (OS/2 Museum,
+	 * "8087 Emulation on 8086 Systems"; Wine's INT 3Ch notes agree) and have not been seen
+	 * in the corpus.
 	 */
 	private static final int SEGMENT_OVERRIDE_INT = 0x3C;
+
+	/** The prefix for each value of bits 7-6 of the INT 3Ch byte: DS, SS, CS, ES. */
+	private static final byte[] SEGMENT_PREFIXES = { 0x3E, 0x36, 0x2E, 0x26 };
+
+	/** Bits 5-3 of an ESC opcode ({@code 11011xxx}), which every INT 3Ch byte keeps. */
+	private static final int ESC_LOW_MASK = 0x38;
+	private static final int ESC_LOW_BITS = 0x18;
+
+	/** The ESC opcode's top bits, which the segment selector replaced. */
+	private static final int ESC_SEGMENT_BITS = 0xC0;
 
 	/**
 	 * {@code INT 3Dh} is {@code FWAIT} — it takes no operand bytes (the byte after it is
@@ -86,11 +101,6 @@ class EmulatedFloatPatcher {
 	 * Patches two bytes to two: {@code WAIT} + {@code NOP}.
 	 */
 	private static final int WAIT_INT = 0x3D;
-
-	/** ESC opcodes with bit 7 cleared, as the {@code SS:} form of {@code INT 3Ch} carries them. */
-	private static final int FIRST_MASKED_ESC = 0x58;
-	private static final int LAST_MASKED_ESC = 0x5F;
-	private static final int ESC_HIGH_BIT = 0x80;
 
 	/**
 	 * Below this many emulator calls a program is not treated as float-emulated, and
@@ -216,7 +226,7 @@ class EmulatedFloatPatcher {
 			byte opcode;
 			int span;
 			Address escAddr = addr.add(2);
-			byte restoredEsc = 0;
+			int storedEsc = -1; // the INT 3Ch byte, when the rewrite changes it
 
 			if (vector <= LAST_ESC_INT) {
 				// CD 3n modrm...  ->  9B D8+n modrm...   (WAIT + ESC; operands untouched)
@@ -229,20 +239,16 @@ class EmulatedFloatPatcher {
 				span = 2;
 			}
 			else {
-				// CD 3C <esc> modrm...  ->  9B <seg> <ESC> modrm...
-				// Bit 7 of the byte after the INT picks the segment: set = ES: and the byte
-				// already is the ESC; clear = SS: and the ESC is the byte with bit 7 put
-				// back. See SEGMENT_OVERRIDE_INT.
-				int esc = Byte.toUnsignedInt(memory.getByte(escAddr));
-				if (esc >= FIRST_ESC_OPCODE && esc <= FIRST_ESC_OPCODE + 7) {
-					opcode = PREFIX_ES;
+				// CD 3C <b> modrm...  ->  9B <seg> <ESC> modrm...
+				// Bits 7-6 of <b> pick the segment, and the ESC is <b> with both put back.
+				// See SEGMENT_OVERRIDE_INT.
+				int b = Byte.toUnsignedInt(memory.getByte(escAddr));
+				if ((b & ESC_LOW_MASK) != ESC_LOW_BITS) {
+					return null; // not an ESC under any segment; leave it as an INT
 				}
-				else if (esc >= FIRST_MASKED_ESC && esc <= LAST_MASKED_ESC) {
-					opcode = PREFIX_SS;
-					restoredEsc = (byte) (esc | ESC_HIGH_BIT);
-				}
-				else {
-					return null; // not a form this understands; leave it as an INT
+				opcode = SEGMENT_PREFIXES[b >> 6];
+				if ((b | ESC_SEGMENT_BITS) != b) {
+					storedEsc = b;
 				}
 				span = 4 + displacementLength(memory, addr.add(3));
 			}
@@ -268,16 +274,14 @@ class EmulatedFloatPatcher {
 			program.getListing().clearCodeUnits(addr, last, false);
 
 			// Keep the bytes the rewrite overwrites, for the relocation record — three of
-			// them in the SS: form, which also restores the ESC opcode's high bit.
-			byte[] original = restoredEsc != 0
-					? new byte[] { OPCODE_INT, (byte) vector,
-						(byte) (restoredEsc & ~ESC_HIGH_BIT) }
+			// them in the DS:, SS: and CS: forms, which also restore the ESC opcode's top bits.
+			byte[] original = storedEsc >= 0
+					? new byte[] { OPCODE_INT, (byte) vector, (byte) storedEsc }
 					: new byte[] { OPCODE_INT, (byte) vector };
 			memory.setByte(addr, OPCODE_WAIT);
 			memory.setByte(addr.add(1), opcode);
-			if (restoredEsc != 0) {
-				// SS: form only — the ESC opcode is stored with bit 7 cleared, so put it back.
-				memory.setByte(escAddr, restoredEsc);
+			if (storedEsc >= 0) {
+				memory.setByte(escAddr, (byte) (storedEsc | ESC_SEGMENT_BITS));
 			}
 
 			// Record the rewrite, exactly as RTLinkOverlayAnalyzer records the relocations

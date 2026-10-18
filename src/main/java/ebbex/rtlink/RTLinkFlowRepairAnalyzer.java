@@ -16,6 +16,7 @@ import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.PseudoDisassembler;
 import ghidra.app.util.PseudoInstruction;
 import ghidra.app.util.importer.MessageLog;
+import ghidra.framework.model.TransactionInfo;
 import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressIterator;
@@ -173,8 +174,8 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 	public RTLinkFlowRepairAnalyzer() {
 		super(NAME, DESCRIPTION, AnalyzerType.BYTE_ANALYZER);
 		// Dead last: every pass that disassembles, plants flows or stamps conflict
-		// bookmarks — including DecompilerSwitchAnalyzer at CODE_ANALYSIS and all
-		// four RTLink analyzers — has finished its first wave by then.
+		// bookmarks — including DecompilerSwitchAnalyzer at CODE_ANALYSIS and every other
+		// RTLink analyzer but the library signatures — has finished its first wave by then.
 		setPriority(AnalysisPriority.LOW_PRIORITY.after());
 		setDefaultEnablement(true);
 		setSupportsOneTimeAnalysis();
@@ -191,11 +192,13 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		if (!RTLinkOverlayAnalyzer.isOverlayAnalyzed(program)) {
 			return false; // canAnalyze accepts any segmented MZ; these repairs are RTLink's
 		}
-		long txId = program.getCurrentTransactionInfo().getID();
-		if (txId == lastTxId) {
-			return true; // our own repairs re-trigger byte analysis; run once per txn
+		TransactionInfo tx = program.getCurrentTransactionInfo();
+		if (tx != null) {
+			if (tx.getID() == lastTxId) {
+				return true; // our own repairs re-trigger byte analysis; run once per txn
+			}
+			lastTxId = tx.getID();
 		}
-		lastTxId = txId;
 
 		int fallthroughs = repairRelocationFallthroughs(program, monitor);
 		int vectors = resolveFarVectorFlows(program, monitor);
@@ -1006,7 +1009,8 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 			monitor.checkCancelled();
 			Bookmark bookmark = iterator.next();
 			Address at = bookmark.getAddress();
-			if (listing.getInstructionContaining(at) == null &&
+			if (Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory()) &&
+				listing.getInstructionContaining(at) == null &&
 				listing.getDefinedDataContaining(at) == null &&
 				fillerIsland(program, at) != null) {
 				fossils.add(bookmark);
@@ -1018,8 +1022,8 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
-	 * The maximal run of zero bytes containing {@code seed}, or null when that run is
-	 * too short to be fill (or too long to be worth walking).
+	 * The maximal run of zero bytes containing {@code seed}, or null when {@code seed} is
+	 * not itself zero or that run is too short to be fill (or too long to be worth walking).
 	 */
 	private static AddressSetView fillerIsland(Program program, Address seed) {
 		Memory memory = program.getMemory();
@@ -1030,6 +1034,9 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		Address low = seed;
 		Address high = seed;
 		try {
+			if (memory.getByte(seed) != FILLER_BYTE) {
+				return null; // next to fill is not in it
+			}
 			for (int i = 0; i < FILLER_MAX_ISLAND; i++) {
 				Address previous = low.previous();
 				if (previous == null || !block.contains(previous) ||

@@ -23,6 +23,7 @@ import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.FileBytesProvider;
 import ghidra.app.util.bin.format.mz.*;
 import ghidra.app.util.importer.MessageLog;
+import ghidra.framework.model.TransactionInfo;
 import ghidra.app.util.opinion.MzLoader;
 import ghidra.framework.options.Options;
 import ghidra.program.database.function.OverlappingFunctionException;
@@ -189,11 +190,13 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	@Override
 	public boolean added(Program program, AddressSetView set, TaskMonitor monitor,
 			MessageLog log) throws CancelledException {
-		long txId = program.getCurrentTransactionInfo().getID();
-		if (txId == lastTxId) {
-			return true;
+		TransactionInfo tx = program.getCurrentTransactionInfo();
+		if (tx != null) {
+			if (tx.getID() == lastTxId) {
+				return true;
+			}
+			lastTxId = tx.getID();
 		}
-		lastTxId = txId;
 
 		if (isOverlayAnalyzed(program)) {
 			// Overlays were processed by a prior run; still retrofit what can be repaired
@@ -344,6 +347,21 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	 */
 	private static int nameWidth(int maxRecordIndex) {
 		return Math.max(2, String.valueOf(maxRecordIndex).length());
+	}
+
+	/**
+	 * The name width for a program, from the last record that gets an overlay block — the
+	 * same record {@link #maxRecordIndex} finds among the blocks, so header blocks, overlay
+	 * blocks and stub labels never disagree when a trailing record has no code.
+	 */
+	private static int nameWidth(List<RTLinkOverlayPage> pages, long fileSize) {
+		int max = 0;
+		for (RTLinkOverlayPage page : pages) {
+			if (page.getCodeSize() > 0 && page.getCodeFileOffset() < fileSize) {
+				max = Math.max(max, page.getPageIndex());
+			}
+		}
+		return nameWidth(max);
 	}
 
 	/** The largest record index among {@code overlayBlocks}. */
@@ -738,7 +756,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
 		Address overlayBase = space.getAddress(overlayBaseSegment(program), 0);
 		long fileSize = fileBytes.getSize();
-		int width = nameWidth(pages.get(pages.size() - 1).getPageIndex());
+		int width = nameWidth(pages, fileBytes.getSize());
 
 		for (RTLinkOverlayPage page : pages) {
 			monitor.checkCancelled();
@@ -1110,7 +1128,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 		int jmpfStubs = scanForJmpfStubs(program, overlayBlocks, dispatchers,
 			overlayEntryPoints, pendingThunks, stubModuleBases, log, monitor);
-		int int3fStubs = 0;
 
 		// The stubs are the only place a module carrying no relocations is named, so
 		// fold what they revealed into each page's module base set before the switch
@@ -1119,16 +1136,10 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		// Before anything below decodes overlay code: cseg cannot be set over it afterwards.
 		assignCodeSegments(program, log);
 
-		if (jmpfStubs == 0) {
-			int3fStubs = scanForInt3fStubs(program, overlayBlocks, overlayEntryPoints,
-				pendingThunks, log, monitor);
-		}
-
 		// Resident-target trampolines share the jump table with the CALLF+JMPF
 		// dispatch stubs, so only look for them once segment-0 stubs have
-		// corroborated that this binary uses that scheme (an INT 3Fh-era binary has
-		// no smart-vectoring helper, and a shared CALLF+JMPF pair count alone is a
-		// weaker signal when the JMPF segment is a plausible real value).
+		// corroborated that this binary uses that scheme (a shared CALLF+JMPF pair count
+		// alone is a weaker signal when the JMPF segment is a plausible real value).
 		AddressSet trampolineTargets = new AddressSet();
 		List<StubTarget> pendingTrampolines = new ArrayList<>();
 		int trampolines = 0;
@@ -1137,7 +1148,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				trampolineTargets, pendingTrampolines, monitor);
 		}
 
-		int total = jmpfStubs + int3fStubs;
+		int total = jmpfStubs;
 		if (total == 0 && trampolines == 0) {
 			log.appendMsg("RTLink: No dispatch stubs found");
 			return false;
@@ -1178,7 +1189,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			trampolines + " resident-target trampoline(s)");
 
 		// Only a corroborated VM-nucleus binary (real CALLF+JMPF stubs) gets its runtime
-		// entry points seeded; an INT 3Fh-era binary has no nucleus to seed.
+		// entry points seeded.
 		if (jmpfStubs == 0) {
 			return false;
 		}
@@ -1916,87 +1927,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
-	 * Scan for INT 3Fh (CD 3F) stubs used by older RTLink versions.
-	 * Pattern: CD 3F xx xx yy yy (INT 3Fh, overlay_id, offset)
-	 */
-	private int scanForInt3fStubs(Program program, List<OverlayBlockInfo> overlayBlocks,
-			AddressSet overlayEntryPoints, List<StubTarget> pendingThunks,
-			MessageLog log, TaskMonitor monitor) throws CancelledException {
-		Memory memory = program.getMemory();
-		ReferenceManager refManager = program.getReferenceManager();
-		SymbolTable symbolTable = program.getSymbolTable();
-		byte[] pattern = { (byte) 0xCD, (byte) 0x3F };
-		Map<Integer, OverlayBlockInfo> blocksByRecord = blocksByRecord(overlayBlocks);
-		int width = nameWidth(maxRecordIndex(overlayBlocks));
-		int count = 0;
-
-		for (MemoryBlock block : memory.getBlocks()) {
-			if (block.isOverlay() || !block.isExecute() || !block.isInitialized()) {
-				continue;
-			}
-
-			Address searchAddr = block.getStart();
-			Address blockEnd = block.getEnd();
-
-			while (searchAddr != null && searchAddr.compareTo(blockEnd) < 0) {
-				monitor.checkCancelled();
-
-				searchAddr = memory.findBytes(searchAddr, blockEnd, pattern, null, true,
-					monitor);
-				if (searchAddr == null) {
-					break;
-				}
-
-				try {
-					Address idAddr = searchAddr.add(2);
-					Address offAddr = searchAddr.add(4);
-
-					if (!isCodeMemory(memory, offAddr.add(1))) {
-						searchAddr = searchAddr.add(1);
-						continue;
-					}
-
-					int overlayId = Short.toUnsignedInt(memory.getShort(idAddr));
-					int targetOffset = Short.toUnsignedInt(memory.getShort(offAddr));
-
-					// overlay_id is interpreted as a record index, consistent with the
-					// OVLSTUB naming convention.
-					OverlayBlockInfo info = blocksByRecord.get(overlayId);
-					if (info != null) {
-						Address targetAddr =
-							info.block().getStart().add(targetOffset);
-
-						if (info.block().contains(targetAddr)) {
-							refManager.addMemoryReference(searchAddr, targetAddr,
-								RefType.UNCONDITIONAL_CALL, SourceType.ANALYSIS, 0);
-
-							int pageNum = info.page().getPageIndex();
-							labelAddress(symbolTable,
-								String.format(STUB_PREFIX + "%0" + width + "d_%04X", pageNum,
-									targetOffset),
-								searchAddr);
-							labelAddress(symbolTable,
-								String.format("OVL%0" + width + "d_%04X", pageNum,
-									targetOffset),
-								targetAddr);
-
-							overlayEntryPoints.add(targetAddr);
-							pendingThunks.add(new StubTarget(searchAddr, targetAddr, 6));
-							count++;
-						}
-					}
-				}
-				catch (MemoryAccessException | AddressOutOfBoundsException e) {
-					// skip
-				}
-
-				searchAddr = searchAddr.add(1);
-			}
-		}
-		return count;
-	}
-
-	/**
 	 * Wire {@code stubAddr} to {@code targetAddr} as a thunk.
 	 *
 	 * @return true if the stub is resolved (a thunk to its target now exists at it),
@@ -2323,15 +2253,8 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	 * Each husk entry is disassembled with unrestricted flow, its body recomputed, and
 	 * call targets newly exposed by that code are promoted to functions of their own.
 	 * Every husk found is counted; entries that still fail to disassemble are reported
-	 * in the analysis log with target and reason.
-	 */
-	/**
-	 * Disassemble every husk function (a function object with no code at its entry, left
-	 * by CreateFunctionCmd over a call target the disassembler never followed) and rebuild
-	 * its body from the now-real flow. Package-private static so {@link
-	 * RTLinkFlowRepairAnalyzer} can invoke it on the fresh-import path: this analyzer runs
-	 * at FORMAT_ANALYSIS.after, before the husks are fabricated, so it can only repair them
-	 * on the retrofit/one-shot path; the dead-last flow-repair pass runs after they exist.
+	 * in the analysis log with target and reason. Runs from {@link #analysisEnded}, after
+	 * every round that could fabricate a husk, and from {@link #added} on the One Shot path.
 	 */
 	static void repairHuskFunctions(Program program, MessageLog log, TaskMonitor monitor)
 			throws CancelledException {
@@ -2430,9 +2353,9 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	 * thunks are left untouched, and {@link #createThunkAtStub} repairs stubs that
 	 * ended up as plain functions as well as overlay targets carrying a stale
 	 * no-return flag (which silently truncates the decompilation of every caller of
-	 * every stub forwarding to them).
+	 * every stub forwarding to them). Returns true if that also seeded the VM runtime
+	 * entries.
 	 */
-	/** Re-wire the stub thunks; true if that also seeded the VM runtime entries. */
 	private boolean repairStubThunks(Program program, MessageLog log, TaskMonitor monitor)
 			throws CancelledException {
 		List<FileBytes> allFileBytes = program.getMemory().getAllFileBytes();
@@ -2465,7 +2388,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 					lastCodeRecord = page.getPageIndex();
 				}
 			}
-			int width = nameWidth(allPages.get(allPages.size() - 1).getPageIndex());
+			int width = nameWidth(allPages, fileBytes.getSize());
 			boolean legacyNames = lastCodeRecord >= 0 &&
 				findOverlayBlock(memory, lastCodeRecord, width) == null;
 			List<OverlayBlockInfo> overlayBlocks = new ArrayList<>();
@@ -2513,10 +2436,25 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		}
 	}
 
+	/** Type the entries of one relocation list, laid out from {@code start}. */
+	private static void markupRelocations(Program program, Address start,
+			List<RTLinkRelocation> relocations, TaskMonitor monitor) throws Exception {
+		if (relocations.isEmpty()) {
+			return;
+		}
+		var relocType = relocations.get(0).toDataType();
+		int relocSize = relocType.getLength();
+		for (int j = 0; j < relocations.size(); j++) {
+			monitor.checkCancelled();
+			DataUtilities.createData(program, start.add((long) j * relocSize), relocType, -1,
+				DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
+		}
+	}
+
 	private void markupOverlayHeaders(Program program, FileBytes fileBytes,
 			List<RTLinkOverlayPage> allPages, MessageLog log, TaskMonitor monitor)
 			throws Exception {
-		int width = nameWidth(allPages.get(allPages.size() - 1).getPageIndex());
+		int width = nameWidth(allPages, fileBytes.getSize());
 		for (RTLinkOverlayPage page : allPages) {
 			monitor.checkCancelled();
 
@@ -2535,20 +2473,15 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 			try {
 				Address addr = headerBlock.getStart();
-				DataUtilities.createData(program, addr, page.getHeader().toDataType(), -1,
+				RTLinkPageHeader header = page.getHeader();
+				DataUtilities.createData(program, addr, header.toDataType(), -1,
 					DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
-
-				if (!page.getRelocations().isEmpty()) {
-					var relocType = page.getRelocations().get(0).toDataType();
-					int relocSize = relocType.getLength();
-					Address relocAddr = addr.add(RTLinkPageHeader.HEADER_SIZE);
-					for (int j = 0; j < page.getRelocations().size(); j++) {
-						monitor.checkCancelled();
-						DataUtilities.createData(program,
-							relocAddr.add((long) j * relocSize), relocType, -1,
-							DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
-					}
-				}
+				markupRelocations(program, addr.add(header.getRelocOffset()),
+					page.getRelocations(), monitor);
+				markupRelocations(program, addr.add(header.getSecondRelocOffset()),
+					page.getSecondRelocations(), monitor);
+				markupRelocations(program, addr.add(header.getThirdRelocOffset()),
+					page.getThirdRelocations(), monitor);
 			}
 			catch (Exception e) {
 				log.appendMsg(

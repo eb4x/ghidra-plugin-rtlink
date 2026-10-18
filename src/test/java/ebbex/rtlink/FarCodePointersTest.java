@@ -8,7 +8,9 @@ import generic.test.AbstractGenericTest;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
+import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
 
 /**
@@ -143,6 +145,58 @@ public class FarCodePointersTest extends AbstractGenericTest {
 		ProgramBuilder builder = program("8c c8 8e d8 ba 30 01 b8 21 25 cd 21 c3");
 		try {
 			assertRecovered(builder, "0x1000:0x010a");
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * {@code MOV [DI],0x130 ; ADD DI,4 ; MOV [DI+2],CS ; RET}: the two stores share an
+	 * addressing mode but not a word, because DI moved in between.
+	 */
+	@Test
+	public void testMovedBaseRegisterBreaksThePair() throws Exception {
+		ProgramBuilder builder = program("c7 05 30 01 83 c7 04 8c 4d 02 c3");
+		try {
+			assertEquals(0, recover(builder));
+			assertNull(builder.getProgram().getListing().getInstructionAt(builder.addr(TARGET)));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * {@code MOV ES:[0x84],0x130 ; MOV ES:[0x85],AL ; MOV ES:[0x86],CS ; RET}: a store the scan
+	 * does not model lands in the offset word, so the pair no longer holds {@code 0x130}.
+	 */
+	@Test
+	public void testUnmodelledStoreBreaksThePair() throws Exception {
+		ProgramBuilder builder = program("26 c7 06 84 00 30 01 26 a2 85 00 26 8c 0e 86 00 c3");
+		try {
+			assertEquals(0, recover(builder));
+			assertNull(builder.getProgram().getListing().getInstructionAt(builder.addr(TARGET)));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * The PSP-hook shape again, but the target is something the program also reads as data:
+	 * a far pointer to a buffer or an EXEC block, not to a handler. It is not disassembled.
+	 */
+	@Test
+	public void testPointerToDataIsNotCode() throws Exception {
+		ProgramBuilder builder = program("26 c7 06 0a 00 30 01 26 8c 0e 0c 00 c3");
+		try {
+			Program program = builder.getProgram();
+			builder.withTransaction(() -> program.getReferenceManager()
+					.addMemoryReference(builder.addr("0x1000:0x01f0"), builder.addr(TARGET),
+						RefType.READ, SourceType.ANALYSIS, 0));
+			assertEquals(0, recover(builder));
+			assertNull(program.getListing().getInstructionAt(builder.addr(TARGET)));
 		}
 		finally {
 			builder.dispose();

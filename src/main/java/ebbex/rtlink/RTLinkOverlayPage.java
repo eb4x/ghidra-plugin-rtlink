@@ -42,8 +42,8 @@ public class RTLinkOverlayPage {
 
 		relocations = readList(reader, header.getRelocOffset(), header.getRelocCount());
 
-		// The second and third lists are parsed for visibility but never applied — they
-		// do not take the image-base delta. See RTLinkPageHeader's class comment.
+		// The second list takes the frame, not the image base; the third is parsed for
+		// visibility and never applied. See getSecondRelocations and getThirdRelocations.
 		secondRelocations =
 			readList(reader, header.getSecondRelocOffset(), header.getSecondRelocCount());
 		thirdRelocations =
