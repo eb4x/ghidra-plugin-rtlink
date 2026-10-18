@@ -1,11 +1,13 @@
 package ebbex.rtlink;
 
+import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.util.PseudoDisassembler;
 import ghidra.app.util.PseudoInstruction;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressIterator;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionManager;
@@ -45,6 +47,37 @@ final class CodeSeeds {
 		MemoryBlock block = memory.getBlock(addr);
 		return block != null && !block.isOverlay() && block.isExecute() &&
 			block.isInitialized();
+	}
+
+	/** Every initialized, executable, non-overlay block: where resident seeds may flow. */
+	static AddressSet residentCode(Memory memory) {
+		AddressSet resident = new AddressSet();
+		for (MemoryBlock block : memory.getBlocks()) {
+			if (!block.isOverlay() && block.isExecute() && block.isInitialized()) {
+				resident.add(block.getStart(), block.getEnd());
+			}
+		}
+		return resident;
+	}
+
+	/**
+	 * Apply {@code disassembly}, make a function with a computed body at each of
+	 * {@code functionEntries}, and {@link #verifyBecameCode verify} each became code;
+	 * {@code what} names an entry in the progress and failure messages. Returns what the
+	 * disassembly's {@code applyTo} did, for a caller that reports its status.
+	 */
+	static boolean plant(Program program, DisassembleCommand disassembly,
+			AddressSetView functionEntries, String what, MessageLog log, TaskMonitor monitor)
+			throws CancelledException {
+		monitor.setMessage("RTLink: Disassembling " + what + "s...");
+		boolean disassembled = disassembly.applyTo(program, monitor);
+		monitor.checkCancelled();
+
+		monitor.setMessage("RTLink: Creating " + what + " functions...");
+		new CreateFunctionCmd(functionEntries, SourceType.ANALYSIS).applyTo(program, monitor);
+
+		verifyBecameCode(program, functionEntries, what, log, monitor);
+		return disassembled;
 	}
 
 	/** The instruction at {@code addr}, decoded without committing it, or null. */

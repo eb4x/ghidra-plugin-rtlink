@@ -6,7 +6,6 @@ import java.util.Map;
 import java.util.Set;
 
 import ghidra.app.cmd.disassemble.DisassembleCommand;
-import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.util.PseudoDisassembler;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.model.address.Address;
@@ -103,25 +102,11 @@ final class VmRuntimeSeeds {
 			return 0;
 		}
 
-		AddressSet residentRange = new AddressSet();
-		for (MemoryBlock block : program.getMemory().getBlocks()) {
-			if (!block.isOverlay() && block.isExecute() && block.isInitialized()) {
-				residentRange.add(block.getStart(), block.getEnd());
-			}
-		}
-
-		monitor.setMessage("RTLink: Disassembling VM runtime entry points...");
-		AddressSet toDisassemble = functionSeeds.union(flowSeeds);
-		DisassembleCommand disCmd = new DisassembleCommand(toDisassemble, residentRange, true);
-		disCmd.applyTo(program, monitor);
-		monitor.checkCancelled();
-
-		monitor.setMessage("RTLink: Creating VM runtime functions...");
-		CreateFunctionCmd funcCmd = new CreateFunctionCmd(functionSeeds, SourceType.ANALYSIS);
-		funcCmd.applyTo(program, monitor);
-
-		CodeSeeds.verifyBecameCode(program, functionSeeds, "VM runtime entry point", log,
-			monitor);
+		// The disassembly status is not reported: verifyBecameCode names any seed that failed.
+		CodeSeeds.plant(program,
+			new DisassembleCommand(functionSeeds.union(flowSeeds),
+				CodeSeeds.residentCode(program.getMemory()), true),
+			functionSeeds, "VM runtime entry point", log, monitor);
 
 		int count = (int) functionSeeds.getNumAddresses();
 		RTLinkProgram.recordVmRuntimeSeeds(program, count);

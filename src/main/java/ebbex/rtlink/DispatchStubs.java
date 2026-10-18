@@ -9,7 +9,6 @@ import java.util.SortedSet;
 import java.util.TreeSet;
 
 import ghidra.app.cmd.disassemble.DisassembleCommand;
-import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressOutOfBoundsException;
@@ -93,44 +92,28 @@ final class DispatchStubs {
 				trampolineTargets, pendingTrampolines, monitor);
 		}
 
-		int total = jmpfStubs;
-		if (total == 0 && trampolines == 0) {
+		if (jmpfStubs == 0 && trampolines == 0) {
 			log.appendMsg("RTLink: No dispatch stubs found");
 			return false;
 		}
 
-		FunctionManager funcMgr = program.getFunctionManager();
-
-		if (total > 0) {
+		if (jmpfStubs > 0) {
 			// Disassemble the overlay code reachable from the resolved entry points and
 			// promote each entry point to a function with a real body. Without this the
 			// overlay pages hold no instructions, so intra-overlay calls and jumps never
 			// get references and every overlay "function" is a one-byte husk.
 			disassembleOverlayCode(program, overlayBlocks, overlayEntryPoints, log, monitor);
-
 			// Now that the overlay targets are real functions, wire each dispatch stub to
 			// its target as a thunk.
-			for (StubTarget stub : pendingThunks) {
-				monitor.checkCancelled();
-				if (StubThunks.create(funcMgr, stub.stubAddr(), stub.targetAddr(),
-					stub.stubSize(), log)) {
-					clearErrorBookmarks(program, stub, resolvedBodies, monitor);
-				}
-			}
+			wireThunks(program, pendingThunks, resolvedBodies, log, monitor);
 		}
 
 		if (trampolines > 0) {
 			disassembleResidentTargets(program, trampolineTargets, log, monitor);
-			for (StubTarget stub : pendingTrampolines) {
-				monitor.checkCancelled();
-				if (StubThunks.create(funcMgr, stub.stubAddr(), stub.targetAddr(),
-					stub.stubSize(), log)) {
-					clearErrorBookmarks(program, stub, resolvedBodies, monitor);
-				}
-			}
+			wireThunks(program, pendingTrampolines, resolvedBodies, log, monitor);
 		}
 
-		Msg.info(RTLinkOverlayAnalyzer.class, "RTLink/Plus: Resolved " + total +
+		Msg.info(RTLinkOverlayAnalyzer.class, "RTLink/Plus: Resolved " + jmpfStubs +
 			" dispatch stub(s) and " + trampolines + " resident-target trampoline(s)");
 
 		// Only a corroborated VM-nucleus binary (real CALLF+JMPF stubs) gets its runtime
@@ -140,6 +123,20 @@ final class DispatchStubs {
 		}
 		VmRuntimeSeeds.seed(program, dispatcherSegs, log, monitor);
 		return true;
+	}
+
+	/** Wire each stub to its target as a thunk, clearing the stale marks of those resolved. */
+	private static void wireThunks(Program program, List<StubTarget> stubs,
+			AddressSet resolvedBodies, MessageLog log, TaskMonitor monitor)
+			throws CancelledException {
+		FunctionManager funcMgr = program.getFunctionManager();
+		for (StubTarget stub : stubs) {
+			monitor.checkCancelled();
+			if (StubThunks.create(funcMgr, stub.stubAddr(), stub.targetAddr(), stub.stubSize(),
+				log)) {
+				clearErrorBookmarks(program, stub, resolvedBodies, monitor);
+			}
+		}
 	}
 
 	/**
@@ -231,21 +228,12 @@ final class DispatchStubs {
 			overlayRange.add(info.block().getStart(), info.block().getEnd());
 		}
 
-		monitor.setMessage("RTLink: Disassembling overlay code...");
 		DisassembleCommand disCmd =
 			new DisassembleCommand(overlayEntryPoints, overlayRange, true);
-		if (!disCmd.applyTo(program, monitor)) {
+		if (!CodeSeeds.plant(program, disCmd, overlayEntryPoints, "overlay entry point", log,
+			monitor)) {
 			log.appendMsg("RTLink: Overlay disassembly reported: " + disCmd.getStatusMsg());
 		}
-		monitor.checkCancelled();
-
-		monitor.setMessage("RTLink: Creating overlay functions...");
-		CreateFunctionCmd funcCmd =
-			new CreateFunctionCmd(overlayEntryPoints, SourceType.ANALYSIS);
-		funcCmd.applyTo(program, monitor);
-
-		CodeSeeds.verifyBecameCode(program, overlayEntryPoints, "overlay entry point", log,
-			monitor);
 
 		AddressSetView disassembled = disCmd.getDisassembledAddressSet();
 		long byteCount = disassembled == null ? 0 : disassembled.getNumAddresses();
@@ -589,26 +577,12 @@ final class DispatchStubs {
 			return;
 		}
 
-		AddressSet residentRange = new AddressSet();
-		for (MemoryBlock block : program.getMemory().getBlocks()) {
-			if (!block.isOverlay() && block.isExecute() && block.isInitialized()) {
-				residentRange.add(block.getStart(), block.getEnd());
-			}
-		}
-
-		monitor.setMessage("RTLink: Disassembling trampoline targets...");
-		DisassembleCommand disCmd = new DisassembleCommand(targets, residentRange, true);
-		if (!disCmd.applyTo(program, monitor)) {
+		DisassembleCommand disCmd = new DisassembleCommand(targets,
+			CodeSeeds.residentCode(program.getMemory()), true);
+		if (!CodeSeeds.plant(program, disCmd, targets, "trampoline target", log, monitor)) {
 			log.appendMsg(
 				"RTLink: Trampoline target disassembly reported: " + disCmd.getStatusMsg());
 		}
-		monitor.checkCancelled();
-
-		monitor.setMessage("RTLink: Creating trampoline target functions...");
-		CreateFunctionCmd funcCmd = new CreateFunctionCmd(targets, SourceType.ANALYSIS);
-		funcCmd.applyTo(program, monitor);
-
-		CodeSeeds.verifyBecameCode(program, targets, "trampoline target", log, monitor);
 	}
 
 	/**
