@@ -35,7 +35,7 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 		Program program = builder.getProgram();
 		int txId = program.startTransaction("repair relocations");
 		try {
-			return RTLinkFlowRepairAnalyzer.repairRelocationFallthroughs(program,
+			return RelocationFallthroughs.repair(program,
 				TaskMonitor.DUMMY);
 		}
 		finally {
@@ -47,7 +47,7 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 		Program program = builder.getProgram();
 		int txId = program.startTransaction("arbitrate conflicts");
 		try {
-			return RTLinkFlowRepairAnalyzer.arbitrateConflictBookmarks(program,
+			return ConflictArbitration.arbitrate(program,
 				TaskMonitor.DUMMY);
 		}
 		finally {
@@ -385,7 +385,7 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 		Program program = builder.getProgram();
 		int txId = program.startTransaction("fill code gaps");
 		try {
-			return RTLinkFlowRepairAnalyzer.fillCodeGaps(program, TaskMonitor.DUMMY);
+			return CodeGaps.fill(program, TaskMonitor.DUMMY);
 		}
 		finally {
 			program.endTransaction(txId, true);
@@ -769,7 +769,7 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 		Program program = builder.getProgram();
 		int txId = program.startTransaction("resolve far vectors");
 		try {
-			return RTLinkFlowRepairAnalyzer.resolveFarVectorFlows(program, TaskMonitor.DUMMY);
+			return FarVectorFlows.resolve(program, TaskMonitor.DUMMY);
 		}
 		finally {
 			program.endTransaction(txId, true);
@@ -780,7 +780,7 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 		Program program = builder.getProgram();
 		int txId = program.startTransaction("seal non-returning calls");
 		try {
-			return RTLinkFlowRepairAnalyzer.sealCallsThatCannotReturn(program,
+			return NonReturningCalls.seal(program,
 				TaskMonitor.DUMMY);
 		}
 		finally {
@@ -1051,7 +1051,7 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 		Program program = builder.getProgram();
 		int txId = program.startTransaction("clear filler islands");
 		try {
-			return RTLinkFlowRepairAnalyzer.clearFillerIslands(program, TaskMonitor.DUMMY);
+			return FillerIslands.clear(program, TaskMonitor.DUMMY);
 		}
 		finally {
 			program.endTransaction(txId, true);

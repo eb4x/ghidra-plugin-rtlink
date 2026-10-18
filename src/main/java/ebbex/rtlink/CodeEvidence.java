@@ -1,11 +1,13 @@
 package ebbex.rtlink;
 
+import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
+import ghidra.util.task.TaskMonitor;
 
 /**
  * Whether an instruction is real code on its own evidence. The passes that clear junk — the
@@ -45,5 +47,24 @@ final class CodeEvidence {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Create a function at {@code target} when it holds an instruction, no function owns it,
+	 * and something calls it: recovered code with the strongest evidence there is.
+	 */
+	static void promoteIfCalled(Program program, Address target, TaskMonitor monitor) {
+		if (program.getListing().getInstructionAt(target) == null) {
+			return;
+		}
+		if (program.getFunctionManager().getFunctionContaining(target) != null) {
+			return;
+		}
+		for (Reference reference : program.getReferenceManager().getReferencesTo(target)) {
+			if (reference.getReferenceType().isCall()) {
+				new CreateFunctionCmd(target).applyTo(program, monitor);
+				return;
+			}
+		}
 	}
 }

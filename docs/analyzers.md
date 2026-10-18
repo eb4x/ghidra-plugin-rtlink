@@ -61,7 +61,9 @@ seven classes and not one. They share package-private statics and must stay in
   function); instructions decoded out of zero fill (≥16 zero bytes) deleted when
   unreferenced. The test is always on the bytes in memory, never on the instruction
   (`00 00` is a real instruction). Unresolved dispatch stubs and NOP sleds are left
-  strictly alone.
+  strictly alone. Each repair is its own class — `RelocationFallthroughs`,
+  `ConflictArbitration`, `CodeGaps`, `FarVectorFlows`, `NonReturningCalls`,
+  `FillerIslands`, `FarCodePointers` — and the analyzer only orders them.
 - **`RTLinkLibrarySignatureAnalyzer`** — BYTE, `LOW_PRIORITY.after().after()` (after the
   buried-code pass). Off until its `Vendor library` option names the user's own
   `RTLUTILS.LIB`; then matches each module's public symbols against the resident code
