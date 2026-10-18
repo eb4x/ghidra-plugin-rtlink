@@ -848,7 +848,7 @@ empty — so destinations are taken from the references instead.
 
 > **Resolved (2026-07-13).** Both halves are fixed, in the order the investigation
 > prescribed: the formatter FSM's dispatch is bounded by
-> `RTLinkSwitchTableAnalyzer.recoverFormatterFsmTable`, and the XLAT segment bug in the
+> `FormatterFsm` (run by `RTLinkSwitchTableAnalyzer`), and the XLAT segment bug in the
 > stock x86 Sleigh spec is fixed in `ia.sinc` — submitted upstream as
 > [ghidra#9391](https://github.com/NationalSecurityAgency/ghidra/pull/9391) and carried
 > meanwhile on the `dailydriver` branch of [eb4x/ghidra](https://github.com/eb4x/ghidra).
@@ -875,7 +875,7 @@ MSC's dual-purpose `__lookuptable`: the low nibble of `table[c-' ']` classifies 
 character, the high nibble of `table[class*8 + state]` is the next state, and the two
 regions deliberately share the same bytes. A fixpoint over the reachable
 `(class, state)` pairs yields the exact jump-table entry count — **8 states** in all four
-binaries (same library). `recoverFormatterFsmTable` matches the prologue
+binaries (same library). `FormatterFsm` matches the prologue
 instruction-for-instruction (the `MOV CL,3`/`INC CL` pair proves both shift widths, hence
 both the `class*8` layout and the 16-state `SHR AL,4` ceiling), reads the table via the
 DS program context, and validates every jump-table word against the dispatching

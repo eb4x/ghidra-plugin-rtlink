@@ -20,7 +20,7 @@ import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Tests for {@code RTLinkSwitchTableAnalyzer.recoverFormatterFsmTable}: the MSC
+ * Tests for {@link FormatterFsm}: the MSC
  * {@code _output} formatter state machine whose dispatch index comes out of an
  * {@code XLAT} and whose entry count is derived from the FSM's own class/transition
  * table.
@@ -49,7 +49,7 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 		"08 00 00 08 00 08 00 00 08";
 	// @formatter:on
 
-	/** {@code CALL 0x0040; RET} — the call reference that lets dispatchRange resolve. */
+	/** {@code CALL 0x0040; RET} — the call reference that lets CaseRange resolve. */
 	private static final String CALLER = "e8 3d 00 c3";
 
 	/** Eight case-target words at {@code 0x0010}, mirroring the table below the entry. */
@@ -113,7 +113,7 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 			}
 			// The disassemble range is a restricted set, so seed the caller and the FSM
 			// separately. The caller's CALL still records its call reference (that is
-			// what dispatchRange keys on), flow stops at the computed dispatch, and the
+			// what CaseRange keys on), flow stops at the computed dispatch, and the
 			// case stubs stay undefined — exactly the state a fresh import is in when
 			// the analyzer runs.
 			builder.disassemble("0x1100:0x0000", 4, true);
