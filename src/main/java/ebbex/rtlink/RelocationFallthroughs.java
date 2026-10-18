@@ -10,7 +10,7 @@ import ghidra.program.model.data.DataUtilities;
 import ghidra.program.model.data.DataUtilities.ClearDataMode;
 import ghidra.program.model.data.WordDataType;
 import ghidra.program.model.listing.BookmarkType;
-import ghidra.program.model.listing.CodeUnit;
+import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.FlowOverride;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
@@ -138,7 +138,7 @@ final class RelocationFallthroughs {
 			DataUtilities.createData(program, word, WordDataType.dataType, 2,
 				ClearDataMode.CHECK_FOR_SPACE);
 			program.getListing()
-					.setComment(word, CodeUnit.EOL_COMMENT,
+					.setComment(word, CommentType.EOL,
 						"Loader-relocated segment word: data, never code " +
 							"(RTLink Buried Code Repair)");
 		}
