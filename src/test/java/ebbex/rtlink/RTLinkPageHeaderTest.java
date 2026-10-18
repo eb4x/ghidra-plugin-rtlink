@@ -111,6 +111,27 @@ public class RTLinkPageHeaderTest {
 		assertEquals(16 + 12 * 4, h.getSecondRelocOffset());
 	}
 
+	/**
+	 * The chain walk stops at a record whose frame size differs from the first page's: a
+	 * valid-looking header with another frame is not part of this overlay area.
+	 */
+	@Test
+	public void testChainStopsAtAForeignFrameSize() throws IOException {
+		// Three one-paragraph-overhead records of two paragraphs each; the third has another
+		// frame size.
+		int[] words = {
+			2, 1, 0x02bc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			2, 1, 0x02bc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			2, 1, 0x01fe, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+		byte[] bytes = new byte[words.length * 2];
+		for (int i = 0; i < words.length; i++) {
+			bytes[i * 2] = (byte) words[i];
+			bytes[i * 2 + 1] = (byte) (words[i] >> 8);
+		}
+		BinaryReader reader = new BinaryReader(new ByteArrayProvider(bytes), true);
+		assertEquals(2, RTLinkOverlayPage.parseAllPages(reader, 0, bytes.length).size());
+	}
+
 	/** Structural rejections that must survive: the lists have to fit ahead of the code. */
 	@Test
 	public void testRejectsStructurallyImpossibleHeaders() throws IOException {

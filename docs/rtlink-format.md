@@ -115,7 +115,7 @@ head-to-tail: each record's header gives its total size, so record *n+1* starts 
 struct rtlink_page_header {   /* ALL FIELDS ARE WORDS */
     uint16 total_paragraphs;     /* whole record: header + relocs + padding + code   */
     uint16 overhead_paragraphs;  /* header + relocs + padding; code starts here       */
-    uint16 frame_size;           /* page frame size in paragraphs (VICEROY 700)       */
+    uint16 frame_size;           /* page frame size in paragraphs; one value per EXE  */
     uint16 reloc_start_index;    /* entry index list 1 starts at (0 in every binary)  */
     uint16 reloc_count;          /* entries in list 1                                 */
     uint16 reloc_count_2;        /* entries in list 2                                 */
@@ -126,6 +126,11 @@ struct rtlink_page_header {   /* ALL FIELDS ARE WORDS */
 
 Implemented in `src/main/java/ebbex/rtlink/RTLinkPageHeader.java`, pinned by
 `RTLinkPageHeaderTest`.
+
+`frame_size` is the same in every record of an executable: VICEROY `0x2bc` (31 records),
+NEBULAR `0x1fe` (79), SPHERE `0x262` (105), RETURN `0x25a` (72), VMEX1–3 `0x262`, measured
+with `RTLinkExtract`. Detection requires the first two headers to agree on it, and the chain
+walk stops at a record that does not.
 
 > **Three fields in this header were each, at some point, mis-declared as 32-bit or
 > "reserved", and each bug read correctly on VICEROY.** `reloc_count` as a dword swallows

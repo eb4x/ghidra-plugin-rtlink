@@ -71,6 +71,9 @@ final class OmfLibrary {
 	private static final int LIBHDR = 0xf0;
 	private static final int LIBEND = 0xf1;
 
+	/** Deepest nesting of iterated data blocks accepted in an LIDATA record. */
+	private static final int MAX_LIDATA_DEPTH = 16;
+
 	/** Bytes a fixup patches, by its location type (OMF-86 LOCAT field). */
 	private static final int[] FIXUP_SIZE = { 1, 2, 2, 4, 1, 2, 0, 0, 0, 4, 0, 6, 0, 4, 0, 0 };
 
@@ -198,27 +201,35 @@ final class OmfLibrary {
 			}
 		}
 
-		private void ledata(Cursor c, boolean wide) {
+		private void ledata(Cursor c, boolean wide) throws IOException {
 			Segment segment = segment(c.index());
-			int offset = (int) (wide ? c.u32() : c.u16());
+			int offset = dataOffset(segment, wide ? c.u32() : c.u16());
 			byte[] data = c.rest();
 			put(segment, offset, data);
 			remember(segment, offset, data.length, false);
 		}
 
-		private void lidata(Cursor c, boolean wide) {
+		private void lidata(Cursor c, boolean wide) throws IOException {
 			Segment segment = segment(c.index());
-			int offset = (int) (wide ? c.u32() : c.u16());
+			int offset = dataOffset(segment, wide ? c.u32() : c.u16());
 			ByteSink sink = new ByteSink();
 			while (c.more()) {
-				iterate(c, wide, sink);
+				iterate(c, wide, sink, 0);
 			}
 			byte[] data = sink.toArray();
 			put(segment, offset, data);
 			remember(segment, offset, data.length, true);
 		}
 
-		private void iterate(Cursor c, boolean wide, ByteSink sink) {
+		/**
+		 * One iterated data block. Real translators nest a few levels at most; the depth bound
+		 * keeps a malformed record from recursing a 64K record's worth of levels deep.
+		 */
+		private void iterate(Cursor c, boolean wide, ByteSink sink, int depth)
+				throws IOException {
+			if (depth > MAX_LIDATA_DEPTH) {
+				throw new IOException("iterated data nested deeper than " + MAX_LIDATA_DEPTH);
+			}
 			long repeat = wide ? c.u32() : c.u16();
 			int blocks = c.u16();
 			ByteSink one = new ByteSink();
@@ -230,13 +241,25 @@ final class OmfLibrary {
 			}
 			else {
 				for (int i = 0; i < blocks; i++) {
-					iterate(c, wide, one);
+					iterate(c, wide, one, depth + 1);
 				}
 			}
 			byte[] unit = one.toArray();
+			if (unit.length == 0) {
+				return; // repeating nothing, however often, adds nothing
+			}
 			for (long i = 0; i < repeat && sink.size() < 0x100000; i++) {
 				sink.addAll(unit);
 			}
+		}
+
+		/** A data record's offset, checked against the segment it fills. */
+		private static int dataOffset(Segment segment, long offset) throws IOException {
+			if (segment != null && offset > segment.data().length) {
+				throw new IOException(String.format(
+					"data at 0x%x lies past the end of segment %s", offset, segment.name()));
+			}
+			return (int) offset;
 		}
 
 		private void fixupp(Cursor c, boolean wide) {

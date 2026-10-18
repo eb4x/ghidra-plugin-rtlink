@@ -20,6 +20,8 @@ final class OmfTestLibrary {
 		final List<String> publicNames = new ArrayList<>();
 		final List<Integer> publicOffsets = new ArrayList<>();
 		final List<Integer> fixups = new ArrayList<>();
+		final List<Integer> extraTypes = new ArrayList<>();
+		final List<byte[]> extraContents = new ArrayList<>();
 
 		ModuleSpec(String name, String hex) {
 			this.name = name;
@@ -34,6 +36,13 @@ final class OmfTestLibrary {
 
 		ModuleSpec fixup(int offset) {
 			fixups.add(offset);
+			return this;
+		}
+
+		/** A raw record of {@code type}, written after the module's own data and fixups. */
+		ModuleSpec record(int type, String hex) {
+			extraTypes.add(type);
+			extraContents.add(HexFormat.of().parseHex(hex.replace(" ", "")));
 			return this;
 		}
 	}
@@ -93,6 +102,9 @@ final class OmfTestLibrary {
 				fixupp.write(1);
 			}
 			record(out, 0x9c, fixupp.toByteArray());
+		}
+		for (int i = 0; i < spec.extraTypes.size(); i++) {
+			record(out, spec.extraTypes.get(i), spec.extraContents.get(i));
 		}
 		record(out, 0x8a, new byte[] { 0 });
 		return out.toByteArray();

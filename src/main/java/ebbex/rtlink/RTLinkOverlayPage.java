@@ -152,7 +152,7 @@ public class RTLinkOverlayPage {
 	/**
 	 * Returns the overlay frame size from the page header.
 	 *
-	 * @return frame size in bytes
+	 * @return frame size in paragraphs
 	 */
 	public long getFrameSize() {
 		return header.getFrameSize();
@@ -160,7 +160,9 @@ public class RTLinkOverlayPage {
 
 	/**
 	 * Parses all contiguous RTLink/Plus overlay pages starting at the given file
-	 * offset.  Stops when a header fails validation or the end of the file is reached.
+	 * offset.  Stops when a header fails validation, when its frame size differs from the
+	 * first page's (it is constant along the chain in every binary checked), or at the end
+	 * of the file.
 	 *
 	 * @param reader       A {@link BinaryReader} for the file
 	 * @param overlayStart File offset where overlay data begins
@@ -178,6 +180,9 @@ public class RTLinkOverlayPage {
 				RTLinkOverlayPage page = new RTLinkOverlayPage(reader, cursor, pageIndex);
 				if (!page.getHeader().isValid()) {
 					break;
+				}
+				if (!pages.isEmpty() && page.getFrameSize() != pages.get(0).getFrameSize()) {
+					break; // not this chain's record: appended data that happens to validate
 				}
 				int totalSize = page.getHeader().getTotalSizeBytes();
 				if (totalSize <= 0) {

@@ -756,7 +756,8 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 			}
 		}
 		catch (MemoryAccessException | AddressOutOfBoundsException e) {
-			return null;
+			// Unreadable memory after the last entry ends the table like any non-entry does;
+			// the entries already read stand.
 		}
 
 		// One entry is not a switch; it is a coincidence.
@@ -1208,10 +1209,14 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 		return scalar != null && scalar.getUnsignedValue() == 1;
 	}
 
-	/** True if {@code instruction} writes {@code register}. */
+	/**
+	 * True if {@code instruction} writes {@code register} or any register overlapping it:
+	 * {@code MOV BL,..} redefines {@code BX} as surely as {@code MOV BX,..} does.
+	 */
 	private static boolean defines(Instruction instruction, Register register) {
 		for (Object result : instruction.getResultObjects()) {
-			if (result instanceof Register written && written.equals(register)) {
+			if (result instanceof Register written &&
+				(written.contains(register) || register.contains(written))) {
 				return true;
 			}
 		}

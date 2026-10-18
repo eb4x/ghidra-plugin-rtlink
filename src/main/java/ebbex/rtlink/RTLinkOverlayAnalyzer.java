@@ -247,6 +247,15 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			if (allPages.size() < 2) {
 				return false;
 			}
+			if (hasOverlayBlocks(program)) {
+				// The flag is set only once a run completes, so blocks without it are what a
+				// cancelled or failed run left. Creating them again would not fail: Ghidra
+				// names a clashing overlay space OVERLAY_NN.1, and the program would carry
+				// two copies of every page.
+				log.appendMsg("RTLink: overlay blocks from an interrupted run are present; " +
+					"re-import the program to analyze its overlays");
+				return false;
+			}
 
 			Msg.info(this, String.format(
 				"RTLink/Plus: Found %d overlay pages at file offset 0x%X",
@@ -389,6 +398,17 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			byRecord.put(info.page().getPageIndex(), info);
 		}
 		return byRecord;
+	}
+
+	/** True if {@code program} already has blocks named the way this analyzer names its own. */
+	private static boolean hasOverlayBlocks(Program program) {
+		for (MemoryBlock block : program.getMemory().getBlocks()) {
+			String name = block.getName();
+			if (name.startsWith("OVERLAY_") || name.startsWith("RTLINK_HDR_")) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** True if the analyzer named {@code name} is enabled in {@code program}'s analysis options. */
@@ -687,16 +707,17 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				return false;
 			}
 
+			// A second header, chained from the first, with the same frame size: frame_size is
+			// constant along the chain in every binary checked (VICEROY 0x2bc, NEBULAR 0x1fe,
+			// SPHERE 0x262, RETURN 0x25a, VMEX1-3 0x262), and two such headers are far harder
+			// for unrelated appended data to fake than one.
 			long secondOffset = overlayStart + first.getTotalSizeBytes();
-			if (secondOffset + RTLinkPageHeader.HEADER_SIZE <= fileLength) {
-				reader.setPointerIndex(secondOffset);
-				RTLinkPageHeader second = new RTLinkPageHeader(reader);
-				if (second.isValid() && second.getFrameSize() == first.getFrameSize()) {
-					return true;
-				}
+			if (secondOffset + RTLinkPageHeader.HEADER_SIZE > fileLength) {
+				return false;
 			}
-
-			return true;
+			reader.setPointerIndex(secondOffset);
+			RTLinkPageHeader second = new RTLinkPageHeader(reader);
+			return second.isValid() && second.getFrameSize() == first.getFrameSize();
 		}
 		catch (IOException e) {
 			return false;
@@ -2088,7 +2109,8 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		// lands on the overlay target. If the target's disassembled body demonstrably
 		// returns, the flag is stale — clear it.
 		if (overlayFunc.hasNoReturn() && bodyReturns(overlayFunc)) {
-			log.appendMsg(String.format(
+			// A repair, not a failure: Msg.info, not the analysis MessageLog.
+			Msg.info(RTLinkOverlayAnalyzer.class, String.format(
 				"RTLink: clearing stale no-return flag on %s at %s (body returns)",
 				overlayFunc.getName(), targetAddr));
 			overlayFunc.setNoReturn(false);
@@ -2114,7 +2136,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				// reaches it from a real CALLF before we run) and cannot be
 				// converted in place. Remove it and recreate below as a thunk so
 				// the stub still forwards to its overlay target.
-				log.appendMsg(String.format(
+				Msg.info(RTLinkOverlayAnalyzer.class, String.format(
 					"RTLink: recreating stub thunk at %s -> %s (%s)",
 					stubAddr, targetAddr, e.getMessage()));
 				funcMgr.removeFunction(stubAddr);
