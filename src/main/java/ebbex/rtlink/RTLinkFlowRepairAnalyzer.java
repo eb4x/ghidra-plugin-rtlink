@@ -49,7 +49,6 @@ import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.reloc.Relocation;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.SourceType;
-import ghidra.program.model.symbol.Symbol;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
@@ -335,7 +334,7 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		// The caller itself must be real code: junk callers repair nothing.
 		if (program.getFunctionManager()
 				.getFunctionContaining(caller.getMinAddress()) == null &&
-			!isEvidencedInstruction(program, caller)) {
+			!CodeEvidence.isEvidenced(program, caller)) {
 			return null;
 		}
 		return caller;
@@ -385,7 +384,7 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 				promoteIfCalled(program, candidate, monitor);
 				return;
 			}
-			if (hasFlowReferenceTo(program, candidate)) {
+			if (CodeEvidence.hasFlowReferenceTo(program, candidate)) {
 				targets.add(candidate);
 			}
 		}
@@ -665,7 +664,7 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 			if (instruction == null) {
 				break;
 			}
-			if (!at.equals(start) && isEvidencedInstruction(program, instruction)) {
+			if (!at.equals(start) && CodeEvidence.isEvidenced(program, instruction)) {
 				break; // something really flows here: the run has left the junk
 			}
 			run.add(instruction.getMinAddress(), instruction.getMaxAddress());
@@ -836,7 +835,7 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		Register ah = program.getRegister("AH");
 		Instruction at = instruction;
 		for (int i = 0; i < DOS_EXIT_SCAN_LIMIT; i++) {
-			if (hasFlowReferenceTo(program, at.getMinAddress())) {
+			if (CodeEvidence.hasFlowReferenceTo(program, at.getMinAddress())) {
 				return false; // another path joins here, with an AH of its own
 			}
 			Address from = at.getFallFrom();
@@ -844,7 +843,7 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 			if (previous == null) {
 				return false;
 			}
-			if (writesOverlapping(previous, ah)) {
+			if (X86.writes(previous, ah)) {
 				return hasBytes(previous, 0xb4, 0x4c) ||
 					(hasBytes(previous, 0xb8) && byteAt(previous, 2) == 0x4c);
 			}
@@ -853,16 +852,6 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		return false;
 	}
 
-	/** True if {@code instruction} writes {@code register} or any register overlapping it. */
-	private static boolean writesOverlapping(Instruction instruction, Register register) {
-		for (Object result : instruction.getResultObjects()) {
-			if (result instanceof Register written &&
-				(written.contains(register) || register.contains(written))) {
-				return true;
-			}
-		}
-		return false;
-	}
 
 	/** True if {@code instruction}'s bytes start with {@code expected}. */
 	private static boolean hasBytes(Instruction instruction, int... expected) {
@@ -1080,7 +1069,7 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 				continue; // straddles the edge: not decoded from fill alone
 			}
 			visited.add(start);
-			if (isEvidencedInstruction(program, instruction)) {
+			if (CodeEvidence.isEvidenced(program, instruction)) {
 				return null; // referenced, named, or a function entry: leave it be
 			}
 			junk.add(instruction);
@@ -1290,7 +1279,7 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		Listing listing = program.getListing();
 		Instruction current = junk;
 		for (int i = 0; i < JUNK_CHAIN_WALK_LIMIT; i++) {
-			if (isEvidencedInstruction(program, current)) {
+			if (CodeEvidence.isEvidenced(program, current)) {
 				return null;
 			}
 			Address fallFrom = current.getFallFrom();
@@ -1311,35 +1300,6 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		return null; // bound exhausted: treat as evidenced
 	}
 
-	/**
-	 * Direct evidence that {@code instruction} is real code: a flow reference to
-	 * its entry, a function entry, an external entry point, or a non-default
-	 * symbol. Function <i>containment</i> is deliberately not evidence — junk gets
-	 * absorbed into function bodies.
-	 */
-	private static boolean isEvidencedInstruction(Program program, Instruction instruction) {
-		Address entry = instruction.getMinAddress();
-		if (hasFlowReferenceTo(program, entry)) {
-			return true;
-		}
-		if (program.getFunctionManager().getFunctionAt(entry) != null) {
-			return true;
-		}
-		if (program.getSymbolTable().isExternalEntryPoint(entry)) {
-			return true;
-		}
-		Symbol primary = program.getSymbolTable().getPrimarySymbol(entry);
-		return primary != null && primary.getSource() != SourceType.DEFAULT;
-	}
-
-	private static boolean hasFlowReferenceTo(Program program, Address address) {
-		for (Reference reference : program.getReferenceManager().getReferencesTo(address)) {
-			if (reference.getReferenceType().isFlow()) {
-				return true;
-			}
-		}
-		return false;
-	}
 
 	/**
 	 * Evidence that {@code buried} is real code, collected into {@code evidence}
@@ -1384,7 +1344,7 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		Listing listing = program.getListing();
 		Instruction current = instruction;
 		for (int i = 0; i < JUNK_CHAIN_WALK_LIMIT && current != null; i++) {
-			if (isEvidencedInstruction(program, current)) {
+			if (CodeEvidence.isEvidenced(program, current)) {
 				return true;
 			}
 			Address fallFrom = current.getFallFrom();

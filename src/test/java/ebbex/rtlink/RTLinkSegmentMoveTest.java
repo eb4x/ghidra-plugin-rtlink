@@ -57,8 +57,8 @@ public class RTLinkSegmentMoveTest extends AbstractGenericTest {
 				.getInstructionAt(program.getAddressFactory().getAddress(at));
 		assertNotNull("no instruction at " + at, mov);
 		assertEquals(mov + ": destination", destination,
-			RTLinkOverlayAnalyzer.movDestination(mov).getName());
-		var src = RTLinkOverlayAnalyzer.movSourceRegister(mov);
+			X86.movDestination(mov).getName());
+		var src = X86.movSourceRegister(mov);
 		assertEquals(mov + ": source", source, src == null ? null : src.getName());
 	}
 }

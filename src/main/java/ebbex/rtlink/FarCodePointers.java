@@ -13,12 +13,10 @@ import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.SegmentedAddress;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.lang.Register;
-import ghidra.program.model.lang.RegisterValue;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.symbol.RefType;
@@ -232,27 +230,13 @@ final class FarCodePointers {
 				reset();
 				steps = 1;
 			}
-			byte[] bytes;
-			try {
-				bytes = instruction.getBytes();
-			}
-			catch (MemoryAccessException e) {
+			byte[] bytes = X86.bytes(instruction);
+			int i = X86.opcodeIndex(bytes);
+			if (i < 0) {
 				reset();
 				return;
 			}
-			int i = 0;
-			int segment = 0;
-			while (i < bytes.length && isPrefix(bytes[i] & 0xff)) {
-				int prefix = bytes[i] & 0xff;
-				if (prefix == 0x26 || prefix == 0x2e || prefix == 0x36 || prefix == 0x3e) {
-					segment = prefix;
-				}
-				i++;
-			}
-			if (i >= bytes.length) {
-				reset();
-				return;
-			}
+			int segment = X86.segmentOverride(bytes);
 			int op = bytes[i] & 0xff;
 			if (!apply(instruction, bytes, i, op, segment)) {
 				invalidateWrites(instruction);
@@ -277,7 +261,7 @@ final class FarCodePointers {
 					continue;
 				}
 				for (int reg : ADDRESS_REGISTERS) {
-					if (overlaps(written, registers[reg])) {
+					if (X86.overlaps(written, registers[reg])) {
 						slots.keySet().removeIf(slot -> addressesThrough(slot, reg));
 					}
 				}
@@ -296,7 +280,7 @@ final class FarCodePointers {
 		/** Model the instructions that move CS or constants; false for anything else. */
 		private boolean apply(Instruction instruction, byte[] b, int i, int op, int segment) {
 			if (op >= 0xb8 && op <= 0xbf && i + 2 < b.length) { // MOV r16,imm16
-				values[op - 0xb8] = new Constant(word(b, i + 1));
+				values[op - 0xb8] = new Constant(X86.word(b, i + 1));
 				return true;
 			}
 			switch (op) {
@@ -338,7 +322,7 @@ final class FarCodePointers {
 					if (((modrm >> 3) & 7) != 0) {
 						return false;
 					}
-					Value value = new Constant(word(b, b.length - 2));
+					Value value = new Constant(X86.word(b, b.length - 2));
 					if (modrm >> 6 == 3) {
 						values[modrm & 7] = value;
 					}
@@ -365,7 +349,7 @@ final class FarCodePointers {
 				}
 				case 0xa3 -> { // MOV moffs16,AX
 					store(instruction, new Slot(segmentOrImplied(segment, false), DIRECT,
-						word(b, i + 1)), values[AX]);
+						X86.word(b, i + 1)), values[AX]);
 					return true;
 				}
 				case 0x06, 0x0e, 0x16, 0x1e -> { // PUSH sreg
@@ -377,7 +361,7 @@ final class FarCodePointers {
 					return true;
 				}
 				case 0x68 -> { // PUSH imm16
-					stack.push(new Constant(word(b, i + 1)));
+					stack.push(new Constant(X86.word(b, i + 1)));
 					return true;
 				}
 				case 0xcd -> { // INT n
@@ -427,25 +411,12 @@ final class FarCodePointers {
 			return pairStorers.computeIfAbsent(callee.getEntryPoint(), entry -> {
 				Map<Slot, Integer> stored = new HashMap<>(); // slot -> 0 for DX, 1 for DS
 				for (Instruction insn : program.getListing().getInstructions(callee.getBody(), true)) {
-					byte[] b;
-					try {
-						b = insn.getBytes();
-					}
-					catch (MemoryAccessException e) {
+					byte[] b = X86.bytes(insn);
+					int i = X86.opcodeIndex(b);
+					if (i < 0 || i + 1 >= b.length || ((b[i + 1] & 0xff) >> 6) == 3) {
 						continue;
 					}
-					int i = 0;
-					int segment = 0;
-					while (i < b.length && isPrefix(b[i] & 0xff)) {
-						int prefix = b[i] & 0xff;
-						if (prefix == 0x26 || prefix == 0x2e || prefix == 0x36 || prefix == 0x3e) {
-							segment = prefix;
-						}
-						i++;
-					}
-					if (i + 1 >= b.length || ((b[i + 1] & 0xff) >> 6) == 3) {
-						continue;
-					}
+					int segment = X86.segmentOverride(b);
 					int op = b[i] & 0xff;
 					int reg = ((b[i + 1] & 0xff) >> 3) & 7;
 					if (op == 0x89 && reg == DX) {
@@ -468,7 +439,7 @@ final class FarCodePointers {
 			return dsWriters.computeIfAbsent(callee.getEntryPoint(), entry -> {
 				for (Instruction insn : program.getListing().getInstructions(callee.getBody(), true)) {
 					for (Object result : insn.getResultObjects()) {
-						if (result instanceof Register written && overlaps(written, registers[DS])) {
+						if (result instanceof Register written && X86.overlaps(written, registers[DS])) {
 							return true;
 						}
 					}
@@ -497,21 +468,11 @@ final class FarCodePointers {
 				return;
 			}
 			Address target = ((SegmentedAddressSpace) at.getAddressSpace())
-					.getAddress(codeSegment(instruction, at), offset & 0xffff);
+					.getAddress(X86.codeSegment(program, instruction, at), offset & 0xffff);
 			MemoryBlock block = program.getMemory().getBlock(target);
 			if (block != null && block.isExecute() && block.isInitialized()) {
 				targets.putIfAbsent(target, instruction);
 			}
-		}
-
-		/** The instruction's CS: the asserted context value, else its address' segment. */
-		private int codeSegment(Instruction instruction, SegmentedAddress at) {
-			RegisterValue value = program.getProgramContext()
-					.getNonDefaultValue(registers[CS], instruction.getMinAddress());
-			if (value != null && value.hasValue()) {
-				return value.getUnsignedValue().intValue() & 0xffff;
-			}
-			return at.getSegment();
 		}
 
 		private void invalidateWrites(Instruction instruction) {
@@ -520,11 +481,11 @@ final class FarCodePointers {
 					continue;
 				}
 				for (int r = 0; r < registers.length; r++) {
-					if (r != CS && overlaps(written, registers[r])) {
+					if (r != CS && X86.overlaps(written, registers[r])) {
 						values[r] = null;
 					}
 				}
-				if (overlaps(written, registers[4])) { // SP: the stack model no longer holds
+				if (X86.overlaps(written, registers[4])) { // SP: the stack model no longer holds
 					stack.clear();
 				}
 			}
@@ -549,10 +510,6 @@ final class FarCodePointers {
 
 	/** A stack placeholder for a value nothing is known about (deques refuse null). */
 	private static final Value UNKNOWN = new Constant(Integer.MIN_VALUE);
-
-	private static boolean overlaps(Register a, Register b) {
-		return a.contains(b) || b.contains(a);
-	}
 
 	private static final int BX = 3;
 	private static final int BP = 5;
@@ -583,12 +540,12 @@ final class FarCodePointers {
 		int mod = modrm >> 6;
 		int rm = modrm & 7;
 		if (mod == 0 && rm == 6) {
-			return new Slot(segmentOrImplied(segment, false), DIRECT, word(b, m + 1));
+			return new Slot(segmentOrImplied(segment, false), DIRECT, X86.word(b, m + 1));
 		}
 		boolean stackBased = rm == 2 || rm == 3 || rm == 6;
 		int disp = switch (mod) {
 			case 1 -> b[m + 1];
-			case 2 -> (short) word(b, m + 1);
+			case 2 -> (short) X86.word(b, m + 1);
 			default -> 0;
 		};
 		return new Slot(segmentOrImplied(segment, stackBased), rm, disp);
@@ -601,14 +558,4 @@ final class FarCodePointers {
 		return stackBased ? 0x36 : 0x3e;
 	}
 
-	private static int word(byte[] b, int at) {
-		return (b[at] & 0xff) | ((b[at + 1] & 0xff) << 8);
-	}
-
-	private static boolean isPrefix(int b) {
-		return switch (b) {
-			case 0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65, 0x66, 0x67, 0xf0, 0xf2, 0xf3 -> true;
-			default -> false;
-		};
-	}
 }

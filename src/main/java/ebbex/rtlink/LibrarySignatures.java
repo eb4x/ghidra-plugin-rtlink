@@ -426,7 +426,7 @@ final class LibrarySignatures {
 	private static void maskDisplacement(Pattern pattern, int at, int length) {
 		byte[] data = pattern.data();
 		int i = at;
-		while (i < at + length && isPrefix(data[i] & 0xff)) {
+		while (i < at + length && X86.isPrefix(data[i] & 0xff)) {
 			i++;
 		}
 		if (i >= at + length) {
@@ -446,13 +446,6 @@ final class LibrarySignatures {
 		for (int k = at + length - displacement; k < at + length; k++) {
 			pattern.masked()[k] = true;
 		}
-	}
-
-	private static boolean isPrefix(int b) {
-		return switch (b) {
-			case 0x26, 0x2e, 0x36, 0x3e, 0x66, 0x67, 0xf0, 0xf2, 0xf3 -> true;
-			default -> false;
-		};
 	}
 
 	/** {@code segment[offset, end)} with its masks, less the masked bytes at the end. */

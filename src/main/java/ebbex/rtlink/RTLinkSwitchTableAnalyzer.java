@@ -369,7 +369,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 		// MOV CL,3
 		Instruction three = previousInBlock(classScale, block);
 		if (three == null || !"MOV".equals(three.getMnemonicString()) ||
-			!cl.equals(three.getRegister(0)) || !isScalar(three.getScalar(1), 3)) {
+			!cl.equals(three.getRegister(0)) || !X86.isScalar(three.getScalar(1), 3)) {
 			return null;
 		}
 
@@ -392,7 +392,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 				tableOffset = (int) table.getUnsignedValue();
 				break; // the table base is the far anchor; the walk is done
 			}
-			if (defines(instruction, bx)) {
+			if (X86.changes(instruction, bx)) {
 				return null;
 			}
 			if ("XLAT".equals(mnemonic)) {
@@ -402,7 +402,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 				sawClassLookup = true;
 			}
 			else if ("AND".equals(mnemonic) && al.equals(instruction.getRegister(0)) &&
-				isScalar(instruction.getScalar(1), 0xf)) {
+				X86.isScalar(instruction.getScalar(1), 0xf)) {
 				sawClassMask = true;
 			}
 			else if ("CMP".equals(mnemonic) && al.equals(instruction.getRegister(0))) {
@@ -598,9 +598,6 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 		return bp == null ? null : displacement;
 	}
 
-	private static boolean isScalar(Scalar scalar, long value) {
-		return scalar != null && scalar.getUnsignedValue() == value;
-	}
 
 	/**
 	 * Recover a switch table that lives in <b>DGROUP data</b> rather than after the code,
@@ -651,7 +648,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 					instruction.getRegister(1) != null) {
 					indexAdded = true;
 				}
-				else if (defines(instruction, base)) {
+				else if (X86.changes(instruction, base)) {
 					return null;
 				}
 			}
@@ -664,7 +661,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 				tableOffset = (int) table.getUnsignedValue();
 				break;
 			}
-			else if (defines(instruction, base)) {
+			else if (X86.changes(instruction, base)) {
 				return null;
 			}
 			instruction = instruction.getPrevious();
@@ -1060,7 +1057,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 				}
 				pendingDivisor = instruction.getRegister(0);
 			}
-			else if (defines(instruction, index)) {
+			else if (X86.changes(instruction, index)) {
 				return -1; // the compared value is not the value that indexes the table
 			}
 			instruction = instruction.getPrevious();
@@ -1103,7 +1100,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 				long entries = bound.getUnsignedValue() / 2 + 1;
 				return entries > MAX_TABLE_ENTRIES ? -1 : (int) entries;
 			}
-			if (defines(instruction, index)) {
+			if (X86.changes(instruction, index)) {
 				return -1; // the index is redefined before the guard: the bound is not on BX
 			}
 			instruction = instruction.getPrevious();
@@ -1158,27 +1155,6 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 		return scalar != null && scalar.getUnsignedValue() == 1;
 	}
 
-	/**
-	 * True if {@code instruction} writes {@code register} or any register overlapping it:
-	 * {@code MOV BL,..} redefines {@code BX} as surely as {@code MOV BX,..} does. {@code OR r,r}
-	 * and {@code AND r,r} write {@code r} without changing it — the {@code OR AH,AH; JNZ}
-	 * remainder check after a byte divide (NEBULAR OVERLAY_27) — so they do not count.
-	 */
-	private static boolean defines(Instruction instruction, Register register) {
-		String mnemonic = instruction.getMnemonicString();
-		if (("OR".equals(mnemonic) || "AND".equals(mnemonic)) &&
-			instruction.getRegister(0) != null &&
-			instruction.getRegister(0).equals(instruction.getRegister(1))) {
-			return false;
-		}
-		for (Object result : instruction.getResultObjects()) {
-			if (result instanceof Register written &&
-				(written.contains(register) || register.contains(written))) {
-				return true;
-			}
-		}
-		return false;
-	}
 
 	/** True if Ghidra already recorded a computed flow from this branch. */
 	private static boolean hasComputedReference(ReferenceManager refManager,

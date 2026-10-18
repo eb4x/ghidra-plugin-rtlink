@@ -481,7 +481,7 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 				if (!(instr.getAddress() instanceof SegmentedAddress at)) {
 					return 0; // overlay code: the table moves with the page frame
 				}
-				Address table = space.getAddress(codeSegment(instr, at), (int) value);
+				Address table = space.getAddress(X86.codeSegment(instr.getProgram(), instr, at), (int) value);
 				if (memory.getBlock(table) == null) {
 					return 0;
 				}
@@ -587,10 +587,10 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 			}
 			if (cur.getMnemonicString().equals("MOV")) {
 				// From p-code, not operand indices: stock 12.1.3/12.1.4 swap MOV Sreg's
-				// displayed operands (see RTLinkOverlayAnalyzer.movDestination).
-				Register dst = RTLinkOverlayAnalyzer.movDestination(cur);
+				// displayed operands (see X86).
+				Register dst = X86.movDestination(cur);
 				if (dst != null && isSegmentRegister(dst) &&
-					reg.equals(RTLinkOverlayAnalyzer.movSourceRegister(cur))) {
+					reg.equals(X86.movSourceRegister(cur))) {
 					return true;
 				}
 			}
@@ -640,20 +640,6 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 		return representation.contains("ES:") || representation.contains("SS:") ||
 			representation.contains("CS:") || representation.contains("FS:") ||
 			representation.contains("GS:");
-	}
-
-	/**
-	 * The instruction's CS: the value asserted in context (the overlay analyzer sets it per
-	 * module), else its address' segment.
-	 */
-	private static int codeSegment(Instruction instr, SegmentedAddress at) {
-		ProgramContext context = instr.getProgram().getProgramContext();
-		Register cs = context.getRegister("CS");
-		RegisterValue value = cs == null ? null : context.getNonDefaultValue(cs, at);
-		if (value != null && value.hasValue()) {
-			return value.getUnsignedValue().intValue() & 0xffff;
-		}
-		return at.getSegment();
 	}
 
 	/**

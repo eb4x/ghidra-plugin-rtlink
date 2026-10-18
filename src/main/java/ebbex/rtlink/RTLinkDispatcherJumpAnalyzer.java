@@ -20,7 +20,6 @@ import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.SegmentedAddress;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.lang.Register;
-import ghidra.program.model.lang.RegisterValue;
 import ghidra.program.model.listing.Bookmark;
 import ghidra.program.model.listing.BookmarkManager;
 import ghidra.program.model.listing.BookmarkType;
@@ -28,14 +27,12 @@ import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.SourceType;
-import ghidra.program.model.symbol.Symbol;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
@@ -175,7 +172,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 					removeOrphanedErrorBookmarks(program, target);
 					continue;
 				}
-				if (isEvidencedInstruction(program, targetInsn)) {
+				if (CodeEvidence.isEvidenced(program, targetInsn)) {
 					// Nothing decoded there, or the target is real code that stands on its own
 					// evidence: drop the bad reference but leave the code (do not over-clear).
 					continue;
@@ -210,7 +207,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		if (!(jmp.getMinAddress() instanceof SegmentedAddress at)) {
 			return 0;
 		}
-		int segment = codeSegment(program, jmp, at);
+		int segment = X86.codeSegment(program, jmp, at);
 		ReferenceManager references = program.getReferenceManager();
 		int added = 0;
 		for (long imm : loadedImmediates(program, jmp, jmp.getRegister(0))) {
@@ -231,22 +228,6 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 			}
 		}
 		return added;
-	}
-
-	/**
-	 * The jump's CS: the context value where one is asserted (MzLoader over each resident
-	 * block), else its address' segment. Never the language default, which is a page guess.
-	 */
-	private static int codeSegment(Program program, Instruction jmp, SegmentedAddress at) {
-		Register cs = program.getLanguage().getRegister("CS");
-		if (cs != null) {
-			RegisterValue value =
-				program.getProgramContext().getNonDefaultValue(cs, jmp.getMinAddress());
-			if (value != null && value.hasValue()) {
-				return value.getUnsignedValue().intValue() & 0xffff;
-			}
-		}
-		return at.getSegment();
 	}
 
 	private static boolean hasReferenceTo(Instruction jmp, Address target) {
@@ -311,8 +292,8 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		if (jmp.getNumOperands() != 1 || jmp.getRegister(0) == null) {
 			return false;
 		}
-		byte[] bytes = instructionBytes(jmp);
-		int i = skipPrefixes(bytes);
+		byte[] bytes = X86.bytes(jmp);
+		int i = X86.opcodeIndex(bytes);
 		if (i < 0 || i + 1 >= bytes.length || (bytes[i] & 0xff) != 0xff) {
 			return false;
 		}
@@ -337,8 +318,8 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		if (after == null || !after.equals(jmp.getMinAddress())) {
 			return false; // must be immediately, contiguously before the jump
 		}
-		byte[] bytes = instructionBytes(prev);
-		int i = skipPrefixes(bytes);
+		byte[] bytes = X86.bytes(prev);
+		int i = X86.opcodeIndex(bytes);
 		if (i < 0 || i + 2 >= bytes.length || (bytes[i] & 0xff) != OPCODE_MOV_RM_R) {
 			return false;
 		}
@@ -394,7 +375,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		Set<Long> immediates = loadedImmediates(program, jmp, jumpReg);
 		MemoryBlock jumpBlock = program.getMemory().getBlock(jmp.getMinAddress());
 		long pageBase = (jmp.getMaxAddress().getOffset() + 1) & PAGE_MASK;
-		long csBase = (long) codeSegment(program, jmp, at) * 16;
+		long csBase = (long) X86.codeSegment(program, jmp, at) * 16;
 
 		List<Reference> matched = new ArrayList<>();
 		for (Reference ref : analysisComputedJumpRefs(jmp)) {
@@ -477,7 +458,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 				if (imm != null) {
 					immediates.add(imm);
 				}
-				else if (!writes(cur, jumpReg)) {
+				else if (!X86.writes(cur, jumpReg)) {
 					next.addAll(predecessors(program, cur));
 				}
 			}
@@ -507,16 +488,6 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		return predecessors;
 	}
 
-	private static boolean writes(Instruction instruction, Register register) {
-		for (Object result : instruction.getResultObjects()) {
-			if (result instanceof Register written &&
-				(written.contains(register) || register.contains(written))) {
-				return true;
-			}
-		}
-		return false;
-	}
-
 	/** The 16-bit immediate a {@code MOV <reg>, imm16} loads, or null if that is not this. */
 	private static Long loadedImmediate(Instruction instruction, Register reg) {
 		if (!"MOV".equals(instruction.getMnemonicString()) ||
@@ -534,65 +505,4 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		return scalar.getUnsignedValue() & 0xffffL;
 	}
 
-	/**
-	 * Whether {@code instruction} stands on its own evidence as real code — a foreign flow
-	 * reference, a defined function entry, an external entry point, or a non-default symbol.
-	 * Function <i>containment</i> is deliberately not evidence. Mirrors the identically named
-	 * predicate in {@link RTLinkFlowRepairAnalyzer} so the two passes agree byte-for-byte.
-	 */
-	private static boolean isEvidencedInstruction(Program program, Instruction instruction) {
-		Address entry = instruction.getMinAddress();
-		for (Reference reference : program.getReferenceManager().getReferencesTo(entry)) {
-			if (reference.getReferenceType().isFlow()) {
-				return true;
-			}
-		}
-		if (program.getFunctionManager().getFunctionAt(entry) != null) {
-			return true;
-		}
-		if (program.getSymbolTable().isExternalEntryPoint(entry)) {
-			return true;
-		}
-		Symbol primary = program.getSymbolTable().getPrimarySymbol(entry);
-		return primary != null && primary.getSource() != SourceType.DEFAULT;
-	}
-
-	/** The instruction's bytes, or an empty array if unreadable. */
-	private static byte[] instructionBytes(Instruction instruction) {
-		try {
-			return instruction.getBytes();
-		}
-		catch (MemoryAccessException e) {
-			return new byte[0];
-		}
-	}
-
-	/** Index of the first opcode byte past any legacy prefixes, or -1 if none/only prefixes. */
-	private static int skipPrefixes(byte[] bytes) {
-		int i = 0;
-		while (i < bytes.length && isPrefixByte(bytes[i] & 0xff)) {
-			i++;
-		}
-		return i < bytes.length ? i : -1;
-	}
-
-	/** x86 legacy prefixes: segment overrides, operand/address size, LOCK and REP. */
-	private static boolean isPrefixByte(int b) {
-		switch (b) {
-			case 0x26: // ES
-			case 0x2e: // CS
-			case 0x36: // SS
-			case 0x3e: // DS
-			case 0x64: // FS
-			case 0x65: // GS
-			case 0x66: // operand size
-			case 0x67: // address size
-			case 0xf0: // LOCK
-			case 0xf2: // REPNE
-			case 0xf3: // REP
-				return true;
-			default:
-				return false;
-		}
-	}
 }
