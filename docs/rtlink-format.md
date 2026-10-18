@@ -402,7 +402,7 @@ in-page offset directly.
 **Nothing in `page_id` flags the stub length** (bits 14–15 are always clear), so the two
 forms must be told apart *structurally*: if the bytes at +12 begin another dispatcher
 `CALLF`, the stub is 12 bytes; otherwise a word at +12 below the page's paragraph count is a
-`module_word`. Implemented in `scanForJmpfStubs`.
+`module_word`. Implemented in `DispatchStubs.scanForJmpfStubs`.
 
 **Resident-target trampoline** (VICEROY `210d:0d91`), 10 bytes: `CALLF dispatcher` +
 `JMPF realseg:off` with a *relocated* segment landing in resident memory. RTLink routes far

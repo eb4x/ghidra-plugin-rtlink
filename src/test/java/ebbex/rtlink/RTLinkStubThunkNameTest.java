@@ -70,7 +70,7 @@ public class RTLinkStubThunkNameTest extends AbstractGenericTest {
 
 	private Function thunk() throws Exception {
 		MessageLog log = new MessageLog();
-		inTx(() -> assertTrue(log.toString(), RTLinkOverlayAnalyzer.createThunkAtStub(
+		inTx(() -> assertTrue(log.toString(), StubThunks.create(
 			program.getFunctionManager(), addr(STUB), addr(TARGET), 12, log)));
 		Function stub = program.getFunctionManager().getFunctionAt(addr(STUB));
 		assertNotNull(stub);
