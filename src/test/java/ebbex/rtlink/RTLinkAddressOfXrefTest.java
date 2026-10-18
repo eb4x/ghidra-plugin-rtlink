@@ -138,6 +138,17 @@ public class RTLinkAddressOfXrefTest extends AbstractGenericTest {
 			assertEquals("address-of refs", 4, counts.addressOf);
 			assertEquals("deref refs", 1, counts.deref);
 
+			// A second pass over the same code adds no references (it re-adds the same ones).
+			int total = program.getReferenceManager().getReferenceCountTo(builder.addr("0x2000:0x1010"));
+			builder.withTransaction(() -> {
+				for (Instruction instr : program.getListing().getInstructions(true)) {
+					RTLinkXrefAnalyzer.addDataXrefs(instr, context, ds, memory, refManager,
+						space, new RTLinkXrefAnalyzer.Counts());
+				}
+			});
+			assertEquals("a second pass adds no references", total,
+				program.getReferenceManager().getReferenceCountTo(builder.addr("0x2000:0x1010")));
+
 			Reference[] push = refManager.getReferencesFrom(builder.addr("0x1000:0x0000"));
 			assertEquals(1, push.length);
 			assertEquals(RefType.DATA, push[0].getReferenceType());

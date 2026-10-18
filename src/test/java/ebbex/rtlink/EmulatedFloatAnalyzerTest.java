@@ -75,6 +75,11 @@ public class EmulatedFloatAnalyzerTest extends AbstractGenericTest {
 				new byte[] { (byte) 0x9b, (byte) 0xd9, 0x5e, (byte) 0xcd, 0x3b }, bytes);
 			assertNotNull("the CMP decodes in phase",
 				program.getListing().getInstructionAt(builder.addr("0x1000:0x0004")));
+
+			analyze(program, new EmulatedFloatAnalyzer());
+			program.getMemory().getBytes(builder.addr("0x1000:0x0000"), bytes);
+			assertArrayEquals("a second pass rewrites nothing",
+				new byte[] { (byte) 0x9b, (byte) 0xd9, 0x5e, (byte) 0xcd, 0x3b }, bytes);
 		}
 		finally {
 			builder.dispose();

@@ -1211,9 +1211,17 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 
 	/**
 	 * True if {@code instruction} writes {@code register} or any register overlapping it:
-	 * {@code MOV BL,..} redefines {@code BX} as surely as {@code MOV BX,..} does.
+	 * {@code MOV BL,..} redefines {@code BX} as surely as {@code MOV BX,..} does. {@code OR r,r}
+	 * and {@code AND r,r} write {@code r} without changing it — the {@code OR AH,AH; JNZ}
+	 * remainder check after a byte divide (NEBULAR OVERLAY_27) — so they do not count.
 	 */
 	private static boolean defines(Instruction instruction, Register register) {
+		String mnemonic = instruction.getMnemonicString();
+		if (("OR".equals(mnemonic) || "AND".equals(mnemonic)) &&
+			instruction.getRegister(0) != null &&
+			instruction.getRegister(0).equals(instruction.getRegister(1))) {
+			return false;
+		}
 		for (Object result : instruction.getResultObjects()) {
 			if (result instanceof Register written &&
 				(written.contains(register) || register.contains(written))) {

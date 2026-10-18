@@ -220,6 +220,12 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 					.hasNext());
 			assertEquals("the override is written from the references", 1, writeOverrides(builder));
 			assertEquals("and left alone after that", 0, writeOverrides(builder));
+
+			int refs = program.getReferenceManager().getReferencesFrom(dispatch).length;
+			assertEquals(8, refs);
+			runTablePass(builder);
+			assertEquals("a second table pass adds nothing", refs,
+				program.getReferenceManager().getReferencesFrom(dispatch).length);
 		}
 		finally {
 			builder.dispose();
