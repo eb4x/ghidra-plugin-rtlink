@@ -17,7 +17,7 @@ import ghidra.program.model.symbol.SymbolIterator;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Tests for {@link RTLinkOverlayAnalyzer#seedVmRuntimeEntryPoints}: the RTLink entry stub
+ * Tests for {@link VmRuntimeSeeds#seed}: the RTLink entry stub
  * ({@code $$VM_INITW}: {@code CALLF init ; JMPF __astart}) and the VM nucleus's
  * constant-pair dispatch ({@code MOV AX,imm ; MOV DX,imm ; TEST CS:[flag],0xFF ; JE ;
  * MOV AX,imm ; MOV DX,imm ; MOV [SI-4],AX ; JMP DX}) in miniature — plus the refusals:
@@ -78,7 +78,7 @@ public class RTLinkVmRuntimeSeedTest extends AbstractGenericTest {
 		Program program = builder.getProgram();
 		int txId = program.startTransaction("seed VM runtime entry points");
 		try {
-			return RTLinkOverlayAnalyzer.seedVmRuntimeEntryPoints(program, dispatchers,
+			return VmRuntimeSeeds.seed(program, dispatchers,
 				new MessageLog(), TaskMonitor.DUMMY);
 		}
 		finally {

@@ -16,6 +16,12 @@ import ghidra.program.model.scalar.Scalar;
  */
 final class X86 {
 
+	/** {@code CALLF ptr16:16}. */
+	static final byte OPCODE_CALLF = (byte) 0x9A;
+
+	/** {@code JMPF ptr16:16}. */
+	static final byte OPCODE_JMPF = (byte) 0xEA;
+
 	private X86() {
 	}
 

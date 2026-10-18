@@ -2,11 +2,9 @@ package ebbex.rtlink;
 
 import java.io.IOException;
 import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -17,8 +15,6 @@ import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.services.*;
 import ghidra.app.util.MemoryBlockUtils;
-import ghidra.app.util.PseudoDisassembler;
-import ghidra.app.util.PseudoInstruction;
 import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.FileBytesProvider;
 import ghidra.app.util.bin.format.mz.*;
@@ -30,12 +26,10 @@ import ghidra.program.database.function.OverlappingFunctionException;
 import ghidra.program.database.mem.FileBytes;
 import ghidra.program.model.address.*;
 import ghidra.program.model.data.DataUtilities;
-import ghidra.program.model.lang.OperandType;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.*;
 import ghidra.program.model.reloc.Relocation.Status;
-import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.symbol.*;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
@@ -86,8 +80,8 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			"creates cross-references from dispatch stubs to overlay functions.";
 	private static final int INITIAL_SEGMENT_VAL = 0x1000;
 
-	static final byte OPCODE_CALLF = (byte) 0x9A;
-	static final byte OPCODE_JMPF = (byte) 0xEA;
+	private static final byte OPCODE_CALLF = X86.OPCODE_CALLF;
+	private static final byte OPCODE_JMPF = X86.OPCODE_JMPF;
 	private static final int PAGE_ID_MASK = 0x3FFF;
 
 	// Far calling convention (x86-16.cspec: extrapop=4, stackshift=4) stamped on every
@@ -101,33 +95,10 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	// so the analyzer adapts to binaries linked with the dispatcher elsewhere.
 	private static final int MIN_DISPATCHER_STUB_COUNT = 4;
 
-	/**
-	 * The overlay manager's relocation fixup loop — a byte-identical blob the linker stamps
-	 * into every VM program (see the "Fingerprint" section of {@code docs/rtlink-format.md}).
-	 * Used here only to locate the code segment the manager lives in.
-	 */
-	private static final byte[] RUNTIME_FIXUP_FINGERPRINT = {
-		(byte) 0xe3, 0x19, 0x06, 0x57, (byte) 0xd1, (byte) 0xe6, (byte) 0xd1, (byte) 0xe6,
-		(byte) 0xad, (byte) 0x8b, (byte) 0xf8, (byte) 0xad, 0x03, (byte) 0xc3, (byte) 0x8e,
-		(byte) 0xc0, 0x26, 0x01, 0x15, (byte) 0xe2, (byte) 0xf3, (byte) 0xd1, (byte) 0xee,
-		(byte) 0xd1, (byte) 0xee, 0x5f, 0x07, (byte) 0xc3
-	};
-
-	/**
-	 * The error text the RTLink support code carries in its own code segment. It is what
-	 * marks a binary as RTLink at all, and it is present even in section-only binaries that
-	 * have no VM manager (and so no {@link #RUNTIME_FIXUP_FINGERPRINT}).
-	 */
-	private static final byte[] RUNTIME_SIGNATURE =
-		"Internal error in .RTLink(R)/Plus run-time code.".getBytes(StandardCharsets.US_ASCII);
-
 	private static final String OPTION_APPLY_RELOCS = "Apply Relocations";
 	private static final String OPTION_CREATE_XREFS = "Create Stub Cross-References";
 	private static final String OPTION_MARKUP_HEADERS = "Markup Page Headers";
 	private static final String OPTION_ASSUME_DS = "Assume Data Segment (DS)";
-
-	/** Max instructions to decode when hunting the DGROUP load in the C startup. */
-	private static final int STARTUP_SCAN_LIMIT = 200;
 
 	/**
 	 * Bodies of the dispatch stubs/trampolines this run actually resolved — the set that
@@ -176,14 +147,14 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			// disassembler abandoned, re-wire dispatch-stub thunks (clearing stale
 			// no-return flags that silently truncate every caller's decompilation) and
 			// assume DS. Husks first, so the thunk pass finds real code at its targets.
-			repairHuskFunctions(program, log, monitor);
+			HuskRepair.repair(program, log, monitor);
 			if (createStubXrefs) {
 				// Retrofit the VM-runtime entry seeds too, unless the stub pass already
 				// did: dispatch-stub discovery is a cheap byte scan, and everything
-				// seedVmRuntimeEntryPoints does is a no-op where a prior run or hand
+				// VmRuntimeSeeds does is a no-op where a prior run or hand
 				// analysis already claimed the address.
 				if (!repairStubThunks(program, log, monitor)) {
-					seedVmRuntimeEntryPoints(program, discoverDispatchers(program, monitor),
+					VmRuntimeSeeds.seed(program, discoverDispatchers(program, monitor),
 						log, monitor);
 				}
 			}
@@ -359,23 +330,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
-	 * True if {@code addr} lies in resident code memory — an initialized, executable,
-	 * non-overlay block.
-	 * <p>
-	 * The scans below iterate blocks but must range-check against <em>memory</em>, not
-	 * against the block they happen to be iterating: MZ segment blocks are contiguous in
-	 * flat space, and a stub can straddle the boundary between two of them. VMEX1.EXE has
-	 * one — its jump table's first stub begins two bytes before the end of the preceding
-	 * segment block — and a per-block check silently dropped it, leaving the stub
-	 * unresolved and its {@code JMPF 0000:xxxx} to be walked into unmapped memory.
-	 */
-	private static boolean isCodeMemory(Memory memory, Address addr) {
-		MemoryBlock block = memory.getBlock(addr);
-		return block != null && !block.isOverlay() && block.isExecute() &&
-			block.isInitialized();
-	}
-
-	/**
 	 * Index {@code overlayBlocks} by overlay record index (= page index). Stub scans
 	 * look pages up by record index rather than list position, so a record skipped for
 	 * having no code cannot shift every later page onto the wrong block.
@@ -401,232 +355,10 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	}
 
 
-	/**
-	 * Establish DS if the option is on.
-	 *
-	 * <p>Runs on every pass rather than once, because it is corrective, not just additive:
-	 * a program analyzed by a build that assumed DGROUP over the whole executable image
-	 * carries that context in its runtime blocks, and nothing else will ever take it back
-	 * out. Re-running is cheap (a bounded PseudoDisassembler walk of the startup) and
-	 * idempotent, so Analysis -&gt; One Shot repairs such a program in place, without a
-	 * re-import that would cost every name, type and comment already applied to it.
-	 */
+	/** Establish DS if the option is on; see {@link DataSegmentAssumption}. */
 	private void maybeAssumeDataSegment(Program program, MessageLog log) {
 		if (assumeDataSegment) {
-			assumeDataSegmentRegister(program, log);
-		}
-	}
-
-	/**
-	 * Establish the data segment (DGROUP) so the decompiler can resolve DS-relative data
-	 * accesses. In the small-data DOS model DS == SS == DGROUP, loaded once in the C startup
-	 * (e.g. {@code MOV DI,DGROUP; MOV SS,DI; PUSH SS; POP DS}). We follow the entry's initial
-	 * far jump into the startup, linearly decode it while tracking register immediates, and
-	 * take the value moved into SS/DS as DGROUP. That value is then assumed for DS over all
-	 * executable memory; without it every DS-relative global collapses to a bare offset in an
-	 * unmapped space (e.g. {@code *(int *)0x8542}) that ignores applied data types.
-	 */
-	private void assumeDataSegmentRegister(Program program, MessageLog log) {
-		Register ds = program.getLanguage().getRegister("DS");
-		if (ds == null) {
-			return;
-		}
-		Address entry = firstEntryPoint(program);
-		if (entry == null) {
-			return;
-		}
-		Integer dgroup = detectDataSegment(program, entry);
-		if (dgroup == null) {
-			log.appendMsg("RTLink: could not determine DGROUP from startup; DS left unset");
-			return;
-		}
-		ProgramContext context = program.getProgramContext();
-		BigInteger value = BigInteger.valueOf(dgroup & 0xffffL);
-		Set<MemoryBlock> runtime = findRuntimeCodeBlocks(program, dgroup);
-		int blocks = 0;
-		try {
-			for (MemoryBlock block : program.getMemory().getBlocks()) {
-				if (!block.isExecute()) {
-					continue;
-				}
-				if (runtime.contains(block)) {
-					// Clear rather than merely skip: an earlier build may have assumed DGROUP
-					// over the whole image, and that context would otherwise stay forever.
-					context.remove(block.getStart(), block.getEnd(), ds);
-					continue;
-				}
-				context.setValue(ds, block.getStart(), block.getEnd(), value);
-				blocks++;
-			}
-		}
-		catch (ContextChangeException e) {
-			log.appendMsg("RTLink: failed to assume DS: " + e.getMessage());
-			return;
-		}
-		RTLinkProgram.markDataSegmentAssumed(program);
-		// Msg.info only, never log.appendMsg: any content in the analysis MessageLog makes
-		// AutoAnalysisPlugin.analysisEnded() pop a "There were warnings/errors issued during
-		// analysis" dialog. The MessageLog above is for the paths where DS could not be assumed.
-		Msg.info(this, String.format(
-			"RTLink: Assuming DS = 0x%04X (DGROUP) over %d executable blocks; skipped %d " +
-				"RTLink runtime block(s), where DS is not DGROUP",
-			dgroup, blocks, runtime.size()));
-	}
-
-	/**
-	 * The executable blocks holding the RTLink runtime, which the DS assumption does not
-	 * cover.
-	 *
-	 * <p>{@code DS == DGROUP} is a property of compiler-generated code. The runtime is
-	 * hand-written assembly, and it owns DS: the overlay manager reloads it throughout from
-	 * its own saved-segment slots (in VICEROY.EXE, {@code MOV DS,word ptr CS:[0x3999]},
-	 * {@code CS:[0x39a1]}, {@code CS:[0x39a5]}, and {@code MOV DS,CS} in its error paths),
-	 * while the support code addresses every one of its variables CS-relative and never loads
-	 * DS at all.
-	 *
-	 * <p>Leaving DS unset over these blocks is the honest state — we do not know what DS holds
-	 * at an arbitrary point in the runtime — and it is what makes {@link RTLinkXrefAnalyzer}
-	 * decline them, since both its DS-relative pass and its address-of-immediate pass are gated
-	 * on a present DS value. Were DGROUP asserted here instead, a {@code MOV BX,0x44a7} naming
-	 * a string in the manager's own segment would resolve to {@code DGROUP:44a7} and plant a
-	 * data reference on an unrelated global.
-	 *
-	 * <p>Both halves of the runtime carry a signature documented in {@code docs/rtlink-format.md}:
-	 * the VM manager the fixup-loop fingerprint, the support code the RTLink error text (present
-	 * even in section-only binaries, which have no VM manager and so no fingerprint). DGROUP's
-	 * own block is never disowned, however those signatures happen to fall.
-	 *
-	 * <p>Package-private so tests can drive it directly.
-	 */
-	static Set<MemoryBlock> findRuntimeCodeBlocks(Program program, int dgroup) {
-		Memory memory = program.getMemory();
-		Set<MemoryBlock> runtime = new HashSet<>();
-		for (byte[] signature : List.of(RUNTIME_FIXUP_FINGERPRINT, RUNTIME_SIGNATURE)) {
-			Address hit = memory.findBytes(memory.getMinAddress(), signature, null, true,
-				TaskMonitor.DUMMY);
-			if (hit == null) {
-				continue;
-			}
-			MemoryBlock block = memory.getBlock(hit);
-			if (block == null || !block.isExecute()) {
-				continue;
-			}
-			if (block.getStart() instanceof SegmentedAddress start &&
-				start.getSegment() == dgroup) {
-				continue;
-			}
-			runtime.add(block);
-		}
-		return runtime;
-	}
-
-	private static Address firstEntryPoint(Program program) {
-		AddressIterator it = program.getSymbolTable().getExternalEntryPointIterator();
-		return it.hasNext() ? it.next() : null;
-	}
-
-	/**
-	 * Follow the entry's initial unconditional (far) jump into the C startup, then linearly
-	 * decode instructions tracking each general register's last immediate. Returns the segment
-	 * value moved into SS or DS (DGROUP), or null if not found within {@link #STARTUP_SCAN_LIMIT}
-	 * instructions. Decoding is done with a {@link PseudoDisassembler} so it works before the
-	 * program is disassembled and commits nothing.
-	 */
-	private static Integer detectDataSegment(Program program, Address entry) {
-		Register ss = program.getLanguage().getRegister("SS");
-		Register ds = program.getLanguage().getRegister("DS");
-		PseudoDisassembler disassembler = new PseudoDisassembler(program);
-
-		// Follow the entry's first unconditional jump (entry -> ... -> startup).
-		Address addr = entry;
-		for (int i = 0; i < 8 && addr != null; i++) {
-			PseudoInstruction instr = safeDecode(disassembler, addr);
-			if (instr == null) {
-				break;
-			}
-			FlowType flow = instr.getFlowType();
-			if (flow.isJump() && !flow.isConditional()) {
-				Address[] flows = instr.getFlows();
-				if (flows != null && flows.length == 1) {
-					addr = flows[0];
-					break;
-				}
-			}
-			addr = nextLinear(instr);
-		}
-		if (addr == null) {
-			addr = entry;
-		}
-
-		// Linearly decode the startup, watching for the SS/DS segment load.
-		Map<Register, Long> regImm = new HashMap<>();
-		for (int i = 0; i < STARTUP_SCAN_LIMIT; i++) {
-			PseudoInstruction instr = safeDecode(disassembler, addr);
-			if (instr == null) {
-				return null;
-			}
-			if ("MOV".equals(instr.getMnemonicString())) {
-				Register dest = X86.movDestination(instr);
-				if (dest != null && (dest.equals(ss) || dest.equals(ds))) {
-					Register src = X86.movSourceRegister(instr);
-					Long imm = src != null ? regImm.get(src) : null;
-					if (imm != null) {
-						return (int) (imm.longValue() & 0xffffL);
-					}
-				}
-				else if (dest != null) {
-					int type = instr.getOperandType(1);
-					Register src = X86.movSourceRegister(instr);
-					Scalar scalar = instr.getScalar(1);
-					if (scalar != null && OperandType.isScalar(type) &&
-						!OperandType.isAddress(type)) {
-						// A true immediate (not a memory displacement like [0x2]).
-						regImm.put(dest, scalar.getUnsignedValue());
-					}
-					else if (src != null && regImm.containsKey(src)) {
-						regImm.put(dest, regImm.get(src));
-					}
-					else {
-						regImm.remove(dest);
-					}
-				}
-			}
-			else {
-				// Any other write to a tracked register invalidates its known immediate.
-				for (Object result : instr.getResultObjects()) {
-					if (result instanceof Register reg) {
-						regImm.remove(reg);
-					}
-				}
-			}
-			addr = nextLinear(instr);
-			if (addr == null) {
-				return null;
-			}
-		}
-		return null;
-	}
-
-	private static PseudoInstruction safeDecode(PseudoDisassembler disassembler, Address addr) {
-		try {
-			return disassembler.disassemble(addr);
-		}
-		catch (Exception e) {
-			return null;
-		}
-	}
-
-	/** The next physical instruction address (fall-through preferred), or null past the block. */
-	private static Address nextLinear(PseudoInstruction instr) {
-		Address fallThrough = instr.getFallThrough();
-		if (fallThrough != null) {
-			return fallThrough;
-		}
-		try {
-			return instr.getAddress().add(instr.getLength());
-		}
-		catch (AddressOutOfBoundsException e) {
-			return null;
+			DataSegmentAssumption.assume(program, log);
 		}
 	}
 
@@ -1107,7 +839,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		if (jmpfStubs == 0) {
 			return false;
 		}
-		seedVmRuntimeEntryPoints(program, dispatcherSegs, log, monitor);
+		VmRuntimeSeeds.seed(program, dispatcherSegs, log, monitor);
 		return true;
 	}
 
@@ -1153,7 +885,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 				try {
 					Address jmpfAddr = searchAddr.add(5);
-					if (isCodeMemory(memory, jmpfAddr) &&
+					if (CodeSeeds.isResidentCode(memory, jmpfAddr) &&
 						memory.getByte(jmpfAddr) == OPCODE_JMPF) {
 						int off = Short.toUnsignedInt(memory.getShort(searchAddr.add(1)));
 						int seg = Short.toUnsignedInt(memory.getShort(searchAddr.add(3)));
@@ -1177,237 +909,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			}
 		}
 		return dispatchers;
-	}
-
-	/**
-	 * The VM nucleus's constant-pair dispatch — the shape ending each of {@code $$VM_UNK}'s
-	 * two arms (transcribed from {@code vmnuc.asm} in the vendor's RTLUTILS.LIB, and present
-	 * byte-identically in the VICEROY variant that matches no reference build):
-	 *
-	 * <pre>
-	 *   +0   B8 ii ii            MOV  AX, imm16     ; vendor entry ($$VM_CALL / $$VM_JMP)
-	 *   +3   BA ii ii            MOV  DX, imm16     ; inner entry, past that routine's prologue
-	 *   +6   2E F6 06 aa aa FF   TEST byte CS:[flag], 0xFF
-	 *   +12  74 06               JE   +6
-	 *   +14  B8 ii ii            MOV  AX, imm16     ; flag-set pair ($$VM_CALLR / $$VM_JMPR)
-	 *   +17  BA ii ii            MOV  DX, imm16
-	 *   +20  89 44 FC            MOV  [SI-4], AX    ; return-slot patch
-	 *   +23  FF E2               JMP  DX
-	 * </pre>
-	 *
-	 * AX is stored into the caller's far-return offset slot, so both AX immediates are
-	 * function entries (they are exactly the {@code $$VM_*} PUBDEF symbols in the vendor
-	 * object); the DX immediates are jump targets inside those routines' bodies. All four
-	 * resolve against the runtime CS the dispatch stubs call the dispatcher through — not
-	 * against the site's canonical segment, which is why the stock constant analyzer's
-	 * same-block resolution of this very shape is bogus (and stays deleted by
-	 * {@link RTLinkDispatcherJumpAnalyzer}) while this one is exact.
-	 */
-	private static final byte[] VM_DISPATCH_PATTERN = {
-		(byte) 0xB8, 0, 0, (byte) 0xBA, 0, 0,
-		0x2E, (byte) 0xF6, 0x06, 0, 0, (byte) 0xFF,
-		0x74, 0x06,
-		(byte) 0xB8, 0, 0, (byte) 0xBA, 0, 0,
-		(byte) 0x89, 0x44, (byte) 0xFC, (byte) 0xFF, (byte) 0xE2 };
-	private static final byte[] VM_DISPATCH_MASK = {
-		-1, 0, 0, -1, 0, 0,
-		-1, -1, -1, 0, 0, -1,
-		-1, -1,
-		-1, 0, 0, -1, 0, 0,
-		-1, -1, -1, -1, -1 };
-
-	/** Pattern offsets of the two AX immediates — vendor function entries. */
-	private static final int[] VM_DISPATCH_FUNCTION_IMMS = { 1, 15 };
-	/** Pattern offsets of the two DX immediates — mid-routine jump targets. */
-	private static final int[] VM_DISPATCH_FLOW_IMMS = { 4, 18 };
-
-	/**
-	 * Seed the RTLink VM runtime's function starts that nothing else ever reaches: the MZ
-	 * entry stub's two far targets, and the nucleus entries the {@code $$VM_UNK} dispatch
-	 * arms select by constant pair. These are real, evidenced entries reached only through
-	 * data (a patched return slot, a register-indirect jump), so neither auto-analysis nor
-	 * the decompiler's jump-table recovery ever disassembles them. Naming beyond
-	 * {@code __astart}/{@code $$VM_INITW} is deliberately left to FID against the vendor's
-	 * {@code vmnuc} objects — the nucleus ships in at least nine build variants with
-	 * shifting offsets, so only body hashes, never positions, identify the rest.
-	 * <p>
-	 * Everything here is a no-op where an earlier run or hand analysis already claimed the
-	 * address, so the pass is safe to retrofit onto an analyzed program. Exposed
-	 * package-private so tests can drive it directly.
-	 */
-	static int seedVmRuntimeEntryPoints(Program program, Map<Long, Integer> dispatchers,
-			MessageLog log, TaskMonitor monitor) throws CancelledException {
-		AddressSet functionSeeds = new AddressSet();
-		AddressSet flowSeeds = new AddressSet();
-		PseudoDisassembler disassembler = new PseudoDisassembler(program);
-
-		seedEntryStub(program, disassembler, functionSeeds);
-		seedVmDispatchTargets(program, dispatchers, disassembler, functionSeeds, flowSeeds,
-			monitor);
-
-		if (functionSeeds.isEmpty() && flowSeeds.isEmpty()) {
-			return 0;
-		}
-
-		AddressSet residentRange = new AddressSet();
-		for (MemoryBlock block : program.getMemory().getBlocks()) {
-			if (!block.isOverlay() && block.isExecute() && block.isInitialized()) {
-				residentRange.add(block.getStart(), block.getEnd());
-			}
-		}
-
-		monitor.setMessage("RTLink: Disassembling VM runtime entry points...");
-		AddressSet toDisassemble = functionSeeds.union(flowSeeds);
-		DisassembleCommand disCmd = new DisassembleCommand(toDisassemble, residentRange, true);
-		disCmd.applyTo(program, monitor);
-		monitor.checkCancelled();
-
-		monitor.setMessage("RTLink: Creating VM runtime functions...");
-		CreateFunctionCmd funcCmd = new CreateFunctionCmd(functionSeeds, SourceType.ANALYSIS);
-		funcCmd.applyTo(program, monitor);
-
-		verifyEntryPointsBecameCode(program, functionSeeds, "VM runtime entry point", log,
-			monitor);
-
-		int count = (int) functionSeeds.getNumAddresses();
-		RTLinkProgram.recordVmRuntimeSeeds(program, count);
-		Msg.info(RTLinkOverlayAnalyzer.class, String.format(
-			"RTLink/Plus: Seeded %d VM runtime function entr%s and %d dispatch flow target(s)",
-			count, count == 1 ? "y" : "ies", flowSeeds.getNumAddresses()));
-		return count;
-	}
-
-	/**
-	 * The MZ entry of an RTLink/Plus VM program is the linker's own 10-byte stub — the
-	 * vendor object's public {@code $$VM_INITW}: {@code CALLF <vm init body>} followed by
-	 * {@code JMPF <startup>}, both operands carrying real MZ-relocated segments. Label the
-	 * stub and the startup, and seed both far targets as functions: the init body is
-	 * reached from nowhere else, and the JMPF tail-jump never makes the startup a function
-	 * on its own. The startup label {@code __astart} is the MSC CRT's entry symbol — the
-	 * corpus toolchain; on a non-MSC RTLink binary the function start would still be
-	 * right and only the name conventional.
-	 */
-	private static void seedEntryStub(Program program, PseudoDisassembler disassembler,
-			AddressSet functionSeeds) {
-		Address entry = firstEntryPoint(program);
-		if (entry == null) {
-			return;
-		}
-		Memory memory = program.getMemory();
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
-		try {
-			if (memory.getByte(entry) != OPCODE_CALLF ||
-				memory.getByte(entry.add(5)) != OPCODE_JMPF) {
-				return;
-			}
-			Address initBody = space.getAddress(
-				Short.toUnsignedInt(memory.getShort(entry.add(3))),
-				Short.toUnsignedInt(memory.getShort(entry.add(1))));
-			Address startup = space.getAddress(
-				Short.toUnsignedInt(memory.getShort(entry.add(8))),
-				Short.toUnsignedInt(memory.getShort(entry.add(6))));
-			if (initBody.equals(startup) || initBody.equals(entry) || startup.equals(entry)) {
-				return;
-			}
-			if (!isCodeMemory(memory, initBody) || !isCodeMemory(memory, startup)) {
-				return;
-			}
-			if (safeDecode(disassembler, initBody) == null ||
-				safeDecode(disassembler, startup) == null) {
-				return;
-			}
-			SymbolTable symbolTable = program.getSymbolTable();
-			try {
-				// Additional label: the loader's `entry` stays primary.
-				symbolTable.createLabel(entry, "$$VM_INITW", SourceType.ANALYSIS);
-			}
-			catch (InvalidInputException e) {
-				// ignore
-			}
-			labelAddress(symbolTable, "__astart", startup);
-			functionSeeds.add(initBody);
-			functionSeeds.add(startup);
-		}
-		catch (MemoryAccessException | AddressOutOfBoundsException e) {
-			// not the stub; leave the entry alone
-		}
-	}
-
-	/**
-	 * Scan each resident block holding a discovered dispatcher for
-	 * {@link #VM_DISPATCH_PATTERN} sites and collect their immediates — AX pairs as
-	 * function seeds, DX pairs as flow-only seeds — resolved against the dispatcher's
-	 * stub-declared segment. A target must land in the same block and decode as an
-	 * instruction, so a wrong segment or a data immediate fails closed.
-	 */
-	private static void seedVmDispatchTargets(Program program, Map<Long, Integer> dispatchers,
-			PseudoDisassembler disassembler, AddressSet functionSeeds, AddressSet flowSeeds,
-			TaskMonitor monitor) throws CancelledException {
-		if (dispatchers.isEmpty()) {
-			return;
-		}
-		Memory memory = program.getMemory();
-		SegmentedAddressSpace space =
-			(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
-
-		Map<MemoryBlock, Set<Integer>> segsByBlock = new HashMap<>();
-		for (Map.Entry<Long, Integer> e : dispatchers.entrySet()) {
-			int seg = e.getValue();
-			long off = e.getKey() - seg * 16L;
-			if (off < 0 || off > 0xffff) {
-				continue;
-			}
-			MemoryBlock block = memory.getBlock(space.getAddress(seg, (int) off));
-			if (block != null && !block.isOverlay()) {
-				segsByBlock.computeIfAbsent(block, k -> new HashSet<>()).add(seg);
-			}
-		}
-
-		for (Map.Entry<MemoryBlock, Set<Integer>> e : segsByBlock.entrySet()) {
-			MemoryBlock block = e.getKey();
-			Address searchAddr = block.getStart();
-			while (searchAddr != null && searchAddr.compareTo(block.getEnd()) < 0) {
-				monitor.checkCancelled();
-				searchAddr = memory.findBytes(searchAddr, block.getEnd(), VM_DISPATCH_PATTERN,
-					VM_DISPATCH_MASK, true, monitor);
-				if (searchAddr == null) {
-					break;
-				}
-				for (int seg : e.getValue()) {
-					collectDispatchImms(memory, space, block, disassembler, searchAddr, seg,
-						VM_DISPATCH_FUNCTION_IMMS, functionSeeds);
-					collectDispatchImms(memory, space, block, disassembler, searchAddr, seg,
-						VM_DISPATCH_FLOW_IMMS, flowSeeds);
-				}
-				searchAddr = searchAddr.add(1);
-			}
-		}
-	}
-
-	/** Resolve and validate the pattern immediates at {@code immOffsets} into {@code seeds}. */
-	private static void collectDispatchImms(Memory memory, SegmentedAddressSpace space,
-			MemoryBlock block, PseudoDisassembler disassembler, Address match, int segment,
-			int[] immOffsets, AddressSet seeds) {
-		for (int off : immOffsets) {
-			try {
-				int imm = Short.toUnsignedInt(memory.getShort(match.add(off)));
-				if (imm == 0) {
-					continue;
-				}
-				Address target = space.getAddress(segment, imm);
-				if (!block.contains(target)) {
-					continue;
-				}
-				if (safeDecode(disassembler, target) == null) {
-					continue;
-				}
-				seeds.add(target);
-			}
-			catch (MemoryAccessException | AddressOutOfBoundsException ex) {
-				// skip
-			}
-		}
 	}
 
 	/**
@@ -1445,7 +946,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			new CreateFunctionCmd(overlayEntryPoints, SourceType.ANALYSIS);
 		funcCmd.applyTo(program, monitor);
 
-		verifyEntryPointsBecameCode(program, overlayEntryPoints, "overlay entry point", log,
+		CodeSeeds.verifyBecameCode(program, overlayEntryPoints, "overlay entry point", log,
 			monitor);
 
 		AddressSetView disassembled = disCmd.getDisassembledAddressSet();
@@ -1527,8 +1028,8 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 					Address callfAddr = searchAddr.subtract(5);
 					Address pageIdAddr = searchAddr.add(5);
 
-					if (!isCodeMemory(memory, callfAddr) ||
-						!isCodeMemory(memory, pageIdAddr.add(1))) {
+					if (!CodeSeeds.isResidentCode(memory, callfAddr) ||
+						!CodeSeeds.isResidentCode(memory, pageIdAddr.add(1))) {
 						searchAddr = searchAddr.add(1);
 						continue;
 					}
@@ -1575,7 +1076,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 					int stubSize = 12;
 					int moduleBase = 0;
 					Address moduleWordAddr = callfAddr.add(12);
-					if (isCodeMemory(memory, moduleWordAddr.add(1)) &&
+					if (CodeSeeds.isResidentCode(memory, moduleWordAddr.add(1)) &&
 						!isDispatcherCallf(memory, space, dispatchers, moduleWordAddr)) {
 						int word = Short.toUnsignedInt(memory.getShort(moduleWordAddr));
 						if (word < target.page().getHeader().getTotalParagraphs()) {
@@ -1604,11 +1105,11 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 					refManager.addMemoryReference(stubAddr, targetAddr,
 						RefType.UNCONDITIONAL_CALL, SourceType.ANALYSIS, 0);
 
-					labelAddress(symbolTable,
+					CodeSeeds.label(symbolTable,
 						String.format(STUB_PREFIX + "%0" + width + "d_%04X", pageNumber,
 							targetOffset),
 						stubAddr);
-					labelAddress(symbolTable,
+					CodeSeeds.label(symbolTable,
 						String.format("OVL%0" + width + "d_%04X", pageNumber, targetOffset),
 						targetAddr);
 
@@ -1640,7 +1141,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	private static boolean isDispatcherCallf(Memory memory, SegmentedAddressSpace space,
 			Set<Long> dispatchers, Address addr) {
 		try {
-			if (!isCodeMemory(memory, addr) || !isCodeMemory(memory, addr.add(4))) {
+			if (!CodeSeeds.isResidentCode(memory, addr) || !CodeSeeds.isResidentCode(memory, addr.add(4))) {
 				return false;
 			}
 			if (memory.getByte(addr) != OPCODE_CALLF) {
@@ -1708,8 +1209,8 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 				try {
 					Address callfAddr = searchAddr.subtract(5);
-					if (!isCodeMemory(memory, callfAddr) ||
-						!isCodeMemory(memory, searchAddr.add(4))) {
+					if (!CodeSeeds.isResidentCode(memory, callfAddr) ||
+						!CodeSeeds.isResidentCode(memory, searchAddr.add(4))) {
 						searchAddr = searchAddr.add(1);
 						continue;
 					}
@@ -1797,40 +1298,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		CreateFunctionCmd funcCmd = new CreateFunctionCmd(targets, SourceType.ANALYSIS);
 		funcCmd.applyTo(program, monitor);
 
-		verifyEntryPointsBecameCode(program, targets, "trampoline target", log, monitor);
-	}
-
-	/**
-	 * Verify that every entry point in {@code entryPoints} was actually disassembled.
-	 * A seed the disassembler could not decode leaves {@link CreateFunctionCmd} to
-	 * plant a 1-byte function over the undefined bytes -- a husk that looks resolved
-	 * to every downstream consumer while hiding the failure. Tear such a husk down
-	 * and report the entry: no function at all is strictly better than a function
-	 * with no code.
-	 */
-	private static void verifyEntryPointsBecameCode(Program program, AddressSetView entryPoints,
-			String what, MessageLog log, TaskMonitor monitor) throws CancelledException {
-		Listing listing = program.getListing();
-		FunctionManager funcMgr = program.getFunctionManager();
-		for (Address entry : entryPoints.getAddresses(true)) {
-			monitor.checkCancelled();
-			if (listing.getInstructionAt(entry) != null) {
-				continue;
-			}
-			if (listing.getInstructionContaining(entry) != null) {
-				// Offcut into existing code, not undefined bytes: a pre-existing
-				// overlap the thunk pass reports on its own terms, not a silent
-				// disassembly failure.
-				continue;
-			}
-			Function husk = funcMgr.getFunctionAt(entry);
-			if (husk != null && !husk.isThunk()) {
-				funcMgr.removeFunction(entry);
-			}
-			log.appendMsg(String.format("RTLink: %s %s could not be disassembled%s", what,
-				entry, husk != null ? "; removed the 1-byte husk function created over it"
-						: "; no function created"));
-		}
+		CodeSeeds.verifyBecameCode(program, targets, "trampoline target", log, monitor);
 	}
 
 	/**
@@ -2064,7 +1532,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		// because analysisEnded cannot surface the analysis warnings dialog.
 		try {
 			program.withTransaction("RTLink: repair husk functions",
-				() -> repairHuskFunctions(program, new MessageLog(), TaskMonitor.DUMMY));
+				() -> HuskRepair.repair(program, new MessageLog(), TaskMonitor.DUMMY));
 		}
 		catch (CancelledException e) {
 			// DUMMY monitor never cancels
@@ -2150,108 +1618,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
-	 * Find and repair "husk" functions: functions whose entry holds no instruction, so
-	 * their body collapsed to a single byte of undefined data. Programs analyzed before
-	 * the deferred-call-flow fix in {@code Disassembler} are full of them: a restricted
-	 * disassembly (the overlay pass) silently abandoned every pending call flow the
-	 * first time one landed outside the restriction, so intra-page near-call targets
-	 * were never disassembled, and every later {@code CreateFunctionCmd} on such a
-	 * target fabricated a 1-byte body over the undefined bytes.
-	 * <p>
-	 * Each husk entry is disassembled with unrestricted flow, its body recomputed, and
-	 * call targets newly exposed by that code are promoted to functions of their own.
-	 * Every husk found is counted; entries that still fail to disassemble are reported
-	 * in the analysis log with target and reason. Runs from {@link #analysisEnded}, after
-	 * every round that could fabricate a husk, and from {@link #added} on the One Shot path.
-	 */
-	static void repairHuskFunctions(Program program, MessageLog log, TaskMonitor monitor)
-			throws CancelledException {
-		Listing listing = program.getListing();
-		FunctionManager funcMgr = program.getFunctionManager();
-		Memory memory = program.getMemory();
-
-		List<Address> husks = new ArrayList<>();
-		for (Function function : funcMgr.getFunctions(true)) {
-			monitor.checkCancelled();
-			if (function.isThunk() || function.isExternal()) {
-				continue;
-			}
-			Address entry = function.getEntryPoint();
-			MemoryBlock block = memory.getBlock(entry);
-			if (block == null || !block.isExecute() || !block.isInitialized()) {
-				continue;
-			}
-			if (listing.getInstructionAt(entry) == null &&
-				listing.getInstructionContaining(entry) == null) {
-				husks.add(entry);
-				Msg.debug(RTLinkOverlayAnalyzer.class, "RTLink: husk function (no code at entry) " +
-					function.getName() + " at " + entry);
-			}
-		}
-		if (husks.isEmpty()) {
-			return;
-		}
-
-		monitor.setMessage("RTLink: Repairing husk functions...");
-		AddressSet repaired = new AddressSet();
-		AddressSet newCode = new AddressSet();
-		int failed = 0;
-		for (Address entry : husks) {
-			monitor.checkCancelled();
-			DisassembleCommand disCmd = new DisassembleCommand(entry, null, true);
-			disCmd.applyTo(program, monitor);
-			if (listing.getInstructionAt(entry) == null) {
-				log.appendMsg(String.format(
-					"RTLink: husk function at %s could not be repaired: %s", entry,
-					disCmd.getStatusMsg()));
-				failed++;
-				continue;
-			}
-			repaired.add(entry);
-			AddressSetView disassembled = disCmd.getDisassembledAddressSet();
-			if (disassembled != null) {
-				newCode.add(disassembled);
-			}
-		}
-
-		// The repair exposed new code; promote its call targets to functions so the
-		// husk's callees (reachable only through it) become functions too.
-		AddressSet callTargets = new AddressSet();
-		ReferenceManager refMgr = program.getReferenceManager();
-		AddressIterator sources = refMgr.getReferenceSourceIterator(newCode, true);
-		while (sources.hasNext()) {
-			monitor.checkCancelled();
-			for (Reference ref : refMgr.getReferencesFrom(sources.next())) {
-				Address target = ref.getToAddress();
-				if (ref.getReferenceType().isCall() &&
-					listing.getInstructionAt(target) != null &&
-					funcMgr.getFunctionAt(target) == null) {
-					callTargets.add(target);
-				}
-			}
-		}
-		if (!callTargets.isEmpty()) {
-			new CreateFunctionCmd(callTargets, SourceType.ANALYSIS).applyTo(program, monitor);
-		}
-
-		// Recompute each repaired function's body from its now-real flow.
-		for (Address entry : repaired.getAddresses(true)) {
-			monitor.checkCancelled();
-			CreateFunctionCmd.fixupFunctionBody(program, listing.getInstructionAt(entry),
-				monitor);
-		}
-
-		// Msg.info only, never log.appendMsg: this is a clean-run success count, and any
-		// content in the analysis MessageLog pops the warnings dialog. The failures above
-		// did go to the MessageLog -- those are genuine.
-		Msg.info(RTLinkOverlayAnalyzer.class, String.format(
-			"RTLink: Repaired %d husk function(s) (no code at entry), " +
-				"%d new function(s) at exposed call targets%s",
-			repaired.getNumAddresses(), callTargets.getNumAddresses(),
-			failed > 0 ? ", " + failed + " unrepairable" : ""));
-	}
-
-	/**
 	 * Re-run dispatch-stub discovery and thunk wiring — including resident-target
 	 * trampolines — on a program whose overlays were created by a prior (possibly
 	 * older) run of this analyzer, without re-importing.
@@ -2329,18 +1695,6 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		catch (Exception e) {
 			log.appendMsg("RTLink: stub thunk retrofit failed: " + e.getMessage());
 			return false;
-		}
-	}
-
-	private static void labelAddress(SymbolTable symbolTable, String label, Address addr) {
-		try {
-			Symbol existing = symbolTable.getPrimarySymbol(addr);
-			if (existing == null || existing.isDynamic()) {
-				symbolTable.createLabel(addr, label, SourceType.ANALYSIS);
-			}
-		}
-		catch (InvalidInputException e) {
-			// ignore
 		}
 	}
 

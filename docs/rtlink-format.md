@@ -448,7 +448,7 @@ the page moves. That is list 2, and that is the entire reason the second list ex
 ### The nucleus's own entries — `$$VM_INITW` and the constant-pair dispatch
 
 Two structures reach VM-nucleus code only *through data*, so auto-analysis never
-disassembles their targets; `seedVmRuntimeEntryPoints` recognizes both and seeds function
+disassembles their targets; `VmRuntimeSeeds` recognizes both and seeds function
 starts (names beyond the two below are left to FID against the vendor `vmnuc` objects —
 the nucleus ships in at least nine build variants with shifting offsets, so only body
 hashes identify the rest).
@@ -1023,7 +1023,7 @@ stub's `CALLF` lives in one block and its `JMPF` and page_id in the next.
 
 The scans iterate blocks, and each one range-checked its candidate against **the block it
 happened to be iterating**, so a straddling stub failed `block.contains(callfAddr)` and was
-dropped without a word. Range-checking against *memory* instead (`isCodeMemory`) fixes all
+dropped without a word. Range-checking against *memory* instead (`CodeSeeds.isResidentCode`) fixes all
 seven scan guards at once. This was not cosmetic and not VMEX-only:
 
 | | before | after |

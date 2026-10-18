@@ -16,7 +16,7 @@ import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.SourceType;
 
 /**
- * Regression test for {@link RTLinkOverlayAnalyzer#findRuntimeCodeBlocks}.
+ * Regression test for {@link DataSegmentAssumption#findRuntimeCodeBlocks}.
  *
  * <p>{@code DS = DGROUP} holds for compiler-generated code, not for the RTLink runtime:
  * the overlay manager reloads DS from its own saved-segment slots throughout, and the
@@ -62,7 +62,7 @@ public class RTLinkRuntimeDataSegmentTest extends AbstractGenericTest {
 
 			Program program = builder.getProgram();
 			Set<MemoryBlock> runtime =
-				RTLinkOverlayAnalyzer.findRuntimeCodeBlocks(program, DGROUP);
+				DataSegmentAssumption.findRuntimeCodeBlocks(program, DGROUP);
 
 			assertEquals("both halves of the runtime are found", 2, runtime.size());
 			assertTrue("VM manager block (fixup-loop fingerprint)", runtime.contains(manager));
@@ -87,7 +87,7 @@ public class RTLinkRuntimeDataSegmentTest extends AbstractGenericTest {
 			builder.withTransaction(() -> app.setExecute(true));
 
 			Set<MemoryBlock> runtime =
-				RTLinkOverlayAnalyzer.findRuntimeCodeBlocks(builder.getProgram(), DGROUP);
+				DataSegmentAssumption.findRuntimeCodeBlocks(builder.getProgram(), DGROUP);
 
 			assertTrue("nothing is disowned without a signature", runtime.isEmpty());
 		}
@@ -109,7 +109,7 @@ public class RTLinkRuntimeDataSegmentTest extends AbstractGenericTest {
 			builder.setBytes("0x2b5a:0x0010", FINGERPRINT_BYTES);
 
 			Set<MemoryBlock> runtime =
-				RTLinkOverlayAnalyzer.findRuntimeCodeBlocks(builder.getProgram(), DGROUP);
+				DataSegmentAssumption.findRuntimeCodeBlocks(builder.getProgram(), DGROUP);
 
 			assertTrue("DGROUP keeps DS even carrying the fingerprint", runtime.isEmpty());
 		}

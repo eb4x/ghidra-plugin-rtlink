@@ -31,8 +31,8 @@ import ghidra.util.task.TaskMonitor;
  * <li><b>DS-relative data reads/writes</b> &mdash; DS-relative memory operands such
  * as {@code MOV AX,[0x540e]} or {@code MOV [0x540e],DX} get references to their
  * DGROUP globals.  {@link RTLinkOverlayAnalyzer} has already assumed
- * {@code DS = DGROUP} over executable memory (see its
- * {@code assumeDataSegmentRegister}), so the target {@code DGROUP:offset} is fully
+ * {@code DS = DGROUP} over executable memory (see
+ * {@link DataSegmentAssumption}), so the target {@code DGROUP:offset} is fully
  * known, and {@link Instruction#getOperandRefType(int)} distinguishes READ from
  * WRITE from the operand p-code.</li>
  * <li><b>Address-of immediates</b> &mdash; {@code PUSH imm16},
@@ -166,7 +166,7 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 		if (dgroup == null) {
 			return 0;
 		}
-		Set<MemoryBlock> runtime = RTLinkOverlayAnalyzer.findRuntimeCodeBlocks(program, dgroup);
+		Set<MemoryBlock> runtime = DataSegmentAssumption.findRuntimeCodeBlocks(program, dgroup);
 		if (runtime.isEmpty()) {
 			return 0;
 		}
@@ -310,8 +310,8 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 				return 0;
 			}
 
-			boolean isFarCall = bytes[0] == RTLinkOverlayAnalyzer.OPCODE_CALLF;
-			boolean isFarJump = bytes[0] == RTLinkOverlayAnalyzer.OPCODE_JMPF;
+			boolean isFarCall = bytes[0] == X86.OPCODE_CALLF;
+			boolean isFarJump = bytes[0] == X86.OPCODE_JMPF;
 
 			if (!isFarCall && !isFarJump) {
 				return 0;
