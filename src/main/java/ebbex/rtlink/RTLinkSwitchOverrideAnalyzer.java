@@ -148,10 +148,6 @@ public class RTLinkSwitchOverrideAnalyzer extends AbstractAnalyzer {
 	}
 
 	private void report(int written) {
-		if (written > 0) {
-			// Msg.info only, never log.appendMsg: any content in the analysis MessageLog makes
-			// AutoAnalysisPlugin pop a "warnings/errors issued during analysis" dialog.
-			Msg.info(this, String.format("RTLink/Plus: Wrote %d switch table override(s)", written));
-		}
+		RTLinkProgram.report(this, written, "RTLink/Plus: Wrote %d switch table override(s)");
 	}
 }

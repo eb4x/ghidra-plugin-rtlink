@@ -14,7 +14,6 @@ import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.*;
 import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.symbol.*;
-import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
@@ -141,13 +140,9 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 		if (!RTLinkProgram.isAnalyzerEnabled(program, NAME)) {
 			return;
 		}
-		int removed = removeRuntimeDgroupRefs(program);
-		if (removed > 0) {
-			Msg.info(this, String.format(
-				"RTLink/Plus: Removed %d unfounded DGROUP reference(s) from the RTLink runtime " +
-					"(DS is not DGROUP there)",
-				removed));
-		}
+		RTLinkProgram.report(this, removeRuntimeDgroupRefs(program),
+			"RTLink/Plus: Removed %d unfounded DGROUP reference(s) from the RTLink runtime " +
+				"(DS is not DGROUP there)");
 	}
 
 	/**
@@ -271,22 +266,15 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 					CreateFunctionCmd.fixupFunctionBody(program, instr, monitor);
 				}
 			}
-			Msg.info(this, "RTLink/Plus: Disassembled " +
-				undefinedFarTargets.getNumAddresses() +
-				" far call/jump target(s) reachable only from overlay code");
 		}
+		RTLinkProgram.report(this, undefinedFarTargets.getNumAddresses(),
+			"RTLink/Plus: Disassembled %d far call/jump target(s) reachable only from overlay code");
 
-		if (overlayCount > 0) {
-			Msg.info(this,
-				"RTLink/Plus: Created " + overlayCount + " overlay far call/jump xrefs");
-		}
-		if (counts.deref > 0) {
-			Msg.info(this, "RTLink/Plus: Created " + counts.deref + " DS-relative data xrefs");
-		}
-		if (counts.addressOf > 0) {
-			Msg.info(this,
-				"RTLink/Plus: Created " + counts.addressOf + " address-of immediate xrefs");
-		}
+		RTLinkProgram.report(this, overlayCount,
+			"RTLink/Plus: Created %d overlay far call/jump xrefs");
+		RTLinkProgram.report(this, counts.deref, "RTLink/Plus: Created %d DS-relative data xrefs");
+		RTLinkProgram.report(this, counts.addressOf,
+			"RTLink/Plus: Created %d address-of immediate xrefs");
 		return true;
 	}
 

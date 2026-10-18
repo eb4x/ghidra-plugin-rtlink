@@ -107,9 +107,6 @@ final class DataSegmentAssumption {
 			return;
 		}
 		RTLinkProgram.markDataSegmentAssumed(program);
-		// Msg.info only, never log.appendMsg: any content in the analysis MessageLog makes
-		// AutoAnalysisPlugin.analysisEnded() pop a "There were warnings/errors issued during
-		// analysis" dialog. The MessageLog above is for the paths where DS could not be assumed.
 		Msg.info(RTLinkOverlayAnalyzer.class, String.format(
 			"RTLink: Assuming DS = 0x%04X (DGROUP) over %d executable blocks; skipped %d " +
 				"RTLink runtime block(s), where DS is not DGROUP",

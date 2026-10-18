@@ -14,11 +14,12 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.util.PropertyMapManager;
 import ghidra.program.model.util.VoidPropertyMap;
+import ghidra.util.Msg;
 import ghidra.util.exception.DuplicateNameException;
 
 /**
- * Everything the analyzers record in a program for one another, and the checks every one of
- * them makes before acting. One analyzer writes each record and later ones read it: that is
+ * Everything the analyzers record in a program for one another, the checks every one of
+ * them makes before acting, and how they report what they did. One analyzer writes each record and later ones read it: that is
  * how the pipeline hands results along, since an analyzer must work as well on a program
  * reopened, or re-run from One Shot, as on a fresh import.
  * <p>
@@ -79,6 +80,18 @@ final class RTLinkProgram {
 	 */
 	static boolean isAnalyzerEnabled(Program program, String name) {
 		return program.getOptions(Program.ANALYSIS_PROPERTIES).getBoolean(name, true);
+	}
+
+	/**
+	 * Log {@code count} through {@code format} if it is nonzero. A success count goes to
+	 * {@link Msg#info}, never the analysis {@code MessageLog}: any content there makes
+	 * {@code AutoAnalysisPlugin} pop a "warnings/errors issued during analysis" dialog, so
+	 * the MessageLog is for genuine failures only.
+	 */
+	static void report(Object origin, long count, String format) {
+		if (count > 0) {
+			Msg.info(origin, String.format(format, count));
+		}
 	}
 
 	// ---------------------------------------------------------------- flags

@@ -7,7 +7,6 @@ import ghidra.app.util.importer.MessageLog;
 import ghidra.framework.model.TransactionInfo;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Program;
-import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
@@ -105,35 +104,18 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		// whether this analyzer cleared the junk or an earlier pass already had.
 		ConflictArbitration.sweepRepaired(program, monitor);
 
-		// Msg.info only — content in the MessageLog pops the analysis warnings dialog.
-		if (vectors > 0) {
-			Msg.info(this, String.format(
-				"RTLink/Plus: Followed %d far jump(s)/call(s) through a code-segment vector",
-				vectors));
-		}
-		if (fallthroughs > 0) {
-			Msg.info(this, String.format(
-				"RTLink/Plus: Sealed %d fall-through(s) behind non-returning calls",
-				fallthroughs));
-		}
-		if (conflicts > 0) {
-			Msg.info(this, String.format(
-				"RTLink/Plus: Recovered %d buried instruction run(s) from junk conflicts",
-				conflicts));
-		}
-		if (pointed > 0) {
-			Msg.info(this, String.format(
-				"RTLink/Plus: Recovered %d routine(s) reached through a CS:imm far pointer",
-				pointed));
-		}
-		if (gaps > 0) {
-			Msg.info(this, String.format(
-				"RTLink/Plus: Disassembled %d unreached code gap(s) between routines", gaps));
-		}
-		if (filler > 0) {
-			Msg.info(this, String.format(
-				"RTLink/Plus: Cleared %d instruction(s) decoded from zero fill", filler));
-		}
+		RTLinkProgram.report(this, vectors,
+			"RTLink/Plus: Followed %d far jump(s)/call(s) through a code-segment vector");
+		RTLinkProgram.report(this, fallthroughs,
+			"RTLink/Plus: Sealed %d fall-through(s) behind non-returning calls");
+		RTLinkProgram.report(this, conflicts,
+			"RTLink/Plus: Recovered %d buried instruction run(s) from junk conflicts");
+		RTLinkProgram.report(this, pointed,
+			"RTLink/Plus: Recovered %d routine(s) reached through a CS:imm far pointer");
+		RTLinkProgram.report(this, gaps,
+			"RTLink/Plus: Disassembled %d unreached code gap(s) between routines");
+		RTLinkProgram.report(this, filler,
+			"RTLink/Plus: Cleared %d instruction(s) decoded from zero fill");
 		return true;
 	}
 }

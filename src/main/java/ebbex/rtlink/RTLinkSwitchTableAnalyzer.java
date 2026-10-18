@@ -20,7 +20,6 @@ import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.SourceType;
-import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
@@ -121,8 +120,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 			dispatches.add(instruction);
 		}
 
-		int recovered = dispatches.size();
-		if (recovered == 0) {
+		if (dispatches.isEmpty()) {
 			return true;
 		}
 		// Disassemble the real targets now; leaving them undefined would let a later pass drift
@@ -141,10 +139,7 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 			CreateFunctionCmd.fixupFunctionBody(program, dispatch, monitor);
 		}
 
-		// Msg.info only — see RTLinkSwitchOverrideAnalyzer: a success count in the analysis
-		// MessageLog pops the "warnings/errors issued during analysis" dialog.
-		Msg.info(this,
-			String.format("RTLink/Plus: Recovered %d switch table(s)", recovered));
+		RTLinkProgram.report(this, dispatches.size(), "RTLink/Plus: Recovered %d switch table(s)");
 		return true;
 	}
 

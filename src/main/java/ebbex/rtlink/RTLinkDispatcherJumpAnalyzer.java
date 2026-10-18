@@ -117,12 +117,8 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 			return false; // canAnalyze accepts any segmented MZ; the VM nucleus is RTLink's
 		}
 		int resolved = resolveDispatchJumps(program, set, monitor);
-		if (resolved > 0) {
-			// Msg.info only, never log.appendMsg: content in the analysis MessageLog makes
-			// AutoAnalysisPlugin pop a "warnings/errors issued during analysis" dialog.
-			Msg.info(this, String.format(
-				"RTLink/Plus: Resolved %d VM dispatch jump(s) to their entry bodies", resolved));
-		}
+		RTLinkProgram.report(this, resolved,
+			"RTLink/Plus: Resolved %d VM dispatch jump(s) to their entry bodies");
 		return true;
 	}
 

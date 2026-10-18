@@ -95,7 +95,6 @@ public class RTLinkLibrarySignatureAnalyzer extends AbstractAnalyzer {
 			return false;
 		}
 		LibrarySignatures.Result result = LibrarySignatures.apply(program, modules, monitor);
-		// Msg.info only — content in the MessageLog pops the analysis warnings dialog.
 		Msg.info(this, String.format(
 			"RTLink/Plus: Placed %d vendor library entr%s from %s (%d new function(s))",
 			result.placed(), result.placed() == 1 ? "y" : "ies", path.getFileName(),

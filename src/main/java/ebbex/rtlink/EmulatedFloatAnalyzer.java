@@ -116,17 +116,12 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 			}
 		}
 
-		if (patched > 0) {
-			// The re-disassembly above resynchronizes each stream, which uncovers emulator
-			// calls that were previously buried inside mis-decoded operand bytes. Those
-			// arrive as newly added instructions, so this analyzer runs again on them; the
-			// process converges when a pass finds none.
-			//
-			// Msg.info, never log.appendMsg: content in the analysis MessageLog makes
-			// AutoAnalysisPlugin pop a "warnings/errors issued during analysis" dialog.
-			Msg.info(this, String.format(
-				"Emulated FP: Rewrote %d emulator call(s) into x87 instructions", patched));
-		}
+		// The re-disassembly above resynchronizes each stream, which uncovers emulator
+		// calls that were previously buried inside mis-decoded operand bytes. Those
+		// arrive as newly added instructions, so this analyzer runs again on them; the
+		// process converges when a pass finds none.
+		RTLinkProgram.report(this, patched,
+			"Emulated FP: Rewrote %d emulator call(s) into x87 instructions");
 		return true;
 	}
 
@@ -189,12 +184,9 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 		for (Bookmark bookmark : stale) {
 			bookmarks.removeBookmark(bookmark);
 		}
-		if (!stale.isEmpty()) {
-			Msg.info(this, String.format(
-				"Emulated FP: Cleared %d stale Bad Instruction bookmark(s) left by the " +
-					"emulator calls' mis-decode",
-				stale.size()));
-		}
+		RTLinkProgram.report(this, stale.size(),
+			"Emulated FP: Cleared %d stale Bad Instruction bookmark(s) left by the " +
+				"emulator calls' mis-decode");
 	}
 
 	/** Comment marker the disassembler puts before the address a failed flow came from. */

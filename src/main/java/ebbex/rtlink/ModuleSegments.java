@@ -187,9 +187,6 @@ final class ModuleSegments {
 		}
 
 		if (pagesExtended > 0) {
-			// Msg.info only, never log.appendMsg: any content in the analysis MessageLog
-			// makes AutoAnalysisPlugin pop a "warnings/errors issued during analysis"
-			// dialog, and this is a clean-run success count.
 			Msg.info(RTLinkOverlayAnalyzer.class, String.format(
 				"RTLink/Plus: Added %d stub-only module base(s) across %d overlay page(s)",
 				basesAdded, pagesExtended));

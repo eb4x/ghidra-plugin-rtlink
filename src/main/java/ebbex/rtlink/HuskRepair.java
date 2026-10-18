@@ -119,9 +119,6 @@ final class HuskRepair {
 				monitor);
 		}
 
-		// Msg.info only, never log.appendMsg: this is a clean-run success count, and any
-		// content in the analysis MessageLog pops the warnings dialog. The failures above
-		// did go to the MessageLog -- those are genuine.
 		Msg.info(RTLinkOverlayAnalyzer.class, String.format(
 			"RTLink: Repaired %d husk function(s) (no code at entry), " +
 				"%d new function(s) at exposed call targets%s",
