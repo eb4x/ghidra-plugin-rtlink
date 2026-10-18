@@ -39,7 +39,6 @@ import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.symbol.FlowType;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.ReferenceManager;
@@ -189,6 +188,9 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 	@Override
 	public boolean added(Program program, AddressSetView set, TaskMonitor monitor,
 			MessageLog log) throws CancelledException {
+		if (!RTLinkOverlayAnalyzer.isOverlayAnalyzed(program)) {
+			return false; // canAnalyze accepts any segmented MZ; these repairs are RTLink's
+		}
 		long txId = program.getCurrentTransactionInfo().getID();
 		if (txId == lastTxId) {
 			return true; // our own repairs re-trigger byte analysis; run once per txn
@@ -713,11 +715,17 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 	 * True when {@code function} has no return instruction and each of its terminal
 	 * instructions either is the DOS exit idiom or jumps into a function already known
 	 * to terminate.
+	 * <p>
+	 * That verdict is only as good as the body is complete, so every way out of the body
+	 * is accounted for: a fall-through or a conditional branch that leaves it — a body cut
+	 * short by a disassembly conflict, or a branch to a shared return in another routine —
+	 * is a path this test cannot see the end of, and the routine is assumed to return.
 	 */
 	private static boolean isTerminating(Program program, Function function,
 			Set<Function> terminating) {
 		Listing listing = program.getListing();
-		InstructionIterator instructions = listing.getInstructions(function.getBody(), true);
+		AddressSetView body = function.getBody();
+		InstructionIterator instructions = listing.getInstructions(body, true);
 		boolean sawTerminalPath = false;
 
 		while (instructions.hasNext()) {
@@ -737,7 +745,10 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 				return false; // a return: it comes back
 			}
 			if (!tailCall) {
-				continue; // an ordinary call or a conditional branch: not an exit
+				if (leavesBody(program, instruction, body, terminating)) {
+					return false;
+				}
+				continue; // an ordinary call or a branch within the routine: not an exit
 			}
 			// A tail call terminates only if what it lands in does. Destinations come
 			// from the references, not from getFlows(): the same override that hides the
@@ -760,6 +771,32 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		return sawTerminalPath;
 	}
 
+	/**
+	 * True if {@code instruction}, which is neither a return nor a tail jump, can continue
+	 * outside {@code body}: its fall-through lands outside it, or a conditional branch goes
+	 * somewhere other than the body or a function known to terminate.
+	 */
+	private static boolean leavesBody(Program program, Instruction instruction,
+			AddressSetView body, Set<Function> terminating) {
+		Address fallThrough = instruction.getFallThrough();
+		if (fallThrough != null && !body.contains(fallThrough)) {
+			return true;
+		}
+		if (!instruction.getFlowType().isConditional() || !instruction.getFlowType().isJump()) {
+			return false;
+		}
+		for (Address destination : instruction.getFlows()) {
+			if (body.contains(destination)) {
+				continue;
+			}
+			Function target = program.getFunctionManager().getFunctionAt(destination);
+			if (target == null || !terminating.contains(target)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** Where an unconditional jump goes, however its reference happens to be typed. */
 	private static Set<Address> jumpDestinations(Program program, Instruction instruction) {
 		Set<Address> destinations = new LinkedHashSet<>();
@@ -777,41 +814,74 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
-	 * True for {@code INT 0x21} preceded by a load of {@code AH = 0x4C} — the DOS
-	 * terminate-process call, in either of its forms ({@code MOV AH,0x4C} or
-	 * {@code MOV AX,0x4Cxx}).
+	 * True for {@code INT 21h} whose {@code AH} is provably {@code 4Ch} — the DOS
+	 * terminate-process call, loaded as {@code MOV AH,4Ch} ({@code B4 4C}) or
+	 * {@code MOV AX,4Cxx} ({@code B8 xx 4C}).
+	 * <p>
+	 * A wrong verdict is never revisited and seals every caller's fall-through, so this
+	 * proves rather than guesses. It walks back along the fall-through chain only — never
+	 * into the routine above — and gives up where another path joins (a flow reference to
+	 * any instruction after the load) or where anything else writes {@code AH}, whatever the
+	 * form ({@code MOV AH,[mem]}, {@code POP AX}, {@code XOR AX,AX}). A write to {@code AL}
+	 * alone leaves {@code AH} intact and is stepped over. The test is on the bytes, not on
+	 * the operands Ghidra happens to display.
 	 */
 	private static boolean isDosExit(Program program, Instruction instruction) {
-		if (!"INT".equals(instruction.getMnemonicString()) ||
-			!isScalar(instruction.getScalar(0), 0x21)) {
+		if (!hasBytes(instruction, 0xcd, 0x21)) {
 			return false;
 		}
-		Instruction previous = instruction.getPrevious();
-		for (int i = 0; i < DOS_EXIT_SCAN_LIMIT && previous != null; i++) {
-			if ("MOV".equals(previous.getMnemonicString())) {
-				Register destination = previous.getRegister(0);
-				Scalar value = previous.getScalar(1);
-				if (destination != null && value != null) {
-					if ("AH".equals(destination.getName()) &&
-						value.getUnsignedValue() == 0x4c) {
-						return true;
-					}
-					if ("AX".equals(destination.getName()) &&
-						(value.getUnsignedValue() >> 8) == 0x4c) {
-						return true;
-					}
-					if (destination.getName().startsWith("A")) {
-						return false; // AH/AX reloaded with something else
-					}
-				}
+		Register ah = program.getRegister("AH");
+		Instruction at = instruction;
+		for (int i = 0; i < DOS_EXIT_SCAN_LIMIT; i++) {
+			if (hasFlowReferenceTo(program, at.getMinAddress())) {
+				return false; // another path joins here, with an AH of its own
 			}
-			previous = previous.getPrevious();
+			Address from = at.getFallFrom();
+			Instruction previous = from == null ? null : program.getListing().getInstructionAt(from);
+			if (previous == null) {
+				return false;
+			}
+			if (writesOverlapping(previous, ah)) {
+				return hasBytes(previous, 0xb4, 0x4c) ||
+					(hasBytes(previous, 0xb8) && byteAt(previous, 2) == 0x4c);
+			}
+			at = previous;
 		}
 		return false;
 	}
 
-	private static boolean isScalar(Scalar scalar, long value) {
-		return scalar != null && scalar.getUnsignedValue() == value;
+	/** True if {@code instruction} writes {@code register} or any register overlapping it. */
+	private static boolean writesOverlapping(Instruction instruction, Register register) {
+		for (Object result : instruction.getResultObjects()) {
+			if (result instanceof Register written &&
+				(written.contains(register) || register.contains(written))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** True if {@code instruction}'s bytes start with {@code expected}. */
+	private static boolean hasBytes(Instruction instruction, int... expected) {
+		if (instruction.getLength() < expected.length) {
+			return false;
+		}
+		for (int i = 0; i < expected.length; i++) {
+			if (byteAt(instruction, i) != expected[i]) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** The unsigned byte at {@code offset} into {@code instruction}, or -1 past its end. */
+	private static int byteAt(Instruction instruction, int offset) {
+		try {
+			return offset < instruction.getLength() ? instruction.getByte(offset) & 0xff : -1;
+		}
+		catch (MemoryAccessException e) {
+			return -1;
+		}
 	}
 
 	/** True if a flow out of this instruction already goes to {@code target}. */

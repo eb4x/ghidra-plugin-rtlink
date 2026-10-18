@@ -29,6 +29,58 @@ import ghidra.program.model.symbol.ReferenceManager;
  */
 public class RTLinkAddressOfXrefTest extends AbstractGenericTest {
 
+	/**
+	 * {@code BP}-based operands default to {@code SS}: {@code [BP+0x10]} is a stack slot, not
+	 * {@code DGROUP:0010}, even where a data block covers that offset. An explicit
+	 * {@code DS:} makes it a DGROUP access again.
+	 */
+	@Test
+	public void testStackRelativeOperandsAreNotDgroup() throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("BP", ProgramBuilder._X86_16_REAL_MODE);
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0000", 0x40);
+			builder.withTransaction(() -> code.setExecute(true));
+			builder.createUninitializedMemory("DATA", "0x2000:0x0000", 0x100);
+			builder.setBytes("0x1000:0x0000",
+			// @formatter:off
+				"8b 46 10 " +    // 0x0000  MOV AX,[BP+0x10]     -> SS: no ref
+				"8b 42 10 " +    // 0x0003  MOV AX,[BP+SI+0x10]  -> SS: no ref
+				"3e 8b 46 10 " + // 0x0006  MOV AX,DS:[BP+0x10]  -> explicit DS: READ ref
+				"8b 44 10",      // 0x000a  MOV AX,[SI+0x10]     -> DS: READ ref
+			// @formatter:on
+				true);
+			builder.setRegisterValue("DS", "0x1000:0x0000", "0x1000:0x003f", 0x2000);
+
+			Program program = builder.getProgram();
+			ProgramContext context = program.getProgramContext();
+			Register ds = context.getRegister("DS");
+			ReferenceManager refManager = program.getReferenceManager();
+			SegmentedAddressSpace space =
+				(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
+
+			RTLinkXrefAnalyzer.Counts counts = new RTLinkXrefAnalyzer.Counts();
+			builder.withTransaction(() -> {
+				for (Instruction instr : program.getListing().getInstructions(true)) {
+					RTLinkXrefAnalyzer.addDataXrefs(instr, context, ds, program.getMemory(),
+						refManager, space, counts);
+				}
+			});
+
+			assertEquals("[BP+d] must not ref", 0,
+				refManager.getReferencesFrom(builder.addr("0x1000:0x0000")).length);
+			assertEquals("[BP+SI+d] must not ref", 0,
+				refManager.getReferencesFrom(builder.addr("0x1000:0x0003")).length);
+			assertEquals("DS:[BP+d] refs DGROUP", 1,
+				refManager.getReferencesFrom(builder.addr("0x1000:0x0006")).length);
+			assertEquals("[SI+d] refs DGROUP", 1,
+				refManager.getReferencesFrom(builder.addr("0x1000:0x000a")).length);
+			assertEquals(2, counts.deref);
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
 	@Test
 	public void testAddressOfImmediateXrefs() throws Exception {
 		ProgramBuilder builder = new ProgramBuilder("AOF", ProgramBuilder._X86_16_REAL_MODE);

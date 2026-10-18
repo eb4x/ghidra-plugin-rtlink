@@ -922,16 +922,12 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 	/** A routine that plainly returns must never be taken for a terminating one. */
 	@Test
 	public void testOrdinaryCallKeepsItsFallThrough() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("RET", ProgramBuilder._X86_16_REAL_MODE);
+		// The callee: INT 21h (AH=9, print) then RETF.
+		ProgramBuilder builder = callerAndCallee("b4 09 cd 21 cb");
 		try {
-			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0100", 0x30);
-			builder.withTransaction(() -> code.setExecute(true));
-			// CALLF 1000:0120; RETF   /   the callee: INT 21h (AH=9, print) then RETF
-			builder.setBytes("0x1000:0x0100", "9a 20 01 00 10 cb");
-			builder.setBytes("0x1000:0x0120", "b4 09 cd 21 cb");
-			builder.disassemble("0x1000:0x0100", 6, true);
-			builder.createFunction("0x1000:0x0120");
-
+			assertNotNull("setup: the callee must be decoded", builder.getProgram()
+					.getListing()
+					.getInstructionAt(builder.addr("0x1000:0x0122")));
 			assertEquals("an INT 21h that is not 4Ch terminates nothing", 0,
 				sealNonReturning(builder));
 			Instruction call = builder.getProgram()
@@ -939,6 +935,112 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 					.getInstructionAt(builder.addr("0x1000:0x0100"));
 			assertEquals(FlowOverride.NONE, call.getFlowOverride());
 			assertNotNull("its fall-through stands", call.getFallThrough());
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/** {@code CALLF 1000:0120; RETF}, the callee given as bytes, both decoded and made functions. */
+	private ProgramBuilder callerAndCallee(String callee) throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("EXIT", ProgramBuilder._X86_16_REAL_MODE);
+		boolean ok = false;
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0100", 0x40);
+			builder.withTransaction(() -> code.setExecute(true));
+			builder.setBytes("0x1000:0x0100", "9a 20 01 00 10 cb");
+			builder.setBytes("0x1000:0x0120", callee);
+			// Each disassemble stays inside the bytes it is given, so decode both.
+			builder.disassemble("0x1000:0x0100", 6, false);
+			builder.disassemble("0x1000:0x0120", callee.split(" ").length, false);
+			builder.createFunction("0x1000:0x0120");
+			ok = true;
+			return builder;
+		}
+		finally {
+			if (!ok) {
+				builder.dispose();
+			}
+		}
+	}
+
+	/** {@code MOV AH,4Ch; MOV AL,1; INT 21h}: loading the exit code into AL leaves AH alone. */
+	@Test
+	public void testExitWithCodeLoadedIntoAlIsRecognised() throws Exception {
+		ProgramBuilder builder = callerAndCallee("b4 4c b0 01 cd 21");
+		try {
+			assertEquals(1, sealNonReturning(builder));
+			Instruction call = builder.getProgram()
+					.getListing()
+					.getInstructionAt(builder.addr("0x1000:0x0100"));
+			assertEquals(FlowOverride.CALL_RETURN, call.getFlowOverride());
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * An exit directly above an ordinary DOS call: {@code MOV AX,4C01h; INT 21h} then the
+	 * callee {@code MOV AH,[BX]; INT 21h; RETF}. The callee's {@code AH} comes from memory, so
+	 * its {@code INT 21h} is no exit — the walk must neither skip the load nor run on into the
+	 * routine above.
+	 */
+	@Test
+	public void testExitOfRoutineAboveIsNotBorrowed() throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("EXIT", ProgramBuilder._X86_16_REAL_MODE);
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0100", 0x40);
+			builder.withTransaction(() -> code.setExecute(true));
+			builder.setBytes("0x1000:0x0100", "9a 25 01 00 10 cb");   // CALLF 1000:0125; RETF
+			builder.setBytes("0x1000:0x0120", "b8 01 4c cd 21");      // the routine above
+			builder.setBytes("0x1000:0x0125", "8a 27 cd 21 cb");      // MOV AH,[BX]; INT 21; RETF
+			builder.disassemble("0x1000:0x0100", 6, false);
+			builder.disassemble("0x1000:0x0120", 10, false);
+			// The callee first, so the routine above, which still falls into it, stops there.
+			builder.createFunction("0x1000:0x0125");
+			builder.createFunction("0x1000:0x0120");
+
+			sealNonReturning(builder);
+
+			Listing listing = builder.getProgram().getListing();
+			assertEquals("the callee's INT 21h is not an exit", FlowOverride.NONE,
+				listing.getInstructionAt(builder.addr("0x1000:0x0127")).getFlowOverride());
+			Instruction call = listing.getInstructionAt(builder.addr("0x1000:0x0100"));
+			assertEquals(FlowOverride.NONE, call.getFlowOverride());
+			assertNotNull("the call to it keeps its fall-through", call.getFallThrough());
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/**
+	 * {@code JZ 0127; MOV AX,4C01h; INT 21h} with nothing decoded at {@code 0127}: one path
+	 * exits, the other leaves the body for code the test cannot see. A body cut short like
+	 * that — by a conflict, typically — must not make the routine look terminating.
+	 */
+	@Test
+	public void testRoutineWithAnUnseenPathIsNotTerminating() throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("EXIT", ProgramBuilder._X86_16_REAL_MODE);
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0100", 0x40);
+			builder.withTransaction(() -> code.setExecute(true));
+			builder.setBytes("0x1000:0x0100", "9a 20 01 00 10 cb");
+			builder.setBytes("0x1000:0x0120", "74 05 b8 01 4c cd 21 cb");
+			builder.disassemble("0x1000:0x0100", 6, false);
+			builder.disassemble("0x1000:0x0120", 7, false); // 0127 stays undecoded
+			builder.createFunction("0x1000:0x0120");
+
+			assertEquals(0, sealNonReturning(builder));
+			Instruction call = builder.getProgram()
+					.getListing()
+					.getInstructionAt(builder.addr("0x1000:0x0100"));
+			assertNotNull("the call keeps its fall-through", call.getFallThrough());
+			assertFalse(builder.getProgram()
+					.getFunctionManager()
+					.getFunctionAt(builder.addr("0x1000:0x0120"))
+					.hasNoReturn());
 		}
 		finally {
 			builder.dispose();

@@ -121,6 +121,9 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 	@Override
 	public boolean added(Program program, AddressSetView set, TaskMonitor monitor, MessageLog log)
 			throws CancelledException {
+		if (!RTLinkOverlayAnalyzer.isOverlayAnalyzed(program)) {
+			return false; // canAnalyze accepts any segmented MZ; the VM nucleus is RTLink's
+		}
 		int resolved = resolveDispatchJumps(program, set, monitor);
 		if (resolved > 0) {
 			// Msg.info only, never log.appendMsg: content in the analysis MessageLog makes

@@ -1,7 +1,6 @@
 package ebbex.rtlink;
 
 import java.util.ArrayList;
-import java.util.List;
 
 import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
@@ -9,13 +8,15 @@ import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.database.function.FunctionDB;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressIterator;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Function;
-import ghidra.program.model.listing.Instruction;
-import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.pcode.EquateSymbol;
+import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.pcode.JumpTable;
+import ghidra.program.model.symbol.Namespace;
+import ghidra.program.model.symbol.Reference;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.InvalidInputException;
@@ -36,9 +37,13 @@ import ghidra.util.task.TaskMonitor;
  * reads them back through {@code HighFunction.grabOverrides()} and emits
  * "Switch is manually overridden" instead of guessing.
  * <p>
- * This runs after {@code FUNCTION_ANALYSIS} because {@code grabOverrides()} ignores anything that is
- * not a {@link FunctionDB} — the override symbols have nowhere to live until the dispatcher has a
- * defined function to hang a namespace off.
+ * The override is written from the table pass's own record — the dispatches it marked and the
+ * {@code COMPUTED_JUMP} references it laid down — never by re-deriving the table, which by now
+ * would read a program with more functions and more code and could disagree with those
+ * references. It needs a {@link FunctionDB} to hang its namespace off, which may not exist when
+ * this pass first sees the dispatch, so {@link #analysisEnded} catches every marked dispatch whose
+ * function appeared later. An override already present is left alone: it is either this pass's
+ * own, written from the same references, or the user's.
  */
 public class RTLinkSwitchOverrideAnalyzer extends AbstractAnalyzer {
 
@@ -63,48 +68,90 @@ public class RTLinkSwitchOverrideAnalyzer extends AbstractAnalyzer {
 	@Override
 	public boolean added(Program program, AddressSetView set, TaskMonitor monitor, MessageLog log)
 			throws CancelledException {
+		if (!RTLinkOverlayAnalyzer.isOverlayAnalyzed(program)) {
+			return false; // canAnalyze accepts any segmented MZ; these switches are RTLink's
+		}
+		report(writeOverrides(program, set, log, monitor));
+		return true;
+	}
+
+	@Override
+	public void analysisEnded(Program program) {
+		// Called on every analyzer whose canAnalyze passed, enabled or not.
+		if (!RTLinkOverlayAnalyzer.isEnabled(program, NAME) ||
+			!RTLinkOverlayAnalyzer.isOverlayAnalyzed(program)) {
+			return;
+		}
+		MessageLog log = new MessageLog();
+		try {
+			report(writeOverrides(program, program.getMemory(), log, TaskMonitor.DUMMY));
+		}
+		catch (CancelledException e) {
+			return; // DUMMY monitor never cancels
+		}
+		// analysisEnded cannot surface the analysis warnings dialog.
+		if (log.hasMessages()) {
+			Msg.warn(this, log.toString());
+		}
+	}
+
+	/**
+	 * Write an override for each dispatch {@link RTLinkSwitchTableAnalyzer} marked in
+	 * {@code set} that has a defined function and no override yet. Returns the number written.
+	 */
+	static int writeOverrides(Program program, AddressSetView set, MessageLog log,
+			TaskMonitor monitor) throws CancelledException {
 		int written = 0;
-
-		InstructionIterator instructions = program.getListing().getInstructions(set, true);
-		while (instructions.hasNext()) {
+		AddressIterator dispatches = RTLinkSwitchTableAnalyzer.markedDispatches(program, set);
+		while (dispatches.hasNext()) {
 			monitor.checkCancelled();
-			Instruction instruction = instructions.next();
-
-			List<Address> destinations = RTLinkSwitchTableAnalyzer.recoverTable(program,
-				instruction);
-			if (destinations == null) {
+			Address dispatch = dispatches.next();
+			Function function = program.getFunctionManager().getFunctionContaining(dispatch);
+			if (!(function instanceof FunctionDB) || hasOverride(function, dispatch)) {
 				continue;
 			}
-			Address switchAddress = instruction.getMinAddress();
-			Function function =
-				program.getFunctionManager().getFunctionContaining(switchAddress);
-			if (!(function instanceof FunctionDB)) {
-				// No defined function yet; a later pass over this instruction will catch it.
+			ArrayList<Address> destinations = computedTargets(program, dispatch);
+			if (destinations.isEmpty()) {
 				continue;
 			}
-
-			JumpTable override = new JumpTable(switchAddress, new ArrayList<>(destinations), true,
-				EquateSymbol.FORMAT_DEFAULT);
+			JumpTable override =
+				new JumpTable(dispatch, destinations, true, EquateSymbol.FORMAT_DEFAULT);
 			try {
-				// writeOverride() clears the jmp_<addr> namespace first, so re-running is safe.
 				override.writeOverride(function);
 				written++;
 			}
 			catch (InvalidInputException e) {
-				log.appendMsg(String.format(
-					"RTLink: could not override switch at %s in %s: %s", switchAddress,
-					function.getName(), e.getMessage()));
+				log.appendMsg(String.format("RTLink: could not override switch at %s in %s: %s",
+					dispatch, function.getName(), e.getMessage()));
 			}
 		}
+		return written;
+	}
 
+	/** True if {@code function} already carries a jump-table override for {@code dispatch}. */
+	private static boolean hasOverride(Function function, Address dispatch) {
+		Namespace overrides = HighFunction.findOverrideSpace(function);
+		return overrides != null && HighFunction.findNamespace(
+			function.getProgram().getSymbolTable(), overrides, "jmp_" + dispatch) != null;
+	}
+
+	/** The destinations of the computed-jump references from {@code dispatch}, in address order. */
+	private static ArrayList<Address> computedTargets(Program program, Address dispatch) {
+		ArrayList<Address> targets = new ArrayList<>();
+		for (Reference reference : program.getReferenceManager().getReferencesFrom(dispatch)) {
+			if (reference.getReferenceType().isComputed() && reference.getReferenceType().isJump()) {
+				targets.add(reference.getToAddress());
+			}
+		}
+		targets.sort(null);
+		return targets;
+	}
+
+	private void report(int written) {
 		if (written > 0) {
 			// Msg.info only, never log.appendMsg: any content in the analysis MessageLog makes
-			// AutoAnalysisPlugin.analysisEnded() pop a "There were warnings/errors issued during
-			// analysis" dialog, so routing a success count there cries wolf on a clean run. The
-			// MessageLog is for things that went wrong (see the failure paths above).
-			Msg.info(this,
-				String.format("RTLink/Plus: Wrote %d switch table override(s)", written));
+			// AutoAnalysisPlugin pop a "warnings/errors issued during analysis" dialog.
+			Msg.info(this, String.format("RTLink/Plus: Wrote %d switch table override(s)", written));
 		}
-		return true;
 	}
 }

@@ -8,6 +8,9 @@ import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
 import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.importer.MessageLog;
+import ghidra.program.disassemble.Disassembler;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.lang.Processor;
 import ghidra.program.model.listing.Bookmark;
@@ -41,8 +44,8 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 	/** Comment prefix of the one ERROR bookmark that survives a successful re-disassembly. */
 	private static final String REPEATED_BYTE_RUN = "Maximum run of repeated byte";
 
-	/** Emulator calls rewritten in this program, so far, across all passes. */
-	private int rewritten;
+	/** What this analysis's rewrites cleared and re-disassembled, across all passes. */
+	private AddressSet rewrittenCode = new AddressSet();
 
 	private static final String NAME = "DOS Emulated Floating Point";
 	private static final String DESCRIPTION =
@@ -84,27 +87,36 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 		EmulatedFloatPatcher.recordEmulated(program);
 
 		// Collect first, patch second: patching clears and re-disassembles code, which
-		// would invalidate a live InstructionIterator.
-		List<Instruction> calls = new ArrayList<>();
-		InstructionIterator instructions = program.getListing().getInstructions(set, true);
+		// would invalidate a live InstructionIterator. Collect addresses, not instructions:
+		// a patch's clear can delete a later call — an out-of-phase INT decoded from the
+		// first call's operands — and a deleted instruction still answers, from whatever
+		// bytes now sit at its old address. Each call is re-fetched just before its patch.
+		Listing listing = program.getListing();
+		List<Address> calls = new ArrayList<>();
+		InstructionIterator instructions = listing.getInstructions(set, true);
 		while (instructions.hasNext()) {
 			monitor.checkCancelled();
 			Instruction insn = instructions.next();
 			if (EmulatedFloatPatcher.emulatorVector(insn) >= 0) {
-				calls.add(insn);
+				calls.add(insn.getMinAddress());
 			}
 		}
 
 		int patched = 0;
-		for (Instruction call : calls) {
+		for (Address call : calls) {
 			monitor.checkCancelled();
-			if (EmulatedFloatPatcher.patch(program, call, monitor)) {
+			Instruction insn = listing.getInstructionAt(call);
+			if (insn == null) {
+				continue; // cleared by an earlier patch, and not code after all
+			}
+			AddressSetView touched = EmulatedFloatPatcher.patch(program, insn, monitor);
+			if (touched != null) {
+				rewrittenCode.add(touched);
 				patched++;
 			}
 		}
 
 		if (patched > 0) {
-			rewritten += patched;
 			// The re-disassembly above resynchronizes each stream, which uncovers emulator
 			// calls that were previously buried inside mis-decoded operand bytes. Those
 			// arrive as newly added instructions, so this analyzer runs again on them; the
@@ -130,12 +142,18 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 	 * <p>
 	 * Done at the end of analysis, for the same reason {@link RTLinkOverlayAnalyzer} does:
 	 * this pass runs early, and later passes go on stamping marks of their own.
+	 * <p>
+	 * Only the disassembler's own marks, and only in code a rewrite cleared or re-decoded:
+	 * elsewhere a mark inside an instruction can be a genuine conflict, such as a branch
+	 * into the middle of one.
 	 */
 	@Override
 	public void analysisEnded(Program program) {
-		if (rewritten == 0) {
+		if (rewrittenCode.isEmpty()) {
 			return;
 		}
+		AddressSetView touched = rewrittenCode;
+		rewrittenCode = new AddressSet();
 
 		BookmarkManager bookmarks = program.getBookmarkManager();
 		Listing listing = program.getListing();
@@ -144,6 +162,10 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 		Iterator<Bookmark> iterator = bookmarks.getBookmarksIterator(BookmarkType.ERROR);
 		while (iterator.hasNext()) {
 			Bookmark bookmark = iterator.next();
+			if (!touched.contains(bookmark.getAddress()) ||
+				!Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory())) {
+				continue;
+			}
 			// "Maximum run of repeated byte instructions" marks a run the disassembler did
 			// decode; it is a judgement about the code, not a failure to read it, so an
 			// instruction being present there says nothing about whether it is still true.
@@ -164,6 +186,5 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 					"emulator calls' mis-decode",
 				stale.size()));
 		}
-		rewritten = 0;
 	}
 }

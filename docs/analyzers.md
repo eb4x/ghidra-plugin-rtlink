@@ -32,11 +32,15 @@ seven classes and not one. They share package-private statics and must stay in
   deleted the correct refs too, clearing 37 routines of VICEROY's nucleus. Gated by a
   near-unforgeable fingerprint: the return-slot patch (`MOV [base-neg-disp],reg`)
   immediately before a register-indirect `JMP`, fed by a `MOV reg,imm16`.
-- **`RTLinkSwitchOverrideAnalyzer`** — INSTRUCTION, `FUNCTION_ANALYSIS.after()`. Writes
-  the decompiler jump-table overrides for the same tables (shares
-  `RTLinkSwitchTableAnalyzer.recoverTable()`). Cannot be merged into the table
-  analyzer: the override symbols need a defined `FunctionDB` to hang a namespace off,
-  which does not exist that early.
+- **`RTLinkSwitchOverrideAnalyzer`** — INSTRUCTION, `FUNCTION_ANALYSIS.after()`, and again
+  in `analysisEnded`. Writes the decompiler jump-table overrides for the same tables, from
+  the table pass's own record: the dispatches it marked (user property map
+  `RTLink switch dispatch`) and the `COMPUTED_JUMP` references it laid down — never by
+  re-deriving the table, which by then reads a program with more functions and code. An
+  override already present (its own, or the user's) is left alone. Cannot be merged into
+  the table analyzer: the override symbols need a defined `FunctionDB` to hang a namespace
+  off, which does not exist that early; `analysisEnded` catches dispatches whose function
+  appeared after this pass last saw them.
 - **`RTLinkXrefAnalyzer`** — INSTRUCTION, `REFERENCE_ANALYSIS.after()`. Resolves the
   DS-relative data references that Ghidra's own reference pass declines to make on
   RTLink programs.
@@ -74,6 +78,13 @@ DOS emulated floating point (INT 34h–3Dh) into the x87 it encodes.
 
 - All analyzers set `setSupportsOneTimeAnalysis()` so they can be re-run from
   Analysis → One Shot on an already-analyzed program.
+- `canAnalyze` accepts any segmented MZ (it is asked before analysis, when nothing is known
+  yet), so every RTLink analyzer's `added()` returns at once unless
+  `RTLinkOverlayAnalyzer` found overlays (`isOverlayAnalyzed`). `EmulatedFloatAnalyzer`
+  is the exception: DOS emulated float is not RTLink-specific.
+- `AutoAnalysisManager` calls `analysisEnded` on every analyzer whose `canAnalyze` passed,
+  enabled or not, inside the analysis transaction: an `analysisEnded` that writes checks
+  its own enablement (`isEnabled`) and the same RTLink gate.
 - Report success counts with `Msg.info`, never `log.appendMsg` — any content in the
   analysis `MessageLog` makes `AutoAnalysisPlugin` pop a "warnings/errors issued during
   analysis" dialog, so the `MessageLog` is for genuine failures only.

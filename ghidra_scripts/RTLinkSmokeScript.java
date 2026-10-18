@@ -287,6 +287,13 @@ public class RTLinkSmokeScript extends GhidraScript {
 			}
 		}
 		check(actual.equals(expected), "switch cases " + actual + ", expected " + expected);
+		// The cases above would also come out right without the override, now that
+		// currentCS reads CS from context; check the override pass's own result directly.
+		Function function = getFunctionAt(entry);
+		Namespace overrides = HighFunction.findOverrideSpace(function);
+		check(overrides != null && HighFunction.findNamespace(currentProgram.getSymbolTable(),
+			overrides, "jmp_" + tables[0].getSwitchAddress()) != null,
+			"no jump-table override at " + tables[0].getSwitchAddress());
 		String c = results.getDecompiledFunction().getC();
 		check(c.contains("switch"), "decompiled OVL01_0020 has no switch");
 		println("smoke: switch in OVL01_0020 with " + actual.size() + " case targets");

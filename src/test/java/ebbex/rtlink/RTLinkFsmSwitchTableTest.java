@@ -7,11 +7,17 @@ import java.util.List;
 import org.junit.Test;
 
 import generic.test.AbstractGenericTest;
+import ghidra.app.util.importer.MessageLog;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
+import ghidra.program.model.symbol.RefType;
+import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.SourceType;
+import ghidra.util.task.TaskMonitor;
 
 /**
  * Tests for {@code RTLinkSwitchTableAnalyzer.recoverFormatterFsmTable}: the MSC
@@ -191,6 +197,95 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 		}
 		finally {
 			builder.dispose();
+		}
+	}
+
+	/**
+	 * A program analyzed before dispatches were marked already carries the table pass's
+	 * computed references, so the pass skips the dispatch. The migration marks it when those
+	 * references are exactly the recovered table, and the override pass then writes the
+	 * override once, from them.
+	 */
+	@Test
+	public void testDispatchResolvedByAnEarlierBuildIsMarkedAndOverridden() throws Exception {
+		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
+		try {
+			Program program = builder.getProgram();
+			List<Address> destinations = recover(builder);
+			markOverlayAnalyzed(builder);
+			builder.withTransaction(() -> {
+				for (Address destination : destinations) {
+					program.getReferenceManager()
+							.addMemoryReference(builder.addr(DISPATCH), destination,
+								RefType.COMPUTED_JUMP, SourceType.ANALYSIS, Reference.MNEMONIC);
+				}
+			});
+			builder.createFunction("0x1100:0x0040");
+
+			runTablePass(builder);
+
+			Address dispatch = builder.addr(DISPATCH);
+			assertTrue("the dispatch is marked", RTLinkSwitchTableAnalyzer
+					.markedDispatches(program, new AddressSet(dispatch, dispatch))
+					.hasNext());
+			assertEquals("the override is written from the references", 1, writeOverrides(builder));
+			assertEquals("and left alone after that", 0, writeOverrides(builder));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/** References that are not the recovered table — stock's guess — leave it unmarked. */
+	@Test
+	public void testDispatchWithForeignReferencesIsNotMarked() throws Exception {
+		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
+		try {
+			Program program = builder.getProgram();
+			markOverlayAnalyzed(builder);
+			builder.withTransaction(() -> program.getReferenceManager()
+					.addMemoryReference(builder.addr(DISPATCH), builder.addr("0x1100:0x0080"),
+						RefType.COMPUTED_JUMP, SourceType.ANALYSIS, Reference.MNEMONIC));
+
+			runTablePass(builder);
+
+			Address dispatch = builder.addr(DISPATCH);
+			assertFalse(RTLinkSwitchTableAnalyzer
+					.markedDispatches(program, new AddressSet(dispatch, dispatch))
+					.hasNext());
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	private static void markOverlayAnalyzed(ProgramBuilder builder) {
+		Program program = builder.getProgram();
+		builder.withTransaction(() -> program.getOptions(Program.PROGRAM_INFO)
+				.setBoolean(RTLinkOverlayAnalyzer.ANALYZED_FLAG, true));
+	}
+
+	private static void runTablePass(ProgramBuilder builder) throws Exception {
+		Program program = builder.getProgram();
+		int txId = program.startTransaction("switch table");
+		try {
+			new RTLinkSwitchTableAnalyzer().added(program, program.getMemory(),
+				TaskMonitor.DUMMY, new MessageLog());
+		}
+		finally {
+			program.endTransaction(txId, true);
+		}
+	}
+
+	private static int writeOverrides(ProgramBuilder builder) throws Exception {
+		Program program = builder.getProgram();
+		int txId = program.startTransaction("switch override");
+		try {
+			return RTLinkSwitchOverrideAnalyzer.writeOverrides(program, program.getMemory(),
+				new MessageLog(), TaskMonitor.DUMMY);
+		}
+		finally {
+			program.endTransaction(txId, true);
 		}
 	}
 

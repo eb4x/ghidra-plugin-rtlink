@@ -5,6 +5,7 @@ import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressIterator;
 import ghidra.program.model.address.AddressOutOfBoundsException;
 import ghidra.program.model.address.AddressSet;
+import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.Memory;
@@ -192,14 +193,18 @@ class EmulatedFloatPatcher {
 	 * ({@code MOV [BP-0x16],DX} = {@code 89 56 EA}). Only an instruction the disassembler
 	 * reached by flow is known to start where it appears to, which is exactly what this
 	 * takes.
+	 * <p>
+	 * {@code insn} must be live: an earlier patch's clear may have deleted it, and a deleted
+	 * instruction does not fail — it reads whatever bytes now sit at its old address. Callers
+	 * re-fetch it by address immediately before calling.
 	 *
-	 * @return true if the site was patched
+	 * @return what the rewrite cleared and re-disassembled, or null if the site was not patched
 	 */
-	static boolean patch(Program program, Instruction insn, TaskMonitor monitor)
+	static AddressSetView patch(Program program, Instruction insn, TaskMonitor monitor)
 			throws CancelledException {
 		int vector = emulatorVector(insn);
 		if (vector < 0) {
-			return false;
+			return null;
 		}
 
 		Memory memory = program.getMemory();
@@ -237,7 +242,7 @@ class EmulatedFloatPatcher {
 					restoredEsc = (byte) (esc | ESC_HIGH_BIT);
 				}
 				else {
-					return false; // not a form this understands; leave it as an INT
+					return null; // not a form this understands; leave it as an INT
 				}
 				span = 4 + displacementLength(memory, addr.add(3));
 			}
@@ -285,12 +290,15 @@ class EmulatedFloatPatcher {
 				new long[] { vector, Byte.toUnsignedInt(opcode) }, original,
 				String.format("EMULATED_FP_INT_%02X", vector));
 
-			new DisassembleCommand(restartPoints(program, addr, last), null, true)
-					.applyTo(program, monitor);
-			return true;
+			DisassembleCommand redo =
+				new DisassembleCommand(restartPoints(program, addr, last), null, true);
+			redo.applyTo(program, monitor);
+			AddressSet touched = new AddressSet(addr, last);
+			touched.add(redo.getDisassembledAddressSet());
+			return touched;
 		}
 		catch (MemoryAccessException | AddressOutOfBoundsException e) {
-			return false;
+			return null;
 		}
 	}
 

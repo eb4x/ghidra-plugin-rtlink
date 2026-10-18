@@ -155,11 +155,15 @@ public class RTLinkRuntimeDataSegmentTest extends AbstractGenericTest {
 
 			ReferenceManager refs = program.getReferenceManager();
 			Address fromRuntime = builder.addr("0x210d:0x0004");
+			Address fromUser = builder.addr("0x210d:0x0008");
 			Address fromApp = builder.addr("0x1000:0x0004");
 			Address target = builder.addr("0x2b5a:0x1010");
+			Address userTarget = builder.addr("0x2b5a:0x1020");
 			builder.withTransaction(() -> {
 				refs.addMemoryReference(fromRuntime, target, RefType.READ, SourceType.ANALYSIS, 0);
 				refs.addMemoryReference(fromApp, target, RefType.READ, SourceType.ANALYSIS, 0);
+				refs.addMemoryReference(fromUser, userTarget, RefType.READ,
+					SourceType.USER_DEFINED, 0);
 			});
 			assertEquals(2, refs.getReferenceCountTo(target));
 
@@ -167,11 +171,13 @@ public class RTLinkRuntimeDataSegmentTest extends AbstractGenericTest {
 			builder.withTransaction(
 				() -> removed[0] = RTLinkXrefAnalyzer.removeRuntimeDgroupRefs(program));
 
-			assertEquals("only the runtime's reference is swept", 1, removed[0]);
+			assertEquals("only the runtime's analysis reference is swept", 1, removed[0]);
 			assertEquals("the application's reference survives", 1,
 				refs.getReferenceCountTo(target));
 			assertEquals("and it is the application's", fromApp,
 				refs.getReferencesTo(target).iterator().next().getFromAddress());
+			assertEquals("a reference the user made in the runtime is theirs to keep", 1,
+				refs.getReferenceCountTo(userTarget));
 		}
 		finally {
 			builder.dispose();

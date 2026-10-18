@@ -391,6 +391,11 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		return byRecord;
 	}
 
+	/** True if the analyzer named {@code name} is enabled in {@code program}'s analysis options. */
+	static boolean isEnabled(Program program, String name) {
+		return program.getOptions(Program.ANALYSIS_PROPERTIES).getBoolean(name, true);
+	}
+
 	static boolean isOverlayAnalyzed(Program program) {
 		return program.getOptions(Program.PROGRAM_INFO).getBoolean(ANALYZED_FLAG, false);
 	}
@@ -2183,6 +2188,12 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	 */
 	@Override
 	public void analysisEnded(Program program) {
+		// AutoAnalysisManager calls this on every analyzer whose canAnalyze passed, enabled
+		// or not, and canAnalyze accepts any segmented MZ: act only where this analyzer is
+		// on and found RTLink overlays.
+		if (!isEnabled(program, NAME) || !isOverlayAnalyzed(program)) {
+			return;
+		}
 		// Repair husk functions now that every function is finally in place. added() runs at
 		// FORMAT_ANALYSIS.after (before the husks exist), so it can only repair them on the
 		// retrofit/one-shot path; and even the dead-last flow-repair pass runs before the

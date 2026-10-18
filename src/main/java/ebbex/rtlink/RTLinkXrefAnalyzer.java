@@ -137,6 +137,10 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 	 */
 	@Override
 	public void analysisEnded(Program program) {
+		// Called on every analyzer whose canAnalyze passed, enabled or not.
+		if (!RTLinkOverlayAnalyzer.isEnabled(program, NAME)) {
+			return;
+		}
 		int removed = removeRuntimeDgroupRefs(program);
 		if (removed > 0) {
 			Msg.info(this, String.format(
@@ -147,6 +151,9 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
+	 * Only references an analyzer made are deleted; one the user made, or one imported, is
+	 * a statement about the program and is kept.
+	 *
 	 * @return how many references from the runtime's code blocks into DGROUP were deleted.
 	 *         Package-private so tests can drive it directly.
 	 */
@@ -176,7 +183,9 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 			Address from = sources.next();
 			for (Reference ref : refs.getReferencesFrom(from)) {
 				Address to = ref.getToAddress();
-				if (to instanceof SegmentedAddress seg && seg.getSegment() == dgroup) {
+				if (to instanceof SegmentedAddress seg && seg.getSegment() == dgroup &&
+					(ref.getSource() == SourceType.ANALYSIS ||
+						ref.getSource() == SourceType.DEFAULT)) {
 					doomed.add(ref);
 				}
 			}
@@ -367,8 +376,9 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 			}
 
 			Object[] opObjects = instr.getOpObjects(i);
-			if (hasSegmentOverride(opObjects, ds) ||
-				hasSegmentOverride(instr.getDefaultOperandRepresentation(i))) {
+			String representation = instr.getDefaultOperandRepresentation(i);
+			if (hasSegmentOverride(opObjects, ds) || hasSegmentOverride(representation) ||
+				isStackRelative(opObjects, ds, representation)) {
 				continue;
 			}
 
@@ -629,6 +639,29 @@ public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 			representation.contains("CS:") || representation.contains("FS:") ||
 			representation.contains("GS:");
 	}
+
+	/**
+	 * True if the operand addresses through {@code BP} or {@code SP} without an explicit
+	 * {@code DS:}: those default to {@code SS}, so {@code [BP-4]} is a local, not
+	 * {@code DGROUP:FFFC}.
+	 */
+	private static boolean isStackRelative(Object[] opObjects, Register ds,
+			String representation) {
+		boolean stackBase = false;
+		for (Object obj : opObjects) {
+			if (obj == ds) {
+				return false;
+			}
+			if (obj instanceof Register reg &&
+				STACK_BASES.contains(reg.getBaseRegister().getName())) {
+				stackBase = true;
+			}
+		}
+		return stackBase && !representation.contains("DS:");
+	}
+
+	/** Base registers of BP and SP, whatever the language's widest form is. */
+	private static final Set<String> STACK_BASES = Set.of("BP", "EBP", "RBP", "SP", "ESP", "RSP");
 
 	private static boolean isSegmentRegister(Register reg) {
 		String name = reg.getName();

@@ -33,8 +33,11 @@ import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.SourceType;
+import ghidra.program.model.util.PropertyMapManager;
+import ghidra.program.model.util.VoidPropertyMap;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
+import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.task.TaskMonitor;
 
 /**
@@ -114,6 +117,9 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 	/** The FSM's next state is a nibble ({@code SHR AL,4}), so 16 states bound everything. */
 	private static final int MAX_FSM_STATES = 16;
 
+	/** User property map marking every dispatch this pass resolved (see {@link #markDispatch}). */
+	private static final String DISPATCH_PROPERTY = "RTLink switch dispatch";
+
 	public RTLinkSwitchTableAnalyzer() {
 		super(NAME, DESCRIPTION, AnalyzerType.INSTRUCTION_ANALYZER);
 		// Before CODE_ANALYSIS, which is where DecompilerSwitchAnalyzer runs. It ignores any
@@ -132,9 +138,13 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 	@Override
 	public boolean added(Program program, AddressSetView set, TaskMonitor monitor, MessageLog log)
 			throws CancelledException {
+		if (!RTLinkOverlayAnalyzer.isOverlayAnalyzed(program)) {
+			return false; // canAnalyze accepts any segmented MZ; these tables are RTLink's
+		}
 		ReferenceManager refManager = program.getReferenceManager();
 		AddressSet targets = new AddressSet();
 		List<Instruction> dispatches = new ArrayList<>();
+		int migrated = 0;
 
 		InstructionIterator instructions = program.getListing().getInstructions(set, true);
 		while (instructions.hasNext()) {
@@ -142,7 +152,13 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 			Instruction instruction = instructions.next();
 
 			List<Address> destinations = recoverTable(program, instruction);
-			if (destinations == null || hasComputedReference(refManager, instruction)) {
+			if (destinations == null) {
+				continue;
+			}
+			if (hasComputedReference(refManager, instruction)) {
+				if (migrateDispatchMark(program, refManager, instruction, destinations)) {
+					migrated++;
+				}
 				continue;
 			}
 			for (Address destination : destinations) {
@@ -150,9 +166,14 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 					RefType.COMPUTED_JUMP, SourceType.ANALYSIS, Reference.MNEMONIC);
 				targets.addRange(destination, destination);
 			}
+			markDispatch(program, instruction.getMinAddress());
 			dispatches.add(instruction);
 		}
 
+		if (migrated > 0) {
+			Msg.info(this, String.format(
+				"RTLink/Plus: Marked %d switch dispatch(es) resolved by an earlier build", migrated));
+		}
 		int recovered = dispatches.size();
 		if (recovered == 0) {
 			return true;
@@ -181,11 +202,64 @@ public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
+	 * Mark {@code dispatch} as a switch this pass resolved. The mark and the dispatch's
+	 * {@code COMPUTED_JUMP} references are the record {@link RTLinkSwitchOverrideAnalyzer}
+	 * writes its override from: re-deriving the table later would read a program that has
+	 * changed since (more functions, more code), and could disagree with the references.
+	 */
+	static void markDispatch(Program program, Address dispatch) {
+		PropertyMapManager properties = program.getUsrPropertyManager();
+		VoidPropertyMap marks = properties.getVoidPropertyMap(DISPATCH_PROPERTY);
+		if (marks == null) {
+			try {
+				marks = properties.createVoidPropertyMap(DISPATCH_PROPERTY);
+			}
+			catch (DuplicateNameException e) {
+				throw new AssertionError(e); // just looked it up
+			}
+		}
+		marks.add(dispatch);
+	}
+
+	/**
+	 * MIGRATION (0.8.2), for programs analyzed before dispatches were marked — the curated
+	 * {@code /COLONIZE/VICEROY.EXE}. Delete once viceroy confirms it has been migrated.
+	 * <p>
+	 * Such a dispatch already carries its computed references, so the pass above skips it
+	 * and it would never be marked, leaving the override pass blind to it. Mark it when its
+	 * computed-jump targets are exactly the table recovered now: that proves an earlier run
+	 * of this pass laid them down, and not {@code DecompilerSwitchAnalyzer}'s guess. Returns
+	 * true if it marked one.
+	 */
+	private static boolean migrateDispatchMark(Program program, ReferenceManager refManager,
+			Instruction dispatch, List<Address> destinations) {
+		Address at = dispatch.getMinAddress();
+		if (markedDispatches(program, new AddressSet(at, at)).hasNext()) {
+			return false;
+		}
+		Set<Address> existing = new LinkedHashSet<>();
+		for (Reference reference : refManager.getReferencesFrom(at)) {
+			if (reference.getReferenceType().isComputed() &&
+				reference.getReferenceType().isJump()) {
+				existing.add(reference.getToAddress());
+			}
+		}
+		if (!existing.equals(new LinkedHashSet<>(destinations))) {
+			return false;
+		}
+		markDispatch(program, at);
+		return true;
+	}
+
+	/** The dispatches {@link #markDispatch} marked within {@code set}. */
+	static AddressIterator markedDispatches(Program program, AddressSetView set) {
+		VoidPropertyMap marks = program.getUsrPropertyManager().getVoidPropertyMap(DISPATCH_PROPERTY);
+		return marks == null ? AddressIterator.EMPTY_ITERATOR : marks.getPropertyIterator(set);
+	}
+
+	/**
 	 * Returns the switch destinations for {@code instruction} if it is a CS-relative
 	 * dispatch whose table can be read with confidence, otherwise null.
-	 * <p>
-	 * Shared with {@link RTLinkSwitchOverrideAnalyzer} so both passes agree, byte for byte, on
-	 * which sites are dispatchers and where they go.
 	 */
 	static List<Address> recoverTable(Program program, Instruction instruction) {
 		MemoryBlock block = program.getMemory().getBlock(instruction.getMinAddress());
