@@ -8,11 +8,13 @@ import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.plugin.core.clear.ClearFlowAndRepairCmd;
 import ghidra.app.util.PseudoDisassembler;
 import ghidra.app.util.PseudoInstruction;
+import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Bookmark;
 import ghidra.program.model.listing.BookmarkManager;
+import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
@@ -120,7 +122,13 @@ final class ConflictArbitration {
 			}
 
 			fixupAround(program, buried, evidence, monitor);
-			bookmarks.removeBookmark(bookmark);
+			// The repair's own disassembly may already have dropped the mark, and since 12.2
+			// removing a deleted bookmark throws: remove whatever mark is there now.
+			Bookmark mark = bookmarks.getBookmark(buried, BookmarkType.ERROR,
+				Disassembler.ERROR_BOOKMARK_CATEGORY);
+			if (mark != null) {
+				bookmarks.removeBookmark(mark);
+			}
 			repaired++;
 		}
 		return repaired;

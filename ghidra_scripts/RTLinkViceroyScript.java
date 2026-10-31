@@ -208,7 +208,9 @@ public class RTLinkViceroyScript extends GhidraScript {
 		var missing = new java.util.ArrayList<String>();
 		for (var entry : expected) {
 			if (functions.getFunctionAt(entry) == null) {
-				missing.add(entry.toString());
+				var containing = functions.getFunctionContaining(entry);
+				missing.add(entry + " (in " + (containing == null ? "no function"
+						: containing.getEntryPoint()) + ", from " + referencesTo(entry) + ")");
 			}
 		}
 		var extra = new java.util.ArrayList<String>();
@@ -217,12 +219,8 @@ public class RTLinkViceroyScript extends GhidraScript {
 			for (Function f : functions.getFunctions(
 				new ghidra.program.model.address.AddressSet(block.getStart(), block.getEnd()), true)) {
 				if (!expected.contains(f.getEntryPoint()) && !tolerated.contains(f.getEntryPoint())) {
-					var from = new java.util.ArrayList<String>();
-					for (var ref : getReferencesTo(f.getEntryPoint())) {
-						from.add(ref.getFromAddress() + " " + ref.getReferenceType());
-					}
 					extra.add(f.getEntryPoint() + " (" + f.getBody().getNumAddresses() + "B, from " +
-						from + ")");
+						referencesTo(f.getEntryPoint()) + ")");
 				}
 			}
 		}
@@ -233,5 +231,14 @@ public class RTLinkViceroyScript extends GhidraScript {
 			return false;
 		}
 		return true;
+	}
+
+	/** Each reference to {@code at} as its source and type. */
+	private java.util.List<String> referencesTo(ghidra.program.model.address.Address at) {
+		var from = new java.util.ArrayList<String>();
+		for (var ref : getReferencesTo(at)) {
+			from.add(ref.getFromAddress() + " " + ref.getReferenceType() + " " + ref.getSource());
+		}
+		return from;
 	}
 }
