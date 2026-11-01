@@ -182,10 +182,7 @@ final class ConflictArbitration {
 		}
 		new ClearFlowAndRepairCmd(clear.junkStarts(), clear.evidence(), false, false, false)
 				.applyTo(program, monitor);
-		DisassembleCommand disassemble = new DisassembleCommand(buried, null, true);
-		disassemble.enableCodeAnalysis(false);
-		disassemble.applyTo(program, monitor);
-		decoded.add(disassemble.getDisassembledAddressSet());
+		decoded.add(CodeEvidence.decodeQuietly(program, buried, monitor));
 		if (program.getListing().getInstructionAt(buried) == null) {
 			return false;
 		}

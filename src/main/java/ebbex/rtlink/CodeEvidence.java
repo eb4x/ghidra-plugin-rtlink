@@ -4,8 +4,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Predicate;
 
+import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
@@ -82,6 +84,17 @@ final class CodeEvidence {
 		Instruction previous =
 			before == null ? null : program.getListing().getInstructionContaining(before);
 		return previous != null && at.equals(previous.getFallThrough()) ? previous : null;
+	}
+
+	/**
+	 * Disassemble from {@code at} with auto-analysis off, for a repair that has to finish
+	 * before analysis sees any of it; returns what was decoded.
+	 */
+	static AddressSetView decodeQuietly(Program program, Address at, TaskMonitor monitor) {
+		DisassembleCommand disassemble = new DisassembleCommand(at, null, true);
+		disassemble.enableCodeAnalysis(false);
+		disassemble.applyTo(program, monitor);
+		return disassemble.getDisassembledAddressSet();
 	}
 
 	/** Create a function at {@code at} unless one already contains it; true if one was made. */

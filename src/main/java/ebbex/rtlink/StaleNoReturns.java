@@ -5,7 +5,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
-import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 import ghidra.program.model.address.Address;
@@ -197,10 +196,7 @@ final class StaleNoReturns {
 			return false;
 		}
 		if (program.getListing().getInstructionAt(fallThrough) == null) {
-			DisassembleCommand disassemble = new DisassembleCommand(fallThrough, null, true);
-			disassemble.enableCodeAnalysis(false);
-			disassemble.applyTo(program, monitor);
-			AddressSetView added = disassemble.getDisassembledAddressSet();
+			AddressSetView added = CodeEvidence.decodeQuietly(program, fallThrough, monitor);
 			decoded.add(added);
 			return unblockStraightLine(program, fallThrough, decoded, monitor) || !added.isEmpty();
 		}
