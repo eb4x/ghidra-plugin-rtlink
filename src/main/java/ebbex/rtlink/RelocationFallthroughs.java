@@ -22,7 +22,7 @@ import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Buried-code repair A — relocation fall-throughs.
+ * Buried-code repair — relocation fall-throughs.
  * <p>
  * An address carrying a loader relocation is a patched <i>operand word</i> (MZ header
  * relocations and the RTLink overlay relocations both record the 2-byte segment word itself;

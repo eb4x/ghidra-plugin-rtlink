@@ -15,7 +15,8 @@ import ghidra.program.model.scalar.Scalar;
  * Facts about 16-bit real-mode x86 instructions that several analyzers need, read the way they
  * all have to read them: from the encoded bytes and the p-code, never from the operands Ghidra
  * displays. Stock Ghidra 12.1.3 and 12.1.4 display {@code MOV Sreg,r/m16} ({@code 8E}) with its
- * operands swapped (GP-7018), so an operand index is not a reliable source or destination.
+ * operands swapped (GP-7018), and 12.2 reorders them again for {@code mod=3} (GP-7279), while the
+ * p-code stays the same throughout: an operand index is not a reliable source or destination.
  */
 final class X86 {
 

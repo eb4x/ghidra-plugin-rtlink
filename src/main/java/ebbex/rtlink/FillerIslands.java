@@ -20,7 +20,7 @@ import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Buried-code repair F — delete the instructions decoded out of zero fill.
+ * Buried-code repair — delete the instructions decoded out of zero fill.
  * <p>
  * The DGROUP data segment is mapped executable (there is code down there among the
  * data), so its zeroed regions are fair game for anything that disassembles at an

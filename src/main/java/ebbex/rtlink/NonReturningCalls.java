@@ -26,7 +26,7 @@ import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Buried-code repair E — calls that cannot return. A call to a routine that terminates the
+ * Buried-code repair — calls that cannot return. A call to a routine that terminates the
  * program cannot return, so the bytes after it are not code.
  * <p>
  * The corpus shape is the vendor driver's handler-registration routine: its table

@@ -22,7 +22,7 @@ import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Buried-code repair D — far jumps and calls through a code-segment vector,
+ * Buried-code repair — far jumps and calls through a code-segment vector,
  * {@code JMPF CS:[imm16]} and {@code CALLF CS:[imm16]}.
  * <p>
  * Ghidra will not follow an indirect far flow, so whatever it lands on is never

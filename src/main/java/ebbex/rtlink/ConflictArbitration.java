@@ -25,7 +25,7 @@ import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Buried-code repair B — conflict-bookmark arbitration.
+ * Buried-code repair — conflict-bookmark arbitration.
  * <p>
  * When the disassembler cannot decode a flow target because junk already covers it, it stamps
  * an ERROR "Bad Instruction" bookmark <i>at the blocked address</i> ("Failed to disassemble at

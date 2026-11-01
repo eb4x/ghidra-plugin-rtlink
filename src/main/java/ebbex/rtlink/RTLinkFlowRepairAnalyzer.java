@@ -16,20 +16,23 @@ import ghidra.util.task.TaskMonitor;
  * dead last, after every pass that plants flows or stamps conflict bookmarks, and
  * enforces one invariant — <i>referenced code always wins over unreferenced junk</i>.
  * <p>
- * The repairs are separate passes, each in its own class, run here in an order that
- * matters:
- * <ol type="A">
+ * The repairs are separate passes, each in its own class, run here in this order, which
+ * matters (the reasons are at each call):
+ * <ol>
  * <li>{@link RelocationFallthroughs} — calls whose fall-through lands on a loader-relocated
  * segment word cannot return there.</li>
- * <li>{@link ConflictArbitration} — the disassembler's conflicting-instruction marks, decided
- * for the side with evidence.</li>
- * <li>{@link CodeGaps} — undefined gaps that decode exactly onto the code after them.</li>
  * <li>{@link FarVectorFlows} — far jumps and calls through {@code CS:[imm16]} vectors.</li>
  * <li>{@link NonReturningCalls} — calls to routines that end in DOS exit.</li>
  * <li>{@link StaleNoReturns} — discovered no-return flags on routines whose body returns.</li>
  * <li>{@link FillerIslands} — instructions decoded out of zero fill.</li>
+ * <li>{@link ConflictArbitration} — the disassembler's conflicting-instruction marks, decided
+ * for the side with evidence.</li>
+ * <li>{@link FarCodePointers} and {@link CodeGaps}, to a fixpoint — routines reached through a
+ * far pointer the program builds, and undefined gaps that decode exactly onto the code after
+ * them.</li>
+ * <li>{@link ConflictArbitration#sweepRepaired} — the conflict marks those repairs made
+ * fossils of.</li>
  * </ol>
- * plus {@link FarCodePointers}, run with the gap filler to a fixpoint.
  */
 public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 
@@ -80,14 +83,15 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		int fallthroughs = RelocationFallthroughs.repair(program, monitor);
 		int vectors = FarVectorFlows.resolve(program, monitor);
 		fallthroughs += NonReturningCalls.seal(program, monitor);
-		// After E: only once the DOS exits are marked do the bodies end where the code does,
-		// so a return in one is a return of that routine. And before B: arbitration's clears
-		// start auto-analysis, whose no-return discovery would re-flag a routine whose
-		// callers are still cut.
+		// After NonReturningCalls: only once the DOS exits are marked do the bodies end where
+		// the code does, so a return in one is a return of that routine. And before
+		// ConflictArbitration: its clears start auto-analysis, whose no-return discovery would
+		// re-flag a routine whose callers are still cut.
 		int reopened = StaleNoReturns.clear(program, monitor);
-		// After E, never before it: the junk table behind a non-returning call is
-		// fallen into (from the call), so F would refuse to touch it. E removes the
-		// cause; F only clears islands that never had one.
+		// After NonReturningCalls, never before it: the junk table behind a non-returning call
+		// is fallen into (from the call), so FillerIslands would refuse to touch it.
+		// NonReturningCalls removes the cause; FillerIslands only clears islands that never
+		// had one.
 		int filler = FillerIslands.clear(program, monitor);
 		int conflicts = ConflictArbitration.arbitrate(program, monitor);
 

@@ -30,7 +30,7 @@ import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Buried-code repair C — disassemble the code gaps that flow never reaches.
+ * Buried-code repair — disassemble the code gaps that flow never reaches.
  * <p>
  * A routine whose entry nothing references and whose bytes were cleared out from
  * under the pattern seeders is reachable by no pass at all: it is simply left as

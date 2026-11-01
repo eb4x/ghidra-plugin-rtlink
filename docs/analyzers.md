@@ -113,8 +113,10 @@ DOS emulated floating point (INT 34h–3Dh) into the x87 it encodes.
   marks — is read and written through `RTLinkProgram`, along with the two gates below.
 - `canAnalyze` accepts any segmented MZ (`RTLinkProgram.isSegmentedMz`; it is asked before
   analysis, when nothing is known yet), so every RTLink analyzer's `added()` returns at once
-  unless `RTLinkOverlayAnalyzer` found overlays (`isOverlayAnalyzed`). `EmulatedFloatAnalyzer`
-  is the exception: DOS emulated float is not RTLink-specific.
+  unless `RTLinkOverlayAnalyzer` found overlays (`isOverlayAnalyzed`). Two exceptions:
+  `EmulatedFloatAnalyzer`, because DOS emulated float is not RTLink-specific, and
+  `RTLinkLibrarySignatureAnalyzer`, which its `Vendor library` option gates instead — a
+  section-only binary has no overlays but links `RTLUTILS.LIB` all the same.
 - `AutoAnalysisManager` calls `analysisEnded` on every analyzer whose `canAnalyze` passed,
   enabled or not, inside the analysis transaction: an `analysisEnded` that writes checks
   its own enablement (`isAnalyzerEnabled`) and the same RTLink gate.

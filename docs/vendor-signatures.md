@@ -63,7 +63,8 @@ no data record gives, are never compared.
    4-byte `$$VMCOMMIT`/`$$VMRELEASE` and the shared prologues of `$$VM_CALL`/`$$VM_JMP`.
 
 Of modules placing the same name (the nine `vmnuc` variants), the one placing most publics
-wins. `$$VMGETPAGE` stays unnamed in VICEROY: its variant inserts an `AND AX,3FFF` as the
+wins, counted by address: aliases sharing one offset count once, so a variant is not
+favoured for naming the same routine twice. `$$VMGETPAGE` stays unnamed in VICEROY: its variant inserts an `AND AX,3FFF` as the
 second instruction, so no opening matches.
 
 ## What it writes
