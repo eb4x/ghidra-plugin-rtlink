@@ -170,26 +170,7 @@ final class DataSegmentAssumption {
 		Register ds = program.getLanguage().getRegister("DS");
 		PseudoDisassembler disassembler = new PseudoDisassembler(program);
 
-		// Follow the entry's first unconditional jump (entry -> ... -> startup).
-		Address addr = entry;
-		for (int i = 0; i < 8 && addr != null; i++) {
-			PseudoInstruction instr = CodeSeeds.decode(disassembler, addr);
-			if (instr == null) {
-				break;
-			}
-			FlowType flow = instr.getFlowType();
-			if (flow.isJump() && !flow.isConditional()) {
-				Address[] flows = instr.getFlows();
-				if (flows != null && flows.length == 1) {
-					addr = flows[0];
-					break;
-				}
-			}
-			addr = nextLinear(instr);
-		}
-		if (addr == null) {
-			addr = entry;
-		}
+		Address addr = startup(disassembler, entry);
 
 		// Linearly decode the startup, watching for the SS/DS segment load.
 		Map<Register, Long> regImm = new HashMap<>();
@@ -211,16 +192,15 @@ final class DataSegmentAssumption {
 					int type = instr.getOperandType(1);
 					Register src = X86.movSourceRegister(instr);
 					Scalar scalar = instr.getScalar(1);
+					Long known = src != null ? regImm.get(src) : null;
+					forget(regImm, dest);
 					if (scalar != null && OperandType.isScalar(type) &&
 						!OperandType.isAddress(type)) {
 						// A true immediate (not a memory displacement like [0x2]).
 						regImm.put(dest, scalar.getUnsignedValue());
 					}
-					else if (src != null && regImm.containsKey(src)) {
-						regImm.put(dest, regImm.get(src));
-					}
-					else {
-						regImm.remove(dest);
+					else if (known != null) {
+						regImm.put(dest, known);
 					}
 				}
 			}
@@ -228,7 +208,7 @@ final class DataSegmentAssumption {
 				// Any other write to a tracked register invalidates its known immediate.
 				for (Object result : instr.getResultObjects()) {
 					if (result instanceof Register reg) {
-						regImm.remove(reg);
+						forget(regImm, reg);
 					}
 				}
 			}
@@ -238,6 +218,36 @@ final class DataSegmentAssumption {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Where the C startup begins: the target of the first unconditional jump among the entry's
+	 * first instructions (the VM entry stub's {@code JMPF}), else the entry itself — a binary
+	 * without the stub enters the startup directly.
+	 */
+	private static Address startup(PseudoDisassembler disassembler, Address entry) {
+		Address addr = entry;
+		for (int i = 0; i < 8 && addr != null; i++) {
+			PseudoInstruction instr = CodeSeeds.decode(disassembler, addr);
+			if (instr == null) {
+				break;
+			}
+			FlowType flow = instr.getFlowType();
+			Address[] flows = instr.getFlows();
+			if (flow.isJump() && !flow.isConditional() && flows != null && flows.length == 1) {
+				return flows[0];
+			}
+			addr = nextLinear(instr);
+		}
+		return entry;
+	}
+
+	/**
+	 * Drop every known immediate {@code written} touches: a write to {@code AL} leaves {@code AX}
+	 * half unknown, a write to {@code AX} leaves {@code AL} and {@code AH} stale.
+	 */
+	private static void forget(Map<Register, Long> regImm, Register written) {
+		regImm.keySet().removeIf(tracked -> X86.overlaps(tracked, written));
 	}
 
 	/** The next physical instruction address (fall-through preferred), or null past the block. */

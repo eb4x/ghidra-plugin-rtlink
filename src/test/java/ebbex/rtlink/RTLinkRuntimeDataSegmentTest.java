@@ -7,6 +7,7 @@ import java.util.Set;
 import org.junit.Test;
 
 import generic.test.AbstractGenericTest;
+import ghidra.app.util.importer.MessageLog;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Program;
@@ -41,6 +42,50 @@ public class RTLinkRuntimeDataSegmentTest extends AbstractGenericTest {
 
 	private static final String RUNTIME_TEXT =
 		"Internal error in .RTLink(R)/Plus run-time code.";
+
+	/** A startup at the entry, decoded for its DGROUP load and assumed for DS over the block. */
+	private static Integer assumedFromStartup(String startup) throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("STARTUP", ProgramBuilder._X86_16_REAL_MODE);
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0000", 0x400);
+			builder.withTransaction(() -> code.setExecute(true));
+			builder.setBytes("0x1000:0x0000", startup);
+			builder.createEntryPoint("0x1000:0x0000", "entry");
+			Program program = builder.getProgram();
+			builder.withTransaction(
+				() -> DataSegmentAssumption.assume(program, new MessageLog()));
+			return X86.dataSegment(program, builder.addr("0x1000:0x0000"));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/** {@code MOV AX,1234h; MOV DS,AX}: DGROUP is the immediate that reached DS. */
+	@Test
+	public void testDgroupIsTheImmediateMovedIntoDs() throws Exception {
+		assertEquals(Integer.valueOf(0x1234), assumedFromStartup("b8 34 12 8e d8"));
+	}
+
+	/**
+	 * {@code JMP 0010} into {@code MOV DI,1234h; MOV SS,DI}: the entry's jump is followed, and
+	 * DGROUP comes through SS and another register just the same.
+	 */
+	@Test
+	public void testDgroupBehindTheEntryJumpThroughSs() throws Exception {
+		assertEquals(Integer.valueOf(0x1234),
+			assumedFromStartup("eb 0e 00 00 00 00 00 00 00 00 00 00 00 00 00 00 bf 34 12 8e d7"));
+	}
+
+	/**
+	 * {@code MOV AX,1234h; MOV AL,0; MOV DS,AX} behind the entry jump: the write to AL leaves
+	 * AX's value unknown, so no DGROUP may be read from it.
+	 */
+	@Test
+	public void testPartialWriteForgetsTheWholeRegister() throws Exception {
+		assertNull(assumedFromStartup(
+			"eb 0e 00 00 00 00 00 00 00 00 00 00 00 00 00 00 b8 34 12 b0 00 8e d8"));
+	}
 
 	@Test
 	public void testRuntimeBlocksAreFoundAndApplicationBlocksAreNot() throws Exception {
