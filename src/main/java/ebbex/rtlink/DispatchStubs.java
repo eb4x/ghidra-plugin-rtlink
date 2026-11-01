@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
@@ -43,8 +42,61 @@ final class DispatchStubs {
 	// so the analyzer adapts to binaries linked with the dispatcher elsewhere.
 	private static final int MIN_DISPATCHER_STUB_COUNT = 4;
 
-	/** A resolved dispatch stub awaiting thunk creation once its target is a real function. */
-	private record StubTarget(Address stubAddr, Address targetAddr, int stubSize) {
+	/** A jump-table entry: a {@code CALLF dispatcher} then a {@code JMPF} to its target. */
+	private sealed interface Stub permits OverlayStub, Trampoline {
+		/** The entry's first byte, its {@code CALLF}. */
+		Address stubAddr();
+
+		/** Where its {@code JMPF} really goes. */
+		Address targetAddr();
+
+		/** The entry's length in bytes. */
+		int stubSize();
+	}
+
+	/**
+	 * A dispatch stub into overlay page {@code pageNumber} (a record index): its target is
+	 * {@code targetOffset} into {@code block}, in the module based at {@code moduleBase}.
+	 */
+	private record OverlayStub(Address stubAddr, Address targetAddr, int stubSize, int pageNumber,
+			int targetOffset, int moduleBase, MemoryBlock block) implements Stub {
+	}
+
+	/** A resident-target trampoline: a far call from overlay code into resident code. */
+	private record Trampoline(Address stubAddr, Address targetAddr) implements Stub {
+		@Override
+		public int stubSize() {
+			return 10;
+		}
+	}
+
+	/**
+	 * The dispatchers: each {@code CALLF} target shared by enough stub candidates, by its
+	 * physical (flat) address, mapped to the segment the stubs call it under.
+	 */
+	record Dispatchers(Map<Long, Integer> segments) {
+
+		boolean isEmpty() {
+			return segments.isEmpty();
+		}
+
+		/** True if the 5 bytes at {@code addr} are a far call to one of these dispatchers. */
+		boolean calledAt(Memory memory, SegmentedAddressSpace space, Address addr) {
+			try {
+				if (!CodeSeeds.isResidentCode(memory, addr) ||
+					!CodeSeeds.isResidentCode(memory, addr.add(4))) {
+					return false;
+				}
+				if (memory.getByte(addr) != X86.OPCODE_CALLF) {
+					return false;
+				}
+				return segments.containsKey(
+					X86.farPointer(memory, addr.add(1)).in(space).getOffset());
+			}
+			catch (MemoryAccessException | AddressOutOfBoundsException _) {
+				return false;
+			}
+		}
 	}
 
 	private DispatchStubs() {
@@ -58,19 +110,16 @@ final class DispatchStubs {
 	static void resolve(Program program, List<OverlayBlockInfo> overlayBlocks,
 			AddressSet resolvedBodies, MessageLog log, TaskMonitor monitor)
 			throws CancelledException {
-		AddressSet overlayEntryPoints = new AddressSet();
-		List<StubTarget> pendingThunks = new ArrayList<>();
-		Map<String, SortedSet<Integer>> stubModuleBases = new HashMap<>();
-
-		Map<Long, Integer> dispatcherSegs = discoverDispatchers(program, monitor);
-		Set<Long> dispatchers = dispatcherSegs.keySet();
+		Dispatchers dispatchers = discoverDispatchers(program, monitor);
 		if (!dispatchers.isEmpty()) {
 			Msg.debug(RTLinkOverlayAnalyzer.class, "RTLink/Plus: Discovered " +
-				dispatchers.size() + " overlay dispatcher entry point(s)");
+				dispatchers.segments().size() + " overlay dispatcher entry point(s)");
 		}
 
-		int jmpfStubs = scanForJmpfStubs(program, overlayBlocks, dispatchers,
-			overlayEntryPoints, pendingThunks, stubModuleBases, monitor);
+		List<OverlayStub> stubs = new ArrayList<>();
+		List<Trampoline> trampolines = new ArrayList<>();
+		scan(program, overlayBlocks, dispatchers, stubs, trampolines, monitor);
+		Map<String, SortedSet<Integer>> stubModuleBases = markStubs(program, overlayBlocks, stubs);
 
 		// The stubs are the only place a module carrying no relocations is named, so
 		// fold what they revealed into each page's module base set before the switch
@@ -80,54 +129,62 @@ final class DispatchStubs {
 		ModuleSegments.assign(program, log);
 
 		// Resident-target trampolines share the jump table with the CALLF+JMPF
-		// dispatch stubs, so only look for them once segment-0 stubs have
-		// corroborated that this binary uses that scheme (a shared CALLF+JMPF pair count
-		// alone is a weaker signal when the JMPF segment is a plausible real value).
-		AddressSet trampolineTargets = new AddressSet();
-		List<StubTarget> pendingTrampolines = new ArrayList<>();
-		int trampolines = 0;
-		if (jmpfStubs > 0) {
-			trampolines = scanForResidentTrampolines(program, dispatchers,
-				trampolineTargets, pendingTrampolines, monitor);
+		// dispatch stubs, so only take them once segment-0 stubs have corroborated that
+		// this binary uses that scheme (a shared CALLF+JMPF pair count alone is a weaker
+		// signal when the JMPF segment is a plausible real value).
+		if (stubs.isEmpty()) {
+			trampolines.clear();
+		}
+		else if (!trampolines.isEmpty()) {
+			Msg.debug(RTLinkOverlayAnalyzer.class,
+				"RTLink/Plus: Found " + trampolines.size() + " resident-target trampoline(s)");
 		}
 
-		if (jmpfStubs == 0 && trampolines == 0) {
+		if (stubs.isEmpty() && trampolines.isEmpty()) {
 			log.appendMsg("RTLink: No dispatch stubs found");
 			return;
 		}
 
-		if (jmpfStubs > 0) {
+		if (!stubs.isEmpty()) {
 			// Disassemble the overlay code reachable from the resolved entry points and
 			// promote each entry point to a function with a real body. Without this the
 			// overlay pages hold no instructions, so intra-overlay calls and jumps never
 			// get references and every overlay "function" is a one-byte husk.
-			disassembleOverlayCode(program, overlayBlocks, overlayEntryPoints, log, monitor);
+			disassembleOverlayCode(program, overlayBlocks, targets(stubs), log, monitor);
 			// Now that the overlay targets are real functions, wire each dispatch stub to
 			// its target as a thunk.
-			wireThunks(program, pendingThunks, resolvedBodies, log, monitor);
+			wireThunks(program, stubs, resolvedBodies, log, monitor);
 		}
 
-		if (trampolines > 0) {
-			disassembleResidentTargets(program, trampolineTargets, log, monitor);
-			wireThunks(program, pendingTrampolines, resolvedBodies, log, monitor);
+		if (!trampolines.isEmpty()) {
+			disassembleResidentTargets(program, targets(trampolines), log, monitor);
+			wireThunks(program, trampolines, resolvedBodies, log, monitor);
 		}
 
-		Msg.info(RTLinkOverlayAnalyzer.class, "RTLink/Plus: Resolved " + jmpfStubs +
-			" dispatch stub(s) and " + trampolines + " resident-target trampoline(s)");
+		Msg.info(RTLinkOverlayAnalyzer.class, "RTLink/Plus: Resolved " + stubs.size() +
+			" dispatch stub(s) and " + trampolines.size() + " resident-target trampoline(s)");
 
 		// Only a corroborated VM-nucleus binary (real CALLF+JMPF stubs) gets its runtime
 		// entry points seeded.
-		if (jmpfStubs > 0) {
-			VmRuntimeSeeds.seed(program, dispatcherSegs, log, monitor);
+		if (!stubs.isEmpty()) {
+			VmRuntimeSeeds.seed(program, dispatchers.segments(), log, monitor);
 		}
 	}
 
+	private static AddressSet targets(List<? extends Stub> stubs) {
+		AddressSet targets = new AddressSet();
+		for (Stub stub : stubs) {
+			targets.add(stub.targetAddr());
+		}
+		return targets;
+	}
+
 	/** Wire each stub to its target as a thunk, clearing the stale marks of those resolved. */
-	private static void wireThunks(Program program, List<StubTarget> stubs,
+	private static void wireThunks(Program program, List<? extends Stub> stubs,
 			AddressSet resolvedBodies, MessageLog log, TaskMonitor monitor)
 			throws CancelledException {
 		FunctionManager funcMgr = program.getFunctionManager();
-		for (StubTarget stub : stubs) {
+		for (Stub stub : stubs) {
 			monitor.checkCancelled();
 			if (StubThunks.create(funcMgr, stub.stubAddr(), stub.targetAddr(), stub.stubSize(),
 				log)) {
@@ -151,7 +208,7 @@ final class DispatchStubs {
 	 * the canonical segment Ghidra happens to display a nucleus address under, is what
 	 * {@link VmRuntimeSeeds} must resolve the dispatch immediates against.
 	 */
-	static Map<Long, Integer> discoverDispatchers(Program program, TaskMonitor monitor)
+	static Dispatchers discoverDispatchers(Program program, TaskMonitor monitor)
 			throws CancelledException {
 		Memory memory = program.getMemory();
 		SegmentedAddressSpace space = X86.space(program);
@@ -177,7 +234,7 @@ final class DispatchStubs {
 				dispatchers.put(e.getKey(), stubSegments.get(e.getKey()));
 			}
 		}
-		return dispatchers;
+		return new Dispatchers(dispatchers);
 	}
 
 	/**
@@ -261,126 +318,88 @@ final class DispatchStubs {
 	 * {@link ModuleSegments#mergeStubBases} can complete each page's set with exactly those
 	 * modules the relocation table cannot name.
 	 */
-	private static int scanForJmpfStubs(Program program, List<OverlayBlockInfo> overlayBlocks,
-			Set<Long> dispatchers, AddressSet overlayEntryPoints,
-			List<StubTarget> pendingThunks, Map<String, SortedSet<Integer>> stubModuleBases,
-			TaskMonitor monitor) throws CancelledException {
-		if (overlayBlocks.isEmpty() || dispatchers.isEmpty()) {
-			return 0;
+	private static OverlayStub overlayStub(Memory memory, SegmentedAddressSpace space,
+			Dispatchers dispatchers, Map<Integer, OverlayBlockInfo> blocksByRecord, Address jmpf,
+			X86.FarPointer jump) throws MemoryAccessException {
+		// Need 5 bytes before (CALLF) and 7 bytes after (JMPF + page_id)
+		Address callfAddr = jmpf.subtract(5);
+		Address pageIdAddr = jmpf.add(5);
+		if (!CodeSeeds.isResidentCode(memory, pageIdAddr.add(1))) {
+			return null;
+		}
+		// Validate CALLF opcode and that it targets a discovered dispatcher.
+		byte callfOpcode = memory.getByte(callfAddr);
+		long callfTarget = X86.farPointer(memory, callfAddr.add(1)).in(space).getOffset();
+		if (callfOpcode != X86.OPCODE_CALLF || !dispatchers.segments().containsKey(callfTarget)) {
+			return null;
 		}
 
-		Memory memory = program.getMemory();
-		ReferenceManager refManager = program.getReferenceManager();
-		SymbolTable symbolTable = program.getSymbolTable();
-		SegmentedAddressSpace space = X86.space(program);
-		Map<Integer, OverlayBlockInfo> blocksByRecord = blocksByRecord(overlayBlocks);
-		int width = OverlayNames.width(OverlayNames.maxRecordIndex(overlayBlocks));
-		int[] moduleResolved = { 0 };
-
-		int count = CodeSeeds.scanResident(memory, new byte[] { X86.OPCODE_JMPF }, monitor, jmpf -> {
-			// Need 5 bytes before (CALLF) and 7 bytes after (JMPF + page_id)
-			Address callfAddr = jmpf.subtract(5);
-			Address pageIdAddr = jmpf.add(5);
-			if (!CodeSeeds.isResidentCode(memory, callfAddr) ||
-				!CodeSeeds.isResidentCode(memory, pageIdAddr.add(1))) {
-				return false;
-			}
-
-			X86.FarPointer jump = X86.farPointer(memory, jmpf.add(1));
-			if (jump.segment() != 0x0000) {
-				return false;
-			}
-			// Validate CALLF opcode and that it targets a discovered dispatcher.
-			byte callfOpcode = memory.getByte(callfAddr);
-			long callfTarget = X86.farPointer(memory, callfAddr.add(1)).in(space).getOffset();
-			if (callfOpcode != X86.OPCODE_CALLF || !dispatchers.contains(callfTarget)) {
-				return false;
-			}
-
-			int jmpfOffset = jump.offset();
-			int pageId = Short.toUnsignedInt(memory.getShort(pageIdAddr));
-			// The stored value is a 1-based descriptor index: descriptor N is
-			// overlay record N - 1, so page_id 1 targets record 0 (a real code
-			// page — see RTLinkOverlayAnalyzer's class javadoc). pageNumber is the
-			// record index, shared by the OVLSTUB/OVL labels and the OVERLAY_NN
-			// block names.
-			int descriptorIndex = pageId & PAGE_ID_MASK;
-			int pageNumber = descriptorIndex - 1;
-
-			OverlayBlockInfo target = blocksByRecord.get(pageNumber);
-			if (target == null) {
-				return false;
-			}
-
-			// Distinguish the 12- and 14-byte stub forms (see the method javadoc):
-			// the bytes at +12 either begin the next stub (12-byte form, module 0)
-			// or hold the target module's base paragraph within the page.
-			int stubSize = 12;
-			int moduleBase = 0;
-			Address moduleWordAddr = callfAddr.add(12);
-			if (CodeSeeds.isResidentCode(memory, moduleWordAddr.add(1)) &&
-				!isDispatcherCallf(memory, space, dispatchers, moduleWordAddr)) {
-				int word = Short.toUnsignedInt(memory.getShort(moduleWordAddr));
-				if (word < target.page().header().totalParagraphs()) {
-					stubSize = 14;
-					moduleBase = word;
-				}
-			}
-			int targetOffset = jmpfOffset + moduleBase * 16;
-
-			Address targetAddr = target.block().getStart().add(targetOffset);
-			if (!target.block().contains(targetAddr)) {
-				return false;
-			}
-
-			// Only now that the stub has fully checked out is its module_word
-			// trustworthy enough to record as one of the page's module bases.
-			if (moduleBase != 0) {
-				stubModuleBases
-						.computeIfAbsent(target.block().getName(), _ -> new TreeSet<>())
-						.add(moduleBase);
-				moduleResolved[0]++;
-			}
-
-			Address stubAddr = callfAddr;
-			refManager.addMemoryReference(stubAddr, targetAddr,
-				RefType.UNCONDITIONAL_CALL, SourceType.ANALYSIS, 0);
-
-			CodeSeeds.label(symbolTable,
-				OverlayNames.stubLabel(pageNumber, targetOffset, width), stubAddr);
-			CodeSeeds.label(symbolTable,
-				OverlayNames.targetLabel(pageNumber, targetOffset, width), targetAddr);
-
-			overlayEntryPoints.add(targetAddr);
-			pendingThunks.add(new StubTarget(stubAddr, targetAddr, stubSize));
-			return true;
-		});
-		if (moduleResolved[0] > 0) {
-			Msg.debug(RTLinkOverlayAnalyzer.class, "RTLink/Plus: " + moduleResolved[0] +
-				" stub(s) resolved through a nonzero module base");
+		int pageId = Short.toUnsignedInt(memory.getShort(pageIdAddr));
+		// The stored value is a 1-based descriptor index: descriptor N is overlay record
+		// N - 1, so page_id 1 targets record 0 (a real code page — see
+		// RTLinkOverlayAnalyzer's class javadoc). pageNumber is the record index, shared by
+		// the OVLSTUB/OVL labels and the OVERLAY_NN block names.
+		int pageNumber = (pageId & PAGE_ID_MASK) - 1;
+		OverlayBlockInfo target = blocksByRecord.get(pageNumber);
+		if (target == null) {
+			return null;
 		}
-		return count;
+
+		// Distinguish the 12- and 14-byte stub forms (see above): the bytes at +12
+		// either begin the next stub (12-byte form, module 0) or hold the target module's
+		// base paragraph within the page.
+		int stubSize = 12;
+		int moduleBase = 0;
+		Address moduleWordAddr = callfAddr.add(12);
+		if (CodeSeeds.isResidentCode(memory, moduleWordAddr.add(1)) &&
+			!dispatchers.calledAt(memory, space, moduleWordAddr)) {
+			int word = Short.toUnsignedInt(memory.getShort(moduleWordAddr));
+			if (word < target.page().header().totalParagraphs()) {
+				stubSize = 14;
+				moduleBase = word;
+			}
+		}
+		int targetOffset = jump.offset() + moduleBase * 16;
+		Address targetAddr = target.block().getStart().add(targetOffset);
+		if (!target.block().contains(targetAddr)) {
+			return null;
+		}
+		return new OverlayStub(callfAddr, targetAddr, stubSize, pageNumber, targetOffset,
+			moduleBase, target.block());
 	}
 
 	/**
-	 * Returns true if the 5 bytes at {@code addr} form a far call to one of the
-	 * discovered overlay dispatchers — i.e. the start of another dispatch stub.
+	 * Reference and label each overlay stub and its target, and return the module bases
+	 * the stubs revealed, by overlay block name. Only a stub that has fully checked out has
+	 * a module_word trustworthy enough to record as one of its page's module bases.
 	 */
-	private static boolean isDispatcherCallf(Memory memory, SegmentedAddressSpace space,
-			Set<Long> dispatchers, Address addr) {
-		try {
-			if (!CodeSeeds.isResidentCode(memory, addr) ||
-				!CodeSeeds.isResidentCode(memory, addr.add(4))) {
-				return false;
+	private static Map<String, SortedSet<Integer>> markStubs(Program program,
+			List<OverlayBlockInfo> overlayBlocks, List<OverlayStub> stubs) {
+		ReferenceManager refManager = program.getReferenceManager();
+		SymbolTable symbolTable = program.getSymbolTable();
+		int width = OverlayNames.width(OverlayNames.maxRecordIndex(overlayBlocks));
+		Map<String, SortedSet<Integer>> stubModuleBases = new HashMap<>();
+		int moduleResolved = 0;
+		for (OverlayStub stub : stubs) {
+			if (stub.moduleBase() != 0) {
+				stubModuleBases.computeIfAbsent(stub.block().getName(), _ -> new TreeSet<>())
+						.add(stub.moduleBase());
+				moduleResolved++;
 			}
-			if (memory.getByte(addr) != X86.OPCODE_CALLF) {
-				return false;
-			}
-			return dispatchers.contains(X86.farPointer(memory, addr.add(1)).in(space).getOffset());
+			refManager.addMemoryReference(stub.stubAddr(), stub.targetAddr(),
+				RefType.UNCONDITIONAL_CALL, SourceType.ANALYSIS, 0);
+			CodeSeeds.label(symbolTable,
+				OverlayNames.stubLabel(stub.pageNumber(), stub.targetOffset(), width),
+				stub.stubAddr());
+			CodeSeeds.label(symbolTable,
+				OverlayNames.targetLabel(stub.pageNumber(), stub.targetOffset(), width),
+				stub.targetAddr());
 		}
-		catch (MemoryAccessException | AddressOutOfBoundsException _) {
-			return false;
+		if (moduleResolved > 0) {
+			Msg.debug(RTLinkOverlayAnalyzer.class, "RTLink/Plus: " + moduleResolved +
+				" stub(s) resolved through a nonzero module base");
 		}
+		return stubModuleBases;
 	}
 
 	/**
@@ -405,53 +424,54 @@ final class DispatchStubs {
 	 * a junk leading argument that swallows a real one. A thunk delegates name,
 	 * signature and (far) calling convention to the target.
 	 */
-	private static int scanForResidentTrampolines(Program program, Set<Long> dispatchers,
-			AddressSet trampolineTargets, List<StubTarget> pendingThunks,
+	private static Trampoline trampoline(Memory memory, SegmentedAddressSpace space,
+			Dispatchers dispatchers, Address jmpf, X86.FarPointer jump) {
+		Address callfAddr = jmpf.subtract(5);
+		if (!CodeSeeds.isResidentCode(memory, jmpf.add(4)) ||
+			!dispatchers.calledAt(memory, space, callfAddr)) {
+			return null;
+		}
+		Address targetAddr = jump.in(space);
+		if (!CodeSeeds.isResidentCode(memory, targetAddr)) {
+			return null;
+		}
+		// A jump back into the trampoline's own bytes is not a trampoline.
+		long delta = targetAddr.getOffset() - callfAddr.getOffset();
+		if (delta >= 0 && delta < 10) {
+			return null;
+		}
+		return new Trampoline(callfAddr, targetAddr);
+	}
+
+	/**
+	 * One scan of the resident code's {@code JMPF}s, classifying each that follows a
+	 * {@code CALLF} to a dispatcher by its segment: {@code 0000} is an
+	 * {@link #overlayStub overlay dispatch stub}, anything else a candidate
+	 * {@link #trampoline trampoline}. Reads only; nothing is marked until both lists are
+	 * complete.
+	 */
+	private static void scan(Program program, List<OverlayBlockInfo> overlayBlocks,
+			Dispatchers dispatchers, List<OverlayStub> stubs, List<Trampoline> trampolines,
 			TaskMonitor monitor) throws CancelledException {
 		if (dispatchers.isEmpty()) {
-			return 0;
+			return;
 		}
-
 		Memory memory = program.getMemory();
 		SegmentedAddressSpace space = X86.space(program);
-		int count = CodeSeeds.scanResident(memory, new byte[] { X86.OPCODE_JMPF }, monitor, jmpf -> {
-			Address callfAddr = jmpf.subtract(5);
-			if (!CodeSeeds.isResidentCode(memory, callfAddr) ||
-				!CodeSeeds.isResidentCode(memory, jmpf.add(4))) {
+		Map<Integer, OverlayBlockInfo> blocksByRecord = blocksByRecord(overlayBlocks);
+		CodeSeeds.scanResident(memory, new byte[] { X86.OPCODE_JMPF }, monitor, jmpf -> {
+			if (!CodeSeeds.isResidentCode(memory, jmpf.subtract(5))) {
 				return false;
 			}
-
 			X86.FarPointer jump = X86.farPointer(memory, jmpf.add(1));
 			if (jump.segment() == 0x0000) {
-				// Unrelocated segment: an overlay dispatch stub, not a
-				// trampoline (handled by scanForJmpfStubs).
-				return false;
+				OverlayStub stub =
+					overlayStub(memory, space, dispatchers, blocksByRecord, jmpf, jump);
+				return stub != null && stubs.add(stub);
 			}
-			if (!isDispatcherCallf(memory, space, dispatchers, callfAddr)) {
-				return false;
-			}
-
-			Address targetAddr = jump.in(space);
-			if (!CodeSeeds.isResidentCode(memory, targetAddr)) {
-				return false;
-			}
-
-			// A jump back into the trampoline's own bytes is not a trampoline.
-			long delta = targetAddr.getOffset() - callfAddr.getOffset();
-			if (delta >= 0 && delta < 10) {
-				return false;
-			}
-
-			trampolineTargets.add(targetAddr);
-			pendingThunks.add(new StubTarget(callfAddr, targetAddr, 10));
-			return true;
+			Trampoline trampoline = trampoline(memory, space, dispatchers, jmpf, jump);
+			return trampoline != null && trampolines.add(trampoline);
 		});
-
-		if (count > 0) {
-			Msg.debug(RTLinkOverlayAnalyzer.class,
-				"RTLink/Plus: Found " + count + " resident-target trampoline(s)");
-		}
-		return count;
 	}
 
 	/**
@@ -494,7 +514,7 @@ final class DispatchStubs {
 	 * failed keeps its bookmark (and its log line), so {@code filter=error} still means
 	 * something.
 	 */
-	private static void clearErrorBookmarks(Program program, StubTarget stub,
+	private static void clearErrorBookmarks(Program program, Stub stub,
 			AddressSet resolvedBodies, TaskMonitor monitor) throws CancelledException {
 		AddressSet stubBody;
 		try {
