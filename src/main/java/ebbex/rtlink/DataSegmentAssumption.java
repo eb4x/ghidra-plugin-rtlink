@@ -112,6 +112,20 @@ final class DataSegmentAssumption {
 	}
 
 	/**
+	 * The DGROUP segment, read back from the DS context {@link #assume} asserted over
+	 * compiler-generated code, or null if DS was never assumed.
+	 */
+	static Integer assumedDgroup(Program program) {
+		for (MemoryBlock block : program.getMemory().getBlocks()) {
+			Integer ds = block.isExecute() ? X86.dataSegment(program, block.getStart()) : null;
+			if (ds != null) {
+				return ds;
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * The executable blocks holding the RTLink runtime, which the DS assumption does not
 	 * cover.
 	 *

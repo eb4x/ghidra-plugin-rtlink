@@ -171,7 +171,7 @@ public final class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 	 *         Package-private so tests can drive it directly.
 	 */
 	static int removeRuntimeDgroupRefs(Program program) {
-		Integer dgroup = assumedDgroup(program);
+		Integer dgroup = DataSegmentAssumption.assumedDgroup(program);
 		if (dgroup == null) {
 			return 0;
 		}
@@ -203,20 +203,6 @@ public final class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 			refs.delete(ref);
 		}
 		return doomed.size();
-	}
-
-	/**
-	 * The DGROUP segment, read back from the DS context the overlay analyzer asserted over
-	 * compiler-generated code. Null if DS was never assumed (nothing to clean up).
-	 */
-	private static Integer assumedDgroup(Program program) {
-		for (MemoryBlock block : program.getMemory().getBlocks()) {
-			Integer ds = block.isExecute() ? X86.dataSegment(program, block.getStart()) : null;
-			if (ds != null) {
-				return ds;
-			}
-		}
-		return null;
 	}
 
 	@Override
