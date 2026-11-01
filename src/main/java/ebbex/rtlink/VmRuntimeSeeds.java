@@ -139,12 +139,8 @@ final class VmRuntimeSeeds {
 				memory.getByte(entry.add(5)) != X86.OPCODE_JMPF) {
 				return;
 			}
-			Address initBody = space.getAddress(
-				Short.toUnsignedInt(memory.getShort(entry.add(3))),
-				Short.toUnsignedInt(memory.getShort(entry.add(1))));
-			Address startup = space.getAddress(
-				Short.toUnsignedInt(memory.getShort(entry.add(8))),
-				Short.toUnsignedInt(memory.getShort(entry.add(6))));
+			Address initBody = X86.farPointer(memory, entry.add(1)).in(space);
+			Address startup = X86.farPointer(memory, entry.add(6)).in(space);
 			if (initBody.equals(startup) || initBody.equals(entry) || startup.equals(entry)) {
 				return;
 			}

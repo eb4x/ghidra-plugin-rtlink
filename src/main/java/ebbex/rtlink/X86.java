@@ -7,6 +7,7 @@ import ghidra.program.model.lang.Register;
 import ghidra.program.model.lang.RegisterValue;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.scalar.Scalar;
@@ -67,6 +68,20 @@ final class X86 {
 	/** The little-endian word at {@code b[at]}. */
 	static int word(byte[] b, int at) {
 		return (b[at] & 0xff) | ((b[at + 1] & 0xff) << 8);
+	}
+
+	/** A {@code ptr16:16} far pointer, as {@code CALLF}, {@code JMPF} and a far vector store it. */
+	record FarPointer(int segment, int offset) {
+		Address in(SegmentedAddressSpace space) {
+			return space.getAddress(segment, offset);
+		}
+	}
+
+	/** The far pointer stored at {@code at}: the offset word, then the segment word. */
+	static FarPointer farPointer(Memory memory, Address at) throws MemoryAccessException {
+		int offset = Short.toUnsignedInt(memory.getShort(at));
+		int segment = Short.toUnsignedInt(memory.getShort(at.add(2)));
+		return new FarPointer(segment, offset);
 	}
 
 	/** The instruction's bytes, or an empty array if they cannot be read. */

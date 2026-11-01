@@ -166,11 +166,10 @@ final class DispatchStubs {
 				memory.getByte(jmpfAddr) != X86.OPCODE_JMPF) {
 				return false;
 			}
-			int off = Short.toUnsignedInt(memory.getShort(callf.add(1)));
-			int seg = Short.toUnsignedInt(memory.getShort(callf.add(3)));
-			long target = space.getAddress(seg, off).getOffset();
+			X86.FarPointer pointer = X86.farPointer(memory, callf.add(1));
+			long target = pointer.in(space).getOffset();
 			counts.merge(target, 1, Integer::sum);
-			stubSegments.putIfAbsent(target, seg);
+			stubSegments.putIfAbsent(target, pointer.segment());
 			return true;
 		});
 
@@ -289,21 +288,18 @@ final class DispatchStubs {
 				return false;
 			}
 
-			int targetSegment = Short.toUnsignedInt(memory.getShort(jmpf.add(3)));
-			if (targetSegment != 0x0000) {
+			X86.FarPointer jump = X86.farPointer(memory, jmpf.add(1));
+			if (jump.segment() != 0x0000) {
 				return false;
 			}
-
 			// Validate CALLF opcode and that it targets a discovered dispatcher.
 			byte callfOpcode = memory.getByte(callfAddr);
-			int callfOffset = Short.toUnsignedInt(memory.getShort(callfAddr.add(1)));
-			int callfSegment = Short.toUnsignedInt(memory.getShort(callfAddr.add(3)));
-			long callfTarget = space.getAddress(callfSegment, callfOffset).getOffset();
+			long callfTarget = X86.farPointer(memory, callfAddr.add(1)).in(space).getOffset();
 			if (callfOpcode != X86.OPCODE_CALLF || !dispatchers.contains(callfTarget)) {
 				return false;
 			}
 
-			int jmpfOffset = Short.toUnsignedInt(memory.getShort(jmpf.add(1)));
+			int jmpfOffset = jump.offset();
 			int pageId = Short.toUnsignedInt(memory.getShort(pageIdAddr));
 			// The stored value is a 1-based descriptor index: descriptor N is
 			// overlay record N - 1, so page_id 1 targets record 0 (a real code
@@ -382,9 +378,7 @@ final class DispatchStubs {
 			if (memory.getByte(addr) != X86.OPCODE_CALLF) {
 				return false;
 			}
-			int off = Short.toUnsignedInt(memory.getShort(addr.add(1)));
-			int seg = Short.toUnsignedInt(memory.getShort(addr.add(3)));
-			return dispatchers.contains(space.getAddress(seg, off).getOffset());
+			return dispatchers.contains(X86.farPointer(memory, addr.add(1)).in(space).getOffset());
 		}
 		catch (MemoryAccessException | AddressOutOfBoundsException _) {
 			return false;
@@ -429,8 +423,8 @@ final class DispatchStubs {
 				return false;
 			}
 
-			int targetSegment = Short.toUnsignedInt(memory.getShort(jmpf.add(3)));
-			if (targetSegment == 0x0000) {
+			X86.FarPointer jump = X86.farPointer(memory, jmpf.add(1));
+			if (jump.segment() == 0x0000) {
 				// Unrelocated segment: an overlay dispatch stub, not a
 				// trampoline (handled by scanForJmpfStubs).
 				return false;
@@ -439,8 +433,7 @@ final class DispatchStubs {
 				return false;
 			}
 
-			int targetOffset = Short.toUnsignedInt(memory.getShort(jmpf.add(1)));
-			Address targetAddr = space.getAddress(targetSegment, targetOffset);
+			Address targetAddr = jump.in(space);
 			if (!CodeSeeds.isResidentCode(memory, targetAddr)) {
 				return false;
 			}

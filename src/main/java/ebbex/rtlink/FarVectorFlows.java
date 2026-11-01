@@ -127,12 +127,11 @@ final class FarVectorFlows {
 			return null;
 		}
 		try {
-			int pointerOffset = program.getMemory().getShort(vector) & 0xffff;
-			int pointerSegment = program.getMemory().getShort(vector.add(2)) & 0xffff;
-			if (pointerSegment == 0) {
+			X86.FarPointer pointer = X86.farPointer(program.getMemory(), vector);
+			if (pointer.segment() == 0) {
 				return null; // unrelocated: patched at runtime, not ours to follow
 			}
-			Address target = space.getAddress(pointerSegment, pointerOffset);
+			Address target = pointer.in(space);
 			MemoryBlock targetBlock = program.getMemory().getBlock(target);
 			if (targetBlock == null || !targetBlock.isExecute() ||
 				!targetBlock.isInitialized()) {
