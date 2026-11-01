@@ -175,6 +175,15 @@ public final class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 			int added = resolveBodies(program, jmp, monitor);
 			if (jmp.getComment(CommentType.PLATE) == null) {
 				jmp.setComment(CommentType.PLATE, DISPATCHER_COMMENT);
+				// The decompiler never reads references and gets this jump wrong on its own:
+				// stock switches it over the page, and even where currentCS reads CS from
+				// context it gives up on it ("too many branches") or fails outright. The
+				// override fixes it. Recorded on first sight only (no plate comment yet), so a
+				// re-run does not bring back an override the user deleted.
+				List<Address> bodies = bodies(program, jmp);
+				if (!bodies.isEmpty()) {
+					RTLinkProgram.recordSwitch(program, jmp.getMinAddress(), bodies);
+				}
 			}
 			if (!bogus.isEmpty() || added > 0) {
 				resolved++;

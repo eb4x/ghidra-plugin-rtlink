@@ -9,16 +9,21 @@ import java.util.Set;
 import org.junit.Test;
 
 import generic.test.AbstractGenericTest;
+import ghidra.app.util.importer.MessageLog;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.CommentType;
+import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
+import ghidra.program.model.pcode.HighFunction;
+import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.SourceType;
+import ghidra.program.model.symbol.Symbol;
 import ghidra.util.task.TaskMonitor;
 
 /**
@@ -122,6 +127,58 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 		finally {
 			builder.dispose();
 		}
+	}
+
+	/**
+	 * A resolved jump is overridden once its function exists, so the decompiler shows the two
+	 * arms: it never reads the references, and on its own gets the jump wrong on every SDK.
+	 * Once only: resolving again records nothing, so a deleted override stays deleted.
+	 */
+	@Test
+	public void testResolvedDispatchJumpIsOverriddenOnce() throws Exception {
+		ProgramBuilder builder = dispatchProgram();
+		try {
+			Program program = builder.getProgram();
+			Address jmp = builder.addr(JMP);
+
+			resolve(builder);
+			builder.createFunction("0x1000:0x0100");
+			assertEquals(Integer.valueOf(1), writeOverrides(builder));
+
+			Namespace space = overrideSpace(builder, jmp);
+			assertNotNull("the jump carries an override", space);
+			Set<Address> cases = new HashSet<>();
+			for (Symbol symbol : program.getSymbolTable().getSymbols(space)) {
+				if (symbol.getName().startsWith("case")) {
+					cases.add(symbol.getAddress());
+				}
+			}
+			assertEquals(Set.of(builder.addr(BODY_A), builder.addr(BODY_B)), cases);
+
+			builder.withTransaction(
+				() -> program.getSymbolTable().removeSymbolSpecial(space.getSymbol()));
+			resolve(builder);
+			assertEquals("a second resolution records nothing", Integer.valueOf(0),
+				writeOverrides(builder));
+			assertNull("the deleted override stays deleted", overrideSpace(builder, jmp));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	private static Integer writeOverrides(ProgramBuilder builder) throws Exception {
+		Program program = builder.getProgram();
+		return builder.tx(() -> RTLinkSwitchOverrideAnalyzer.writeOverrides(program,
+			program.getMemory(), new MessageLog(), TaskMonitor.DUMMY));
+	}
+
+	private static Namespace overrideSpace(ProgramBuilder builder, Address jmp) {
+		Program program = builder.getProgram();
+		Function function = program.getFunctionManager().getFunctionContaining(jmp);
+		Namespace overrides = function == null ? null : HighFunction.findOverrideSpace(function);
+		return overrides == null ? null
+				: HighFunction.findNamespace(program.getSymbolTable(), overrides, "jmp_" + jmp);
 	}
 
 	/** With the dispatcher analyzer switched off, the table pass claims nothing for it. */

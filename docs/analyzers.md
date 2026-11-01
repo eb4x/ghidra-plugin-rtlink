@@ -49,12 +49,20 @@ seven classes and not one. They share package-private statics and must stay in
   jump; this pass then only drops the marks stock leaves at its `page + imm` guesses. Where
   `currentCS` reads CS from context (upstream #9703, the dailydriver fork) stock is
   already right and only the plate comment changes; claiming early there moves VICEROY's
-  nucleus function boundaries, so it doesn't. Up to 0.6.0 this took the body for an overlay offset and
+  nucleus function boundaries, so it doesn't. References fix the flow, not the decompiler,
+  which never reads them and gets the jump wrong on its own on every SDK: stock switches it
+  over the page (112 cases on the smoke sample, with bad data), the fork gives up on it
+  ("too many branches", VICEROY) or fails outright ("Bad instruction count exceeded", the
+  smoke sample). So, since 0.8.22, the first time this pass resolves a jump (it has no plate
+  comment yet) it records the bodies as a pending switch, and `RTLinkSwitchOverrideAnalyzer`
+  overrides the jump with exactly them; a re-run records nothing, so a deleted override
+  stays deleted. Up to 0.6.0 this took the body for an overlay offset and
   deleted the correct refs too, clearing 37 routines of VICEROY's nucleus. Gated by a
   near-unforgeable fingerprint: the return-slot patch (`MOV [base-neg-disp],reg`)
   immediately before a register-indirect `JMP`, fed by a `MOV reg,imm16`.
 - **`RTLinkSwitchOverrideAnalyzer`** — INSTRUCTION, `FUNCTION_ANALYSIS.after()`, and again
-  in `analysisEnded`. Writes the decompiler jump-table overrides for the same tables, from
+  in `analysisEnded`. Writes the decompiler jump-table overrides for the same tables (and,
+  since 0.8.22, for the VM dispatch jump), from
   the table pass's own record: the targets it recovered, kept per dispatch (user property
   map `RTLink pending switch`). Never from the references, which stock
   `DecompilerSwitchAnalysisCmd` replaces in any function it visits where a jump table's

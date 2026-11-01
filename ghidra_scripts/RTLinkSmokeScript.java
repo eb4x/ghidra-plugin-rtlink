@@ -380,6 +380,35 @@ public class RTLinkSmokeScript extends GhidraScript {
 		}
 		check(getInstructionAt(seg(TEXT, 0x6b)) != null,
 			"the float routine's SUB SP,0x10 at 1000:006b is gone");
+		checkDispatcherJumpDecompiles(jmp, expected);
+	}
+
+	/**
+	 * The decompiler never reads the references, and on its own gets JMP DX wrong on every SDK
+	 * (stock switches it over the page; the fork gives up on it or fails outright). With the
+	 * override it builds exactly one jump table there, whose cases are the two bodies.
+	 */
+	private void checkDispatcherJumpDecompiles(Address jmp, Set<Address> expected) {
+		Function function = getFunctionContaining(jmp);
+		if (function == null) {
+			fail("no function contains the dispatcher's JMP DX, " + jmp);
+			return;
+		}
+		DecompileResults results = decompileResults(function.getEntryPoint());
+		HighFunction high = results == null ? null : results.getHighFunction();
+		if (high == null) {
+			return; // decompileResults has failed already
+		}
+		int tables = 0;
+		for (JumpTable table : high.getJumpTables()) {
+			if (table.getSwitchAddress().equals(jmp)) {
+				tables++;
+				Set<Address> cases = new HashSet<>(List.of(table.getCases()));
+				check(cases.equals(expected), "the decompiler switches JMP DX over " + cases +
+					", not the two VM entry bodies " + expected);
+			}
+		}
+		check(tables == 1, "the decompiler builds " + tables + " jump tables at JMP DX, not one");
 	}
 
 	/** Every mis-decode the sample provokes is repaired, so no ERROR bookmark is left. */
