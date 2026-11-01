@@ -221,4 +221,25 @@ final class FillerIslands {
 		}
 		return bytes.length > 0;
 	}
+
+	/** How many fill bytes {@code bytes} starts with. */
+	static int leadingFiller(byte[] bytes) {
+		int zeros = 0;
+		while (zeros < bytes.length && bytes[zeros] == FILLER_BYTE) {
+			zeros++;
+		}
+		return zeros;
+	}
+
+	/** True when {@code bytes} contains a fill run: {@value #FILLER_MIN_RUN} fill bytes in a row. */
+	static boolean containsFillerRun(byte[] bytes) {
+		int run = 0;
+		for (byte value : bytes) {
+			run = value == FILLER_BYTE ? run + 1 : 0;
+			if (run >= FILLER_MIN_RUN) {
+				return true;
+			}
+		}
+		return false;
+	}
 }

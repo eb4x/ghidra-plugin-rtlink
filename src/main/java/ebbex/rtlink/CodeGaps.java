@@ -14,8 +14,9 @@ import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.util.PseudoDisassembler;
 import ghidra.app.util.PseudoInstruction;
 import ghidra.program.model.address.Address;
-import ghidra.program.model.address.AddressIterator;
+import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressSet;
+import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.SegmentedAddress;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.listing.Function;
@@ -88,25 +89,11 @@ final class CodeGaps {
 			if (!block.isExecute() || !block.isInitialized()) {
 				continue;
 			}
-			AddressIterator undefined = listing.getUndefinedRanges(
-				new AddressSet(block.getStart(), block.getEnd()), true, monitor)
-					.getAddresses(true);
-			Address gapStart = null;
-			Address previous = null;
-			while (undefined.hasNext()) {
+			AddressSetView undefined = listing.getUndefinedRanges(
+				new AddressSet(block.getStart(), block.getEnd()), true, monitor);
+			for (AddressRange gap : undefined.getAddressRanges()) {
 				monitor.checkCancelled();
-				Address current = undefined.next();
-				if (gapStart == null) {
-					gapStart = current;
-				}
-				else if (previous != null && !current.equals(previous.next())) {
-					claimGap(program, block, gapStart, previous, claims);
-					gapStart = current;
-				}
-				previous = current;
-			}
-			if (gapStart != null && previous != null) {
-				claimGap(program, block, gapStart, previous, claims);
+				claimGap(program, block, gap.getMinAddress(), gap.getMaxAddress(), claims);
 			}
 		}
 
@@ -213,14 +200,14 @@ final class CodeGaps {
 		catch (MemoryAccessException _) {
 			return null;
 		}
-		int pad = leadingZeros(bytes);
+		int pad = FillerIslands.leadingFiller(bytes);
 		if (pad > 0 && pad < FILLER_MIN_RUN && pad < length && closedAbove(program, start)) {
 			// Zero padding or a zeroed variable between a routine's last jump and the next
 			// routine (RTLink's rtcommon, 275d:07cf): left alone, and what follows judged
 			// as a gap of its own.
 			return recoverableGap(program, start.add(pad), end);
 		}
-		if (isRepeatedByte(bytes) || containsFillerRun(bytes)) {
+		if (isRepeatedByte(bytes) || FillerIslands.containsFillerRun(bytes)) {
 			// Padding, not code — and a gap that merely *contains* a fill run is no
 			// better: once an island has been cleared, the undefined bytes around it
 			// may no longer be uniform, and without this a gap straddling the island's
@@ -504,14 +491,6 @@ final class CodeGaps {
 		return true;
 	}
 
-	private static int leadingZeros(byte[] bytes) {
-		int zeros = 0;
-		while (zeros < bytes.length && bytes[zeros] == FILLER_BYTE) {
-			zeros++;
-		}
-		return zeros;
-	}
-
 	private static boolean startsOnZero(PseudoInstruction instruction) {
 		try {
 			return instruction.getByte(0) == 0;
@@ -573,18 +552,6 @@ final class CodeGaps {
 	/** True when the instruction above the gap falls straight into it. */
 	private static boolean fallsInto(Program program, Address start) {
 		return CodeEvidence.fallingInto(program, start) != null;
-	}
-
-	/** True when {@code bytes} contains a fill run — {@value FillerIslands#FILLER_MIN_RUN} zeros. */
-	private static boolean containsFillerRun(byte[] bytes) {
-		int run = 0;
-		for (byte value : bytes) {
-			run = value == FILLER_BYTE ? run + 1 : 0;
-			if (run >= FILLER_MIN_RUN) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	private static boolean isRepeatedByte(byte[] bytes) {
