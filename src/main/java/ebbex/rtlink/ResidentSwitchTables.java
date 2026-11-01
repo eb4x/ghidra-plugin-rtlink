@@ -64,7 +64,7 @@ final class ResidentSwitchTables {
 				destinations.add(destination);
 			}
 		}
-		catch (MemoryAccessException e) {
+		catch (MemoryAccessException _) {
 			return null;
 		}
 		return new ArrayList<>(destinations);

@@ -147,7 +147,7 @@ final class RTLinkProgram {
 			try {
 				bases.add(Integer.parseInt(base.trim(), 16));
 			}
-			catch (NumberFormatException e) {
+			catch (NumberFormatException _) {
 				return null;
 			}
 		}

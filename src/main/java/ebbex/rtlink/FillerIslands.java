@@ -166,7 +166,7 @@ final class FillerIslands {
 				high = next;
 			}
 		}
-		catch (MemoryAccessException e) {
+		catch (MemoryAccessException _) {
 			return null;
 		}
 		if (high.subtract(low) + 1 < FILLER_MIN_RUN) {

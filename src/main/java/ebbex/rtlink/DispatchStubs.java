@@ -343,7 +343,7 @@ final class DispatchStubs {
 			// trustworthy enough to record as one of the page's module bases.
 			if (moduleBase != 0) {
 				stubModuleBases
-						.computeIfAbsent(target.block().getName(), k -> new TreeSet<>())
+						.computeIfAbsent(target.block().getName(), _ -> new TreeSet<>())
 						.add(moduleBase);
 				moduleResolved[0]++;
 			}
@@ -389,7 +389,7 @@ final class DispatchStubs {
 			int seg = Short.toUnsignedInt(memory.getShort(addr.add(3)));
 			return dispatchers.contains(space.getAddress(seg, off).getOffset());
 		}
-		catch (MemoryAccessException | AddressOutOfBoundsException e) {
+		catch (MemoryAccessException | AddressOutOfBoundsException _) {
 			return false;
 		}
 	}
@@ -512,7 +512,7 @@ final class DispatchStubs {
 		try {
 			stubBody = new AddressSet(stub.stubAddr(), stub.stubAddr().add(stub.stubSize() - 1));
 		}
-		catch (AddressOutOfBoundsException e) {
+		catch (AddressOutOfBoundsException _) {
 			// Stub body runs off the end of its block — nothing to clear.
 			return;
 		}

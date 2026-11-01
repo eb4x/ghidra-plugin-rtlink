@@ -33,7 +33,7 @@ import ghidra.util.task.TaskMonitor;
  * overlay pages earlier, in {@code FORMAT_ANALYSIS}, and their instructions arrive here like
  * any others.
  */
-public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
+public final class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 
 	/** Comment prefix of the one ERROR bookmark that survives a successful re-disassembly. */
 	private static final String REPEATED_BYTE_RUN = "Maximum run of repeated byte";
@@ -67,7 +67,7 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 		try {
 			return EmulatedFloatPatcher.isEmulated(program, TaskMonitor.DUMMY);
 		}
-		catch (CancelledException e) {
+		catch (CancelledException _) {
 			return false;
 		}
 	}
@@ -167,7 +167,7 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 				return coveredHere || causeGone;
 			}, TaskMonitor.DUMMY);
 		}
-		catch (CancelledException e) {
+		catch (CancelledException _) {
 			return; // DUMMY monitor never cancels
 		}
 		RTLinkProgram.report(this, stale,

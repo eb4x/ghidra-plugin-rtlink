@@ -74,7 +74,7 @@ final class X86 {
 		try {
 			return instruction.getBytes();
 		}
-		catch (MemoryAccessException e) {
+		catch (MemoryAccessException _) {
 			return new byte[0];
 		}
 	}

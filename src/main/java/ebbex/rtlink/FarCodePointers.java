@@ -141,7 +141,7 @@ final class FarCodePointers {
 	private static boolean claim(Program program, Instruction source, Address target,
 			TaskMonitor monitor) {
 		boolean changed = false;
-		if (!CodeEvidence.refersTo(source, target, type -> true)) {
+		if (!CodeEvidence.refersTo(source, target, _ -> true)) {
 			program.getReferenceManager().addMemoryReference(source.getMinAddress(), target,
 				RefType.DATA, SourceType.ANALYSIS, Reference.MNEMONIC);
 		}
@@ -396,7 +396,7 @@ final class FarCodePointers {
 		}
 
 		private boolean storesDsDxPair(Function callee) {
-			return pairStorers.computeIfAbsent(callee.getEntryPoint(), entry -> {
+			return pairStorers.computeIfAbsent(callee.getEntryPoint(), _ -> {
 				Map<Slot, Integer> stored = new HashMap<>(); // slot -> 0 for DX, 1 for DS
 				for (Instruction insn : program.getListing().getInstructions(callee.getBody(), true)) {
 					byte[] b = X86.bytes(insn);
@@ -424,7 +424,7 @@ final class FarCodePointers {
 		}
 
 		private boolean writesDs(Function callee) {
-			return dsWriters.computeIfAbsent(callee.getEntryPoint(), entry -> {
+			return dsWriters.computeIfAbsent(callee.getEntryPoint(), _ -> {
 				for (Instruction insn : program.getListing().getInstructions(callee.getBody(), true)) {
 					for (Object result : insn.getResultObjects()) {
 						if (result instanceof Register written && X86.overlaps(written, registers[DS])) {

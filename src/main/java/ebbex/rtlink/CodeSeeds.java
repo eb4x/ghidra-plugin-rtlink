@@ -104,7 +104,7 @@ final class CodeSeeds {
 					taken++;
 				}
 			}
-			catch (MemoryAccessException | AddressOutOfBoundsException e) {
+			catch (MemoryAccessException | AddressOutOfBoundsException _) {
 				// not a match
 			}
 			at = at.add(1);
@@ -137,7 +137,7 @@ final class CodeSeeds {
 		try {
 			return disassembler.disassemble(addr);
 		}
-		catch (Exception e) {
+		catch (Exception _) {
 			return null;
 		}
 	}
@@ -156,7 +156,7 @@ final class CodeSeeds {
 				symbolTable.createLabel(addr, label, SourceType.ANALYSIS);
 			}
 		}
-		catch (InvalidInputException e) {
+		catch (InvalidInputException _) {
 			// ignore
 		}
 	}

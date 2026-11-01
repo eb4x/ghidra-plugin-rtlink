@@ -11,7 +11,7 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
 
 /**
- * {@link RTLinkOverlayAnalyzer#movDestination} and {@link RTLinkOverlayAnalyzer#movSourceRegister}
+ * {@link X86#movDestination} and {@link X86#movSourceRegister}
  * read a MOV from its p-code, so the answer cannot depend on operand display order. Stock
  * Ghidra 12.1.3 and 12.1.4 display {@code MOV Sreg,r/m16} ({@code 8E}) with the operands
  * swapped (GP-7018), and reading operand 0 there made the DGROUP detection and the

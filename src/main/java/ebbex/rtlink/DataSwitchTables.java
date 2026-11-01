@@ -153,7 +153,7 @@ final class DataSwitchTables {
 				destinations.add(destination);
 			}
 		}
-		catch (MemoryAccessException | AddressOutOfBoundsException e) {
+		catch (MemoryAccessException | AddressOutOfBoundsException _) {
 			// Unreadable memory after the last entry ends the table like any non-entry does;
 			// the entries already read stand.
 		}

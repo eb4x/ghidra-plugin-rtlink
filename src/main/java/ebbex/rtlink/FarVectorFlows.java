@@ -140,7 +140,7 @@ final class FarVectorFlows {
 			}
 			return target;
 		}
-		catch (MemoryAccessException | AddressOutOfBoundsException e) {
+		catch (MemoryAccessException | AddressOutOfBoundsException _) {
 			return null;
 		}
 	}

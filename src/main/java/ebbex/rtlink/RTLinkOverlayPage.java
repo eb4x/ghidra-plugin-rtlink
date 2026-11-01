@@ -184,10 +184,7 @@ public class RTLinkOverlayPage {
 				if (!pages.isEmpty() && page.getFrameSize() != pages.get(0).getFrameSize()) {
 					break; // not this chain's record: appended data that happens to validate
 				}
-				int totalSize = page.getHeader().getTotalSizeBytes();
-				if (totalSize <= 0) {
-					break;
-				}
+				int totalSize = page.getHeader().getTotalSizeBytes(); // positive: isValid
 				// The final page's paragraph-rounded total size can extend a few bytes
 				// past the physical end of file, because the image is not padded to a
 				// full paragraph. Accept such a final page as long as its overhead
@@ -202,7 +199,7 @@ public class RTLinkOverlayPage {
 				cursor += totalSize;
 				pageIndex++;
 			}
-			catch (IOException e) {
+			catch (IOException _) {
 				break;
 			}
 		}

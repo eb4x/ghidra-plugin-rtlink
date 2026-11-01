@@ -259,7 +259,7 @@ final class DataSegmentAssumption {
 		try {
 			return instr.getAddress().add(instr.getLength());
 		}
-		catch (AddressOutOfBoundsException e) {
+		catch (AddressOutOfBoundsException _) {
 			return null;
 		}
 	}

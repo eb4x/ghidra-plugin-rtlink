@@ -66,7 +66,7 @@ import ghidra.util.task.TaskMonitor;
  * {@link DataSwitchTables}, {@link FormatterFsm}; the CS-relative idiom they share is
  * {@link CsDispatch}); this class only chooses between them and lays down what they find.
  */
-public class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
+public final class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 
 	private static final String NAME = "RTLink/Plus Switch Table";
 	private static final String DESCRIPTION =

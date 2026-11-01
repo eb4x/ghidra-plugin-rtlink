@@ -220,7 +220,7 @@ final class FormatterFsm {
 				return null;
 			}
 		}
-		catch (MemoryAccessException e) {
+		catch (MemoryAccessException _) {
 			return null;
 		}
 
@@ -264,7 +264,7 @@ final class FormatterFsm {
 				destinations.add(destination);
 			}
 		}
-		catch (MemoryAccessException e) {
+		catch (MemoryAccessException _) {
 			return null;
 		}
 		return new ArrayList<>(destinations);

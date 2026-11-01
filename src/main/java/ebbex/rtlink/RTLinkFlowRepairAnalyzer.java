@@ -34,7 +34,7 @@ import ghidra.util.task.TaskMonitor;
  * fossils of.</li>
  * </ol>
  */
-public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
+public final class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 
 	private static final String NAME = "RTLink Buried Code Repair";
 	private static final String DESCRIPTION =

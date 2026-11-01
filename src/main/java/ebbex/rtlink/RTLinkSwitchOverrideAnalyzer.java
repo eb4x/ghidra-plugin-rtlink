@@ -6,7 +6,6 @@ import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
 import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.importer.MessageLog;
-import ghidra.program.database.function.FunctionDB;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressIterator;
 import ghidra.program.model.address.AddressSetView;
@@ -40,12 +39,12 @@ import ghidra.util.task.TaskMonitor;
  * The override is written from the table pass's own record — the dispatches it marked and the
  * {@code COMPUTED_JUMP} references it laid down — never by re-deriving the table, which by now
  * would read a program with more functions and more code and could disagree with those
- * references. It needs a {@link FunctionDB} to hang its namespace off, which may not exist when
+ * references. It needs a defined function to hang its namespace off, which may not exist when
  * this pass first sees the dispatch, so {@link #analysisEnded} catches every marked dispatch whose
  * function appeared later. An override already present is left alone: it is either this pass's
  * own, written from the same references, or the user's.
  */
-public class RTLinkSwitchOverrideAnalyzer extends AbstractAnalyzer {
+public final class RTLinkSwitchOverrideAnalyzer extends AbstractAnalyzer {
 
 	private static final String NAME = "RTLink/Plus Switch Override";
 	private static final String DESCRIPTION =
@@ -86,7 +85,7 @@ public class RTLinkSwitchOverrideAnalyzer extends AbstractAnalyzer {
 		try {
 			report(writeOverrides(program, program.getMemory(), log, TaskMonitor.DUMMY));
 		}
-		catch (CancelledException e) {
+		catch (CancelledException _) {
 			return; // DUMMY monitor never cancels
 		}
 		// analysisEnded cannot surface the analysis warnings dialog.
@@ -107,7 +106,7 @@ public class RTLinkSwitchOverrideAnalyzer extends AbstractAnalyzer {
 			monitor.checkCancelled();
 			Address dispatch = dispatches.next();
 			Function function = program.getFunctionManager().getFunctionContaining(dispatch);
-			if (!(function instanceof FunctionDB) || hasOverride(function, dispatch)) {
+			if (function == null || hasOverride(function, dispatch)) {
 				continue;
 			}
 			ArrayList<Address> destinations = computedTargets(program, dispatch);

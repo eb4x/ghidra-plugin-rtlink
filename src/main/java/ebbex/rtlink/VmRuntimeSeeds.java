@@ -161,14 +161,14 @@ final class VmRuntimeSeeds {
 				// Additional label: the loader's `entry` stays primary.
 				symbolTable.createLabel(entry, "$$VM_INITW", SourceType.ANALYSIS);
 			}
-			catch (InvalidInputException e) {
+			catch (InvalidInputException _) {
 				// ignore
 			}
 			CodeSeeds.label(symbolTable, "__astart", startup);
 			functionSeeds.add(initBody);
 			functionSeeds.add(startup);
 		}
-		catch (MemoryAccessException | AddressOutOfBoundsException e) {
+		catch (MemoryAccessException | AddressOutOfBoundsException _) {
 			// not the stub; leave the entry alone
 		}
 	}
@@ -198,7 +198,7 @@ final class VmRuntimeSeeds {
 			}
 			MemoryBlock block = memory.getBlock(space.getAddress(seg, (int) off));
 			if (block != null && !block.isOverlay()) {
-				segsByBlock.computeIfAbsent(block, k -> new HashSet<>()).add(seg);
+				segsByBlock.computeIfAbsent(block, _ -> new HashSet<>()).add(seg);
 			}
 		}
 
@@ -235,7 +235,7 @@ final class VmRuntimeSeeds {
 				}
 				seeds.add(target);
 			}
-			catch (MemoryAccessException | AddressOutOfBoundsException ex) {
+			catch (MemoryAccessException | AddressOutOfBoundsException _) {
 				// skip
 			}
 		}

@@ -29,12 +29,13 @@ final class OverlayNames {
 	/**
 	 * The name width for a program, from the last record that gets an overlay block — the
 	 * same record {@link #maxRecordIndex} finds among the blocks, so header blocks, overlay
-	 * blocks and stub labels never disagree when a trailing record has no code.
+	 * blocks and stub labels never disagree when a trailing record has no code. Every parsed
+	 * page's code starts inside the file ({@link RTLinkOverlayPage#parseAllPages}).
 	 */
-	static int width(List<RTLinkOverlayPage> pages, long fileSize) {
+	static int width(List<RTLinkOverlayPage> pages) {
 		int max = 0;
 		for (RTLinkOverlayPage page : pages) {
-			if (page.getCodeSize() > 0 && page.getCodeFileOffset() < fileSize) {
+			if (page.getCodeSize() > 0) {
 				max = Math.max(max, page.getPageIndex());
 			}
 		}

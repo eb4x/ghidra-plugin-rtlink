@@ -69,7 +69,7 @@ import ghidra.util.task.TaskMonitor;
  * (the {@code 89 44 fc} = {@code MOV [SI-4],AX} spelling in all four), fed by a
  * {@code MOV <jumpreg>,imm16} on the straight-line path into it.
  */
-public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
+public final class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 
 	static final String NAME = "RTLink Dispatcher Jump";
 	private static final String DESCRIPTION =

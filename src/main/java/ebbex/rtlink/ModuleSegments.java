@@ -110,7 +110,7 @@ final class ModuleSegments {
 		try {
 			context.setValue(cseg, from, to, segment);
 		}
-		catch (ContextChangeException e) {
+		catch (ContextChangeException _) {
 			Msg.debug(RTLinkOverlayAnalyzer.class,
 				"RTLink: cseg left as is over " + from + "-" + to + ": code already decoded");
 		}

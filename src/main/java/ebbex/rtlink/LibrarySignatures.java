@@ -1,6 +1,7 @@
 package ebbex.rtlink;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -73,11 +74,11 @@ final class LibrarySignatures {
 	}
 
 	/**
-	 * The publics at one offset of a segment, the bytes up to the next, and their openings,
-	 * shortest first: where entries share a prologue ({@code $$VM_CALL} and {@code $$VM_JMP})
-	 * only a longer one tells them apart.
+	 * The publics at one offset of a segment and their openings (each bounded by the next
+	 * public), shortest first: where entries share a prologue ({@code $$VM_CALL} and
+	 * {@code $$VM_JMP}) only a longer one tells them apart.
 	 */
-	private record Body(int offset, int length, List<String> names, List<Pattern> openings) {
+	private record Body(int offset, List<String> names, List<Pattern> openings) {
 		Pattern opening() {
 			return openings.get(0);
 		}
@@ -129,7 +130,7 @@ final class LibrarySignatures {
 		Map<Address, List<String>> byAddress = new TreeMap<>();
 		for (Map.Entry<String, Placement> e : byName.entrySet()) {
 			List<String> names =
-				byAddress.computeIfAbsent(e.getValue().address(), a -> new ArrayList<>());
+				byAddress.computeIfAbsent(e.getValue().address(), _ -> new ArrayList<>());
 			if (!names.contains(e.getKey())) {
 				names.add(e.getKey());
 			}
@@ -358,7 +359,7 @@ final class LibrarySignatures {
 		TreeMap<Long, List<String>> atOffset = new TreeMap<>();
 		for (Public p : module.publics()) {
 			if (p.segment() == segment.index() && p.offset() < segment.data().length) {
-				atOffset.computeIfAbsent(p.offset(), o -> new ArrayList<>()).add(p.name());
+				atOffset.computeIfAbsent(p.offset(), _ -> new ArrayList<>()).add(p.name());
 			}
 		}
 		List<Body> bodies = new ArrayList<>();
@@ -375,7 +376,7 @@ final class LibrarySignatures {
 				}
 				openings.add(opening);
 			}
-			bodies.add(new Body(offset, end - offset, atOffset.get(offsets.get(i)), openings));
+			bodies.add(new Body(offset, atOffset.get(offsets.get(i)), openings));
 		}
 		return bodies;
 	}
@@ -407,17 +408,17 @@ final class LibrarySignatures {
 				break;
 			}
 		}
-		return new Pattern(java.util.Arrays.copyOf(body.data(), at),
-			java.util.Arrays.copyOf(body.masked(), at));
+		return new Pattern(Arrays.copyOf(body.data(), at),
+			Arrays.copyOf(body.masked(), at));
 	}
 
 	private static PseudoInstruction decode(PseudoDisassembler pseudo, Address scratch,
 			byte[] bytes, int at) {
 		try {
-			byte[] window = java.util.Arrays.copyOfRange(bytes, at, Math.min(bytes.length, at + 16));
+			byte[] window = Arrays.copyOfRange(bytes, at, Math.min(bytes.length, at + 16));
 			return pseudo.disassemble(scratch, window);
 		}
-		catch (Exception e) {
+		catch (Exception _) {
 			return null;
 		}
 	}
@@ -454,7 +455,7 @@ final class LibrarySignatures {
 		while (last > offset && segment.masked(last - 1)) {
 			last--;
 		}
-		byte[] data = java.util.Arrays.copyOfRange(segment.data(), offset, last);
+		byte[] data = Arrays.copyOfRange(segment.data(), offset, last);
 		boolean[] masked = new boolean[data.length];
 		for (int i = 0; i < data.length; i++) {
 			masked[i] = segment.masked(offset + i);
@@ -513,7 +514,7 @@ final class LibrarySignatures {
 			try {
 				block.getBytes(block.getStart(), bytes);
 			}
-			catch (MemoryAccessException e) {
+			catch (MemoryAccessException _) {
 				continue;
 			}
 			regions.add(new Region(block.getStart(), bytes));
@@ -557,7 +558,7 @@ final class LibrarySignatures {
 		try {
 			return program.getMemory().getShort(at) != 0 && pseudo.disassemble(at) != null;
 		}
-		catch (Exception e) {
+		catch (Exception _) {
 			return false;
 		}
 	}

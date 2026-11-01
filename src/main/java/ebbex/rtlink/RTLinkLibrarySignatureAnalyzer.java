@@ -29,7 +29,7 @@ import ghidra.util.task.TaskMonitor;
  * may itself be buried code that pass recovers (RTLUTILS' messages, read only from a routine
  * nothing calls).
  */
-public class RTLinkLibrarySignatureAnalyzer extends AbstractAnalyzer {
+public final class RTLinkLibrarySignatureAnalyzer extends AbstractAnalyzer {
 
 	static final String NAME = "RTLink Library Signatures";
 	private static final String DESCRIPTION =

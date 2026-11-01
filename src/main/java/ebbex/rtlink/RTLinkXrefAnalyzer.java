@@ -6,14 +6,32 @@ import java.util.Set;
 
 import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.cmd.function.CreateFunctionCmd;
-import ghidra.app.services.*;
+import ghidra.app.services.AbstractAnalyzer;
+import ghidra.app.services.AnalysisPriority;
+import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.importer.MessageLog;
-import ghidra.program.model.address.*;
-import ghidra.program.model.lang.*;
-import ghidra.program.model.listing.*;
-import ghidra.program.model.mem.*;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressIterator;
+import ghidra.program.model.address.AddressSet;
+import ghidra.program.model.address.AddressSetView;
+import ghidra.program.model.address.SegmentedAddress;
+import ghidra.program.model.address.SegmentedAddressSpace;
+import ghidra.program.model.lang.OperandType;
+import ghidra.program.model.lang.Register;
+import ghidra.program.model.lang.RegisterValue;
+import ghidra.program.model.listing.FunctionManager;
+import ghidra.program.model.listing.Instruction;
+import ghidra.program.model.listing.InstructionIterator;
+import ghidra.program.model.listing.Listing;
+import ghidra.program.model.listing.Program;
+import ghidra.program.model.listing.ProgramContext;
+import ghidra.program.model.mem.Memory;
+import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.scalar.Scalar;
-import ghidra.program.model.symbol.*;
+import ghidra.program.model.symbol.RefType;
+import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.ReferenceManager;
+import ghidra.program.model.symbol.SourceType;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
@@ -85,7 +103,7 @@ import ghidra.util.task.TaskMonitor;
  * displacement ({@code [BX+SI]}), and targets in executable blocks (the
  * initialized low-DGROUP region; stock constant propagation covers those).
  */
-public class RTLinkXrefAnalyzer extends AbstractAnalyzer {
+public final class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 
 	private static final String NAME = "RTLink/Plus Xref";
 	private static final String DESCRIPTION =

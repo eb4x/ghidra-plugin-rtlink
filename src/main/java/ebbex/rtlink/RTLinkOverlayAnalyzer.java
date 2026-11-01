@@ -4,20 +4,29 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import ghidra.app.services.*;
+import ghidra.app.services.AbstractAnalyzer;
+import ghidra.app.services.AnalysisPriority;
+import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.MemoryBlockUtils;
 import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.FileBytesProvider;
-import ghidra.app.util.bin.format.mz.*;
+import ghidra.app.util.bin.format.mz.OldDOSHeader;
 import ghidra.app.util.importer.MessageLog;
-import ghidra.framework.model.TransactionInfo;
 import ghidra.app.util.opinion.MzLoader;
+import ghidra.framework.model.TransactionInfo;
 import ghidra.framework.options.Options;
 import ghidra.program.database.mem.FileBytes;
-import ghidra.program.model.address.*;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
+import ghidra.program.model.address.AddressSetView;
+import ghidra.program.model.address.AddressSpace;
+import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.data.DataUtilities;
-import ghidra.program.model.listing.*;
-import ghidra.program.model.mem.*;
+import ghidra.program.model.listing.BookmarkManager;
+import ghidra.program.model.listing.BookmarkType;
+import ghidra.program.model.listing.Program;
+import ghidra.program.model.mem.Memory;
+import ghidra.program.model.mem.MemoryBlock;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
@@ -56,7 +65,7 @@ import ghidra.util.task.TaskMonitor;
  * target; see {@link DispatchStubs} for why leaving them as plain
  * functions damages decompilation at every call site.
  */
-public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
+public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 	private static final String NAME = "RTLink/Plus Overlay";
 	private static final String DESCRIPTION =
@@ -297,7 +306,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			RTLinkPageHeader second = new RTLinkPageHeader(reader);
 			return second.isValid() && second.getFrameSize() == first.getFrameSize();
 		}
-		catch (IOException e) {
+		catch (IOException _) {
 			return false;
 		}
 	}
@@ -315,7 +324,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		SegmentedAddressSpace space = X86.space(program);
 		Address overlayBase = space.getAddress(overlayBaseSegment(program), 0);
 		long fileSize = fileBytes.getSize();
-		int width = OverlayNames.width(pages, fileBytes.getSize());
+		int width = OverlayNames.width(pages);
 
 		for (RTLinkOverlayPage page : pages) {
 			monitor.checkCancelled();
@@ -330,17 +339,10 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			// The final page's header-declared (paragraph-rounded) code size can run a
 			// few bytes past the physical end of file, because the image is not padded
 			// to a full paragraph. Clamp to the bytes actually present so block creation
-			// does not read past FileBytes.
+			// does not read past FileBytes; parseAllPages has already refused a page
+			// whose code starts at or past the end.
 			long codeFileOffset = page.getCodeFileOffset();
-			long available = fileSize - codeFileOffset;
-			if (available <= 0) {
-				log.appendMsg("RTLink: Overlay page " + page.getPageIndex() +
-					" code starts past end of file, skipping");
-				continue;
-			}
-			if (codeSize > available) {
-				codeSize = (int) available;
-			}
+			codeSize = (int) Math.min(codeSize, fileSize - codeFileOffset);
 
 			String blockName = String.format("OVERLAY_%0" + width + "d", page.getPageIndex());
 
@@ -435,7 +437,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			program.withTransaction("RTLink: repair husk functions",
 				() -> HuskRepair.repair(program, new MessageLog(), TaskMonitor.DUMMY));
 		}
-		catch (CancelledException e) {
+		catch (CancelledException _) {
 			// DUMMY monitor never cancels
 		}
 
@@ -463,7 +465,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 					bookmarkMgr.removeBookmarks(stubs, BookmarkType.WARNING, TaskMonitor.DUMMY);
 				});
 		}
-		catch (CancelledException e) {
+		catch (CancelledException _) {
 			return; // DUMMY monitor never cancels
 		}
 		Msg.info(this, "RTLink/Plus: Cleared " + stale +
@@ -502,7 +504,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			// Rebuild the OverlayBlockInfo list from the existing blocks, mirroring
 			// createOverlayBlocks()'s skip logic so stub page indexing lines up.
 			Memory memory = program.getMemory();
-			int width = OverlayNames.width(allPages, fileBytes.getSize());
+			int width = OverlayNames.width(allPages);
 			List<OverlayBlockInfo> overlayBlocks = new ArrayList<>();
 			for (RTLinkOverlayPage page : allPages) {
 				if (page.getCodeSize() <= 0) {
@@ -545,7 +547,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	private void markupOverlayHeaders(Program program, FileBytes fileBytes,
 			List<RTLinkOverlayPage> allPages, MessageLog log, TaskMonitor monitor)
 			throws Exception {
-		int width = OverlayNames.width(allPages, fileBytes.getSize());
+		int width = OverlayNames.width(allPages);
 		for (RTLinkOverlayPage page : allPages) {
 			monitor.checkCancelled();
 
@@ -574,7 +576,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 				markupRelocations(program, addr.add(header.getThirdRelocOffset()),
 					page.getThirdRelocations(), monitor);
 			}
-			catch (Exception e) {
+			catch (Exception _) {
 				log.appendMsg(
 					"RTLink: Failed to markup header for page " + page.getPageIndex());
 			}

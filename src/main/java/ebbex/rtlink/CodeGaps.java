@@ -212,7 +212,7 @@ final class CodeGaps {
 				return null;
 			}
 		}
-		catch (MemoryAccessException e) {
+		catch (MemoryAccessException _) {
 			return null;
 		}
 		int pad = leadingZeros(bytes);
@@ -474,7 +474,7 @@ final class CodeGaps {
 				before = before.previous();
 			}
 		}
-		catch (MemoryAccessException e) {
+		catch (MemoryAccessException _) {
 			return false;
 		}
 		return false;
@@ -519,7 +519,7 @@ final class CodeGaps {
 		try {
 			return instruction.getByte(0) == 0;
 		}
-		catch (MemoryAccessException e) {
+		catch (MemoryAccessException _) {
 			return true;
 		}
 	}
@@ -534,7 +534,7 @@ final class CodeGaps {
 		try {
 			return instruction.getByte(0) == NOP;
 		}
-		catch (MemoryAccessException e) {
+		catch (MemoryAccessException _) {
 			return false;
 		}
 	}
@@ -617,7 +617,7 @@ final class CodeGaps {
 				new CreateFunctionCmd(start).applyTo(program, monitor);
 			}
 		}
-		catch (MemoryAccessException e) {
+		catch (MemoryAccessException _) {
 			// leave it as code without a function
 		}
 	}

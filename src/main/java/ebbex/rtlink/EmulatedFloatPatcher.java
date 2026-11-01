@@ -44,7 +44,7 @@ import ghidra.util.task.TaskMonitor;
  * {@code INT 35h} is {@code C9/E0} ({@code FXCH}/{@code FCHS}) — textbook x87 in every
  * case, and meaningless under any other reading.
  */
-class EmulatedFloatPatcher {
+final class EmulatedFloatPatcher {
 
 	private static final byte OPCODE_INT = (byte) 0xCD;
 	private static final byte OPCODE_WAIT = (byte) 0x9B;
@@ -266,7 +266,7 @@ class EmulatedFloatPatcher {
 			touched.add(redo.getDisassembledAddressSet());
 			return touched;
 		}
-		catch (MemoryAccessException | AddressOutOfBoundsException e) {
+		catch (MemoryAccessException | AddressOutOfBoundsException _) {
 			return null;
 		}
 	}

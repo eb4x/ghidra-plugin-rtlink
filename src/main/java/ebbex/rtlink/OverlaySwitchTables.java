@@ -118,7 +118,7 @@ final class OverlaySwitchTables {
 				destinations.add(destination);
 			}
 		}
-		catch (MemoryAccessException e) {
+		catch (MemoryAccessException _) {
 			return null;
 		}
 		return new ArrayList<>(destinations);

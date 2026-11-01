@@ -180,7 +180,7 @@ final class RelocationFallthroughs {
 				byte pad = program.getMemory().getByte(after);
 				targets.add(pad == 0 ? after.add(1) : after);
 			}
-			catch (MemoryAccessException e) {
+			catch (MemoryAccessException _) {
 				return;
 			}
 		}
