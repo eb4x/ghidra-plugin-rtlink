@@ -286,11 +286,11 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		}
 		try {
 			reader.setPointerIndex(overlayStart);
-			RTLinkPageHeader first = new RTLinkPageHeader(reader);
+			RTLinkPageHeader first = RTLinkPageHeader.read(reader);
 			if (!first.isValid()) {
 				return false;
 			}
-			if (first.getTotalSizeBytes() > fileLength - overlayStart) {
+			if (first.totalSizeBytes() > fileLength - overlayStart) {
 				return false;
 			}
 
@@ -298,13 +298,13 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			// constant along the chain in every binary checked (VICEROY 0x2bc, NEBULAR 0x1fe,
 			// SPHERE 0x262, RETURN 0x25a, VMEX1-3 0x262), and two such headers are far harder
 			// for unrelated appended data to fake than one.
-			long secondOffset = overlayStart + first.getTotalSizeBytes();
+			long secondOffset = overlayStart + first.totalSizeBytes();
 			if (secondOffset + RTLinkPageHeader.HEADER_SIZE > fileLength) {
 				return false;
 			}
 			reader.setPointerIndex(secondOffset);
-			RTLinkPageHeader second = new RTLinkPageHeader(reader);
-			return second.isValid() && second.getFrameSize() == first.getFrameSize();
+			RTLinkPageHeader second = RTLinkPageHeader.read(reader);
+			return second.isValid() && second.frameSize() == first.frameSize();
 		}
 		catch (IOException _) {
 			return false;
@@ -329,10 +329,10 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		for (RTLinkOverlayPage page : pages) {
 			monitor.checkCancelled();
 
-			int codeSize = page.getCodeSize();
+			int codeSize = page.codeSize();
 			if (codeSize <= 0) {
 				log.appendMsg(
-					"RTLink: Overlay page " + page.getPageIndex() + " has no code, skipping");
+					"RTLink: Overlay page " + page.pageIndex() + " has no code, skipping");
 				continue;
 			}
 
@@ -341,10 +341,10 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			// to a full paragraph. Clamp to the bytes actually present so block creation
 			// does not read past FileBytes; parseAllPages has already refused a page
 			// whose code starts at or past the end.
-			long codeFileOffset = page.getCodeFileOffset();
+			long codeFileOffset = page.codeFileOffset();
 			codeSize = (int) Math.min(codeSize, fileSize - codeFileOffset);
 
-			String blockName = String.format("OVERLAY_%0" + width + "d", page.getPageIndex());
+			String blockName = String.format("OVERLAY_%0" + width + "d", page.pageIndex());
 
 			// Note the module bases known from the relocation table in the block
 			// comment; CS-relative absolute offsets in module code (e.g. switch jump
@@ -353,15 +353,15 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			// name (see ModuleSegments.mergeStubBases).
 			MemoryBlock block = MemoryBlockUtils.createInitializedBlock(program, true,
 				blockName, overlayBase, fileBytes, codeFileOffset, codeSize,
-				ModuleSegments.blockComment(page, page.getModuleBases()), "RTLink", true, false, true, log);
+				ModuleSegments.blockComment(page, page.moduleBases()), "RTLink", true, false, true, log);
 
 			if (block != null) {
 				result.add(new OverlayBlockInfo(page, block));
-				RTLinkProgram.recordModuleBases(program, blockName, page.getModuleBases());
+				RTLinkProgram.recordModuleBases(program, blockName, page.moduleBases());
 			}
 			else {
 				log.appendMsg(
-					"RTLink: Failed to create block for page " + page.getPageIndex());
+					"RTLink: Failed to create block for page " + page.pageIndex());
 			}
 		}
 
@@ -507,11 +507,11 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			int width = OverlayNames.width(allPages);
 			List<OverlayBlockInfo> overlayBlocks = new ArrayList<>();
 			for (RTLinkOverlayPage page : allPages) {
-				if (page.getCodeSize() <= 0) {
+				if (page.codeSize() <= 0) {
 					continue;
 				}
 				MemoryBlock block =
-					OverlayNames.findOverlayBlock(memory, page.getPageIndex(), width);
+					OverlayNames.findOverlayBlock(memory, page.pageIndex(), width);
 				if (block == null) {
 					// Unexpected layout (blocks renamed/removed); leave the program alone.
 					return;
@@ -551,13 +551,13 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		for (RTLinkOverlayPage page : allPages) {
 			monitor.checkCancelled();
 
-			int headerAndRelocSize = page.getHeader().getOverheadSizeBytes();
+			int headerAndRelocSize = page.header().overheadSizeBytes();
 			Address headerBase = AddressSpace.OTHER_SPACE.getAddress(0);
-			String name = String.format("RTLINK_HDR_%0" + width + "d", page.getPageIndex());
+			String name = String.format("RTLINK_HDR_%0" + width + "d", page.pageIndex());
 
 			MemoryBlock headerBlock = MemoryBlockUtils.createInitializedBlock(program, true,
-				name, headerBase, fileBytes, page.getFileOffset(), headerAndRelocSize,
-				"RTLink page " + page.getPageIndex() + " header", "RTLink",
+				name, headerBase, fileBytes, page.fileOffset(), headerAndRelocSize,
+				"RTLink page " + page.pageIndex() + " header", "RTLink",
 				false, false, false, log);
 
 			if (headerBlock == null) {
@@ -566,19 +566,19 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 			try {
 				Address addr = headerBlock.getStart();
-				RTLinkPageHeader header = page.getHeader();
+				RTLinkPageHeader header = page.header();
 				DataUtilities.createData(program, addr, header.toDataType(), -1,
 					DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
-				markupRelocations(program, addr.add(header.getRelocOffset()),
-					page.getRelocations(), monitor);
-				markupRelocations(program, addr.add(header.getSecondRelocOffset()),
-					page.getSecondRelocations(), monitor);
-				markupRelocations(program, addr.add(header.getThirdRelocOffset()),
-					page.getThirdRelocations(), monitor);
+				markupRelocations(program, addr.add(header.relocOffset()),
+					page.relocations(), monitor);
+				markupRelocations(program, addr.add(header.secondRelocOffset()),
+					page.secondRelocations(), monitor);
+				markupRelocations(program, addr.add(header.thirdRelocOffset()),
+					page.thirdRelocations(), monitor);
 			}
 			catch (Exception _) {
 				log.appendMsg(
-					"RTLink: Failed to markup header for page " + page.getPageIndex());
+					"RTLink: Failed to markup header for page " + page.pageIndex());
 			}
 		}
 	}

@@ -55,13 +55,13 @@ public class RTLinkExtractTest {
 			RTLinkOverlayPage want = expected.get(i);
 			Page got = image.pages().get(i);
 			String which = "record " + i;
-			assertEquals(which, want.getFileOffset(), got.headerOffset());
-			assertEquals(which, want.getCodeFileOffset(), got.codeOffset());
-			assertEquals(which, want.getCodeSize(), got.codeSize());
-			assertEquals(which, want.getFrameSize(), got.frameSize());
-			assertEquals(which, sites(want.getRelocations()), sites(got.list(1)));
-			assertEquals(which, sites(want.getSecondRelocations()), sites(got.list(2)));
-			assertEquals(which, sites(want.getThirdRelocations()), sites(got.list(3)));
+			assertEquals(which, want.fileOffset(), got.headerOffset());
+			assertEquals(which, want.codeFileOffset(), got.codeOffset());
+			assertEquals(which, want.codeSize(), got.codeSize());
+			assertEquals(which, want.frameSize(), got.frameSize());
+			assertEquals(which, sites(want.relocations()), sites(got.list(1)));
+			assertEquals(which, sites(want.secondRelocations()), sites(got.list(2)));
+			assertEquals(which, sites(want.thirdRelocations()), sites(got.list(3)));
 		}
 	}
 
@@ -117,7 +117,7 @@ public class RTLinkExtractTest {
 	private static List<Integer> sites(List<?> entries) {
 		return entries.stream()
 				.map(e -> switch (e) {
-					case RTLinkRelocation r -> r.getSiteOffset();
+					case RTLinkRelocation r -> r.siteOffset();
 					case Entry x -> x.site();
 					default -> throw new IllegalArgumentException(e.toString());
 				})

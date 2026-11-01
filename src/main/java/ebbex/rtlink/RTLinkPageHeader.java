@@ -4,11 +4,12 @@ import java.io.IOException;
 
 import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.StructConverter;
-import ghidra.program.model.data.*;
-import ghidra.util.exception.DuplicateNameException;
+import ghidra.program.model.data.CategoryPath;
+import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.StructureDataType;
 
 /**
- * Parses a 16-byte RTLink/Plus overlay page header.
+ * A 16-byte RTLink/Plus overlay page header.
  *
  * <pre>
  * struct rtlink_page_header {
@@ -48,14 +49,14 @@ import ghidra.util.exception.DuplicateNameException;
  * the later lists through {@code reloc_count_2} and {@code reloc_count_3}. Relocation
  * lists are addressed by <i>entry index</i>, not byte offset: the runtime rounds the index
  * up to a multiple of 4 between the first and second list, which is why the second list
- * lands on a paragraph boundary (4 entries × 4 bytes = 16). See {@link #getRelocOffset()}
+ * lands on a paragraph boundary (4 entries × 4 bytes = 16). See {@link #relocOffset()}
  * and friends.
  * <p>
  * <b>The first two lists are applied, with different addends; the third never is.</b> The
  * runtime applies the first list at initial load, adding the image-base delta. The second
  * is driven from the page-move path and keeps <i>word = file word + current frame</i>, so
  * it is applied statically with the overlay block's base segment as the frame (see
- * {@link RTLinkOverlayPage#getSecondRelocations()}). {@code reloc_count_3} is zero on all
+ * {@link RTLinkOverlayPage#secondRelocations()}). {@code reloc_count_3} is zero on all
  * 281 pages across VICEROY, NEBULAR and
  * ROE2MAIN — and it has since been established <b>by construction</b> (RTLink/Plus 6.10 +
  * a purpose-built probe; see {@code ~/dosbox/RTLTEST/HANDOFF.md}) that the 6.10 linker
@@ -64,71 +65,37 @@ import ghidra.util.exception.DuplicateNameException;
  * writes nothing, leaving the site permanently unpatched. The runtime's list-3 support is
  * vestigial for 6.10-linked programs, so parsing without applying is the complete
  * treatment, not a stopgap.
+ *
+ * @param relocStartIndex  the entry index the first relocation list starts at; 0 in every
+ *                         page seen
+ * @param secondRelocCount entries in the second relocation list; 0 when the page has none
+ * @param thirdRelocCount  entries in the third relocation list; 0 in every page seen
+ * @param codeviewWord     the last word of the header. Zero unless the program was linked
+ *                         with the {@code CODEVIEW} directive, in which case the linker
+ *                         stamps the same nonzero value into every page (0x091C throughout
+ *                         Pocket Soft's VMEX2.EXE). Its meaning is unknown; what matters is
+ *                         that it is <b>not</b> reserved, so {@link #isValid()} must not
+ *                         require it to be zero — doing so rejected VMEX2.EXE outright.
  */
-public class RTLinkPageHeader implements StructConverter {
+public record RTLinkPageHeader(int totalParagraphs, int overheadParagraphs, int frameSize,
+		int relocStartIndex, int relocCount, int secondRelocCount, int thirdRelocCount,
+		int codeviewWord) implements StructConverter {
 
 	public static final String NAME = "RTLink_Page_Header";
 	public static final int HEADER_SIZE = 16;
 
-	private int totalParagraphs;
-	private int overheadParagraphs;
-	private int frameSize;
-	private int relocStartIndex;
-	private int relocCount;
-	private int secondRelocCount;
-	private int thirdRelocCount;
-	private int codeviewWord;
-
-	/**
-	 * Constructs a new RTLink/Plus page header
-	 *
-	 * @param reader A {@link BinaryReader} positioned at the start of the header
-	 * @throws IOException if there was an IO-related error
-	 */
-	public RTLinkPageHeader(BinaryReader reader) throws IOException {
-		totalParagraphs = Short.toUnsignedInt(reader.readNextShort());
-		overheadParagraphs = Short.toUnsignedInt(reader.readNextShort());
-		frameSize = Short.toUnsignedInt(reader.readNextShort());
-		relocStartIndex = Short.toUnsignedInt(reader.readNextShort());
-		relocCount = Short.toUnsignedInt(reader.readNextShort());
-		secondRelocCount = Short.toUnsignedInt(reader.readNextShort());
-		thirdRelocCount = Short.toUnsignedInt(reader.readNextShort());
-		codeviewWord = Short.toUnsignedInt(reader.readNextShort());
-	}
-
-	public int getTotalParagraphs() {
-		return totalParagraphs;
-	}
-
-	public int getOverheadParagraphs() {
-		return overheadParagraphs;
-	}
-
-	public int getFrameSize() {
-		return frameSize;
-	}
-
-	/** Entry index at which the first relocation list starts; 0 in every page seen. */
-	public int getRelocStartIndex() {
-		return relocStartIndex;
-	}
-
-	public int getRelocCount() {
-		return relocCount;
-	}
-
-	/** Entries in the second relocation list; 0 when the page has none. */
-	public int getSecondRelocCount() {
-		return secondRelocCount;
-	}
-
-	/** Entries in the third relocation list; 0 in every page seen. */
-	public int getThirdRelocCount() {
-		return thirdRelocCount;
+	/** The header at the reader's position. */
+	public static RTLinkPageHeader read(BinaryReader reader) throws IOException {
+		int[] words = new int[8];
+		for (int i = 0; i < words.length; i++) {
+			words[i] = Short.toUnsignedInt(reader.readNextShort());
+		}
+		return new RTLinkPageHeader(words[0], words[1], words[2], words[3], words[4], words[5],
+			words[6], words[7]);
 	}
 
 	/** Byte offset, from the start of the header, of the first relocation list. */
-	public int getRelocOffset() {
+	public int relocOffset() {
 		return HEADER_SIZE + relocStartIndex * 4;
 	}
 
@@ -137,7 +104,7 @@ public class RTLinkPageHeader implements StructConverter {
 	 * runtime rounds the <i>entry index</i> past the first list up to a multiple of 4,
 	 * which puts the second list on a paragraph boundary.
 	 */
-	public int getSecondRelocOffset() {
+	public int secondRelocOffset() {
 		return HEADER_SIZE + roundUpToEntryGroup(relocStartIndex + relocCount) * 4;
 	}
 
@@ -146,42 +113,27 @@ public class RTLinkPageHeader implements StructConverter {
 	 * second, it follows the previous list immediately — the runtime advances the entry
 	 * index by the second list's count without rounding.
 	 */
-	public int getThirdRelocOffset() {
-		return getSecondRelocOffset() + secondRelocCount * 4;
+	public int thirdRelocOffset() {
+		return secondRelocOffset() + secondRelocCount * 4;
 	}
 
 	private static int roundUpToEntryGroup(int entryIndex) {
 		return (entryIndex + 3) & ~3;
 	}
 
-	/**
-	 * The last word of the header. Zero unless the program was linked with the
-	 * {@code CODEVIEW} directive, in which case the linker stamps the same nonzero value
-	 * into every page (0x091C throughout Pocket Soft's VMEX2.EXE). Its meaning is unknown;
-	 * what matters here is that it is <b>not</b> reserved, so {@link #isValid()} must not
-	 * require it to be zero — doing so rejected VMEX2.EXE outright.
-	 */
-	public int getCodeviewWord() {
-		return codeviewWord;
-	}
-
-	public int getTotalSizeBytes() {
+	public int totalSizeBytes() {
 		return totalParagraphs * 16;
 	}
 
-	public int getOverheadSizeBytes() {
+	public int overheadSizeBytes() {
 		return overheadParagraphs * 16;
 	}
 
-	public int getCodeSizeBytes() {
-		return getTotalSizeBytes() - getOverheadSizeBytes();
+	public int codeSizeBytes() {
+		return totalSizeBytes() - overheadSizeBytes();
 	}
 
-	/**
-	 * Checks whether this looks like a valid RTLink/Plus page header
-	 *
-	 * @return true if the header fields are structurally consistent
-	 */
+	/** True if the header fields are structurally consistent. */
 	public boolean isValid() {
 		if (totalParagraphs <= 0) {
 			return false;
@@ -200,12 +152,12 @@ public class RTLinkPageHeader implements StructConverter {
 		// All three relocation lists live in the overhead area, ahead of the code. The
 		// lists run in order, so the end of the last one bounds them all.
 		long overheadBytes = (long) overheadParagraphs * 16;
-		long lastListEnd = (long) getThirdRelocOffset() + (long) thirdRelocCount * 4;
+		long lastListEnd = (long) thirdRelocOffset() + (long) thirdRelocCount * 4;
 		return lastListEnd <= overheadBytes;
 	}
 
 	@Override
-	public DataType toDataType() throws DuplicateNameException {
+	public DataType toDataType() {
 		StructureDataType struct = new StructureDataType(NAME, 0);
 		struct.add(WORD, "total_paragraphs", "Total record size in 16-byte paragraphs");
 		struct.add(WORD, "overhead_paragraphs", "Header+relocs+padding paragraphs");

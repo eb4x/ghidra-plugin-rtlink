@@ -47,25 +47,25 @@ public class RTLinkSampleTest {
 		assertEquals(3, pages.size());
 
 		RTLinkOverlayPage record0 = pages.get(0);
-		assertEquals(RTLinkSampleGenerator.FRAME_SIZE, record0.getFrameSize());
+		assertEquals(RTLinkSampleGenerator.FRAME_SIZE, record0.frameSize());
 		assertEquals("a far call into the resident image and one through a trampoline",
-			List.of(0x0a, 0x12), siteOffsets(record0.getRelocations()));
-		assertTrue(record0.getSecondRelocations().isEmpty());
+			List.of(0x0a, 0x12), siteOffsets(record0.relocations()));
+		assertTrue(record0.secondRelocations().isEmpty());
 
 		RTLinkOverlayPage record1 = pages.get(1);
-		assertTrue(record1.getRelocations().isEmpty());
+		assertTrue(record1.relocations().isEmpty());
 		assertEquals("the intra-page far call from module 0 to module 1",
-			List.of(0x0a), siteOffsets(record1.getSecondRelocations()));
+			List.of(0x0a), siteOffsets(record1.secondRelocations()));
 		assertEquals("module 1 appears in no relocation: only its 14-byte stub names it",
-			List.of(0), List.copyOf(record1.getModuleBases()));
+			List.of(0), List.copyOf(record1.moduleBases()));
 
 		RTLinkOverlayPage record2 = pages.get(2);
-		assertEquals(List.of(0x06), siteOffsets(record2.getRelocations()));
+		assertEquals(List.of(0x06), siteOffsets(record2.relocations()));
 		assertEquals("the chain runs exactly to the end of the file", sample.length,
-			record2.getFileOffset() + record2.getHeader().getTotalSizeBytes());
+			record2.fileOffset() + record2.header().totalSizeBytes());
 	}
 
 	private static List<Integer> siteOffsets(List<RTLinkRelocation> relocations) {
-		return relocations.stream().map(RTLinkRelocation::getSiteOffset).toList();
+		return relocations.stream().map(RTLinkRelocation::siteOffset).toList();
 	}
 }

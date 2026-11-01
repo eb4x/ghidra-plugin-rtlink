@@ -89,20 +89,20 @@ public class RTLinkOverlayPageTest {
 		List<RTLinkOverlayPage> pages = parse(file, 0x20, file.length);
 
 		assertEquals(3, pages.size());
-		assertEquals(List.of(0, 1, 2), pages.stream().map(RTLinkOverlayPage::getPageIndex).toList());
+		assertEquals(List.of(0, 1, 2), pages.stream().map(RTLinkOverlayPage::pageIndex).toList());
 		assertEquals(List.of(0x20L, 0x60L, 0x90L),
-			pages.stream().map(RTLinkOverlayPage::getFileOffset).toList());
+			pages.stream().map(RTLinkOverlayPage::fileOffset).toList());
 		assertEquals(List.of(0x40L, 0x70L, 0xb0L),
-			pages.stream().map(RTLinkOverlayPage::getCodeFileOffset).toList());
+			pages.stream().map(RTLinkOverlayPage::codeFileOffset).toList());
 		assertEquals(List.of(0x20, 0x20, 0x30),
-			pages.stream().map(RTLinkOverlayPage::getCodeSize).toList());
+			pages.stream().map(RTLinkOverlayPage::codeSize).toList());
 
 		RTLinkOverlayPage page = pages.get(0);
-		assertEquals(2, page.getRelocations().size());
-		assertEquals(0x10, page.getRelocations().get(0).getOffset());
-		assertEquals(1, page.getRelocations().get(0).getSegmentIndex());
-		assertEquals(Set.of(0, 1), page.getModuleBases());
-		assertEquals(Set.of(0), pages.get(1).getModuleBases());
+		assertEquals(2, page.relocations().size());
+		assertEquals(0x10, page.relocations().get(0).offset());
+		assertEquals(1, page.relocations().get(0).segmentIndex());
+		assertEquals(Set.of(0, 1), page.moduleBases());
+		assertEquals(Set.of(0), pages.get(1).moduleBases());
 	}
 
 	/** List 2 starts at the entry index after list 1 rounded up to 4: a paragraph boundary. */
@@ -115,14 +115,14 @@ public class RTLinkOverlayPageTest {
 
 		RTLinkOverlayPage page = parse(file, 0, file.length).get(0);
 
-		assertEquals(32, page.getHeader().getSecondRelocOffset());
-		assertEquals(1, page.getRelocations().size());
-		assertEquals(2, page.getSecondRelocations().size());
-		assertEquals(0x8, page.getSecondRelocations().get(0).getOffset());
-		assertEquals(3, page.getSecondRelocations().get(1).getSegmentIndex());
-		assertTrue(page.getThirdRelocations().isEmpty());
+		assertEquals(32, page.header().secondRelocOffset());
+		assertEquals(1, page.relocations().size());
+		assertEquals(2, page.secondRelocations().size());
+		assertEquals(0x8, page.secondRelocations().get(0).offset());
+		assertEquals(3, page.secondRelocations().get(1).segmentIndex());
+		assertTrue(page.thirdRelocations().isEmpty());
 		assertEquals("list 2 is not a module-base witness (yet)", Set.of(0),
-			page.getModuleBases());
+			page.moduleBases());
 	}
 
 	/** The last record's paragraph-rounded size may run a few bytes past the end of the file. */
@@ -135,7 +135,7 @@ public class RTLinkOverlayPageTest {
 
 		assertEquals(2, pages.size());
 		assertEquals("the declared size is kept; the block clamps it", 0x30,
-			pages.get(1).getCodeSize());
+			pages.get(1).codeSize());
 	}
 
 	/** A last record whose header and lists do not even fit in the file is not a page. */

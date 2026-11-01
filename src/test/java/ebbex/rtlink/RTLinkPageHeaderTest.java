@@ -30,7 +30,7 @@ public class RTLinkPageHeaderTest {
 			bytes[i * 2] = (byte) (words[i] & 0xFF);
 			bytes[i * 2 + 1] = (byte) ((words[i] >> 8) & 0xFF);
 		}
-		return new RTLinkPageHeader(new BinaryReader(new ByteArrayProvider(bytes), true));
+		return RTLinkPageHeader.read(new BinaryReader(new ByteArrayProvider(bytes), true));
 	}
 
 	/** VICEROY.EXE page 0: the easy case, and the only one the original code got right. */
@@ -39,12 +39,12 @@ public class RTLinkPageHeaderTest {
 		RTLinkPageHeader h = parse(0x07f1, 0x00d1, 0x02bc, 0x0000, 0x033a, 0, 0, 0);
 
 		assertTrue(h.isValid());
-		assertEquals(2033, h.getTotalParagraphs());
-		assertEquals(209, h.getOverheadParagraphs());
-		assertEquals(700, h.getFrameSize());
-		assertEquals(826, h.getRelocCount());
-		assertEquals(0, h.getSecondRelocCount());
-		assertEquals(29184, h.getCodeSizeBytes());
+		assertEquals(2033, h.totalParagraphs());
+		assertEquals(209, h.overheadParagraphs());
+		assertEquals(700, h.frameSize());
+		assertEquals(826, h.relocCount());
+		assertEquals(0, h.secondRelocCount());
+		assertEquals(29184, h.codeSizeBytes());
 	}
 
 	/**
@@ -57,9 +57,9 @@ public class RTLinkPageHeaderTest {
 		RTLinkPageHeader h = parse(0x024a, 0x001b, 0x01fe, 0x0000, 0x005e, 0x0002, 0, 0);
 
 		assertTrue("a page with a second reloc list must validate", h.isValid());
-		assertEquals(94, h.getRelocCount());
-		assertEquals(2, h.getSecondRelocCount());
-		assertEquals(510, h.getFrameSize());
+		assertEquals(94, h.relocCount());
+		assertEquals(2, h.secondRelocCount());
+		assertEquals(510, h.frameSize());
 	}
 
 	/**
@@ -72,15 +72,15 @@ public class RTLinkPageHeaderTest {
 		RTLinkPageHeader h = parse(0x0025, 0x000b, 0x0262, 0x0000, 0x0022, 0, 0, 0x091c);
 
 		assertTrue("a CODEVIEW-linked page must validate", h.isValid());
-		assertEquals(0x091c, h.getCodeviewWord());
-		assertEquals(34, h.getRelocCount());
+		assertEquals(0x091c, h.codeviewWord());
+		assertEquals(34, h.relocCount());
 
 		// The same page without CODEVIEW (VMEX1.EXE) is otherwise identical.
 		RTLinkPageHeader plain = parse(0x0025, 0x000b, 0x0262, 0x0000, 0x0022, 0, 0, 0);
 		assertTrue(plain.isValid());
-		assertEquals(0, plain.getCodeviewWord());
-		assertEquals(h.getRelocCount(), plain.getRelocCount());
-		assertEquals(h.getTotalParagraphs(), plain.getTotalParagraphs());
+		assertEquals(0, plain.codeviewWord());
+		assertEquals(h.relocCount(), plain.relocCount());
+		assertEquals(h.totalParagraphs(), plain.totalParagraphs());
 	}
 
 	/**
@@ -94,10 +94,10 @@ public class RTLinkPageHeaderTest {
 		// of 4), i.e. byte offset 16 + 96*4 = 400, a paragraph boundary.
 		RTLinkPageHeader h = parse(0x024a, 0x001b, 0x01fe, 0x0000, 94, 2, 0, 0);
 
-		assertEquals(16, h.getRelocOffset());
-		assertEquals(400, h.getSecondRelocOffset());
-		assertEquals(0, h.getSecondRelocOffset() % 16);
-		assertEquals(408, h.getThirdRelocOffset());   // straight after list 2, no rounding
+		assertEquals(16, h.relocOffset());
+		assertEquals(400, h.secondRelocOffset());
+		assertEquals(0, h.secondRelocOffset() % 16);
+		assertEquals(408, h.thirdRelocOffset());   // straight after list 2, no rounding
 	}
 
 	/** A nonzero reloc_start_index shifts the first list, and everything after it. */
@@ -105,10 +105,10 @@ public class RTLinkPageHeaderTest {
 	public void testRelocStartIndexIsHonoured() throws IOException {
 		RTLinkPageHeader h = parse(0x024a, 0x001b, 0x01fe, 4, 8, 0, 0, 0);
 
-		assertEquals(4, h.getRelocStartIndex());
-		assertEquals(16 + 4 * 4, h.getRelocOffset());
+		assertEquals(4, h.relocStartIndex());
+		assertEquals(16 + 4 * 4, h.relocOffset());
 		// list 2 begins at entry index round_up_4(4 + 8) = 12
-		assertEquals(16 + 12 * 4, h.getSecondRelocOffset());
+		assertEquals(16 + 12 * 4, h.secondRelocOffset());
 	}
 
 	/**

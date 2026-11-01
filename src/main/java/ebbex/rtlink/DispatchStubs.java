@@ -228,7 +228,7 @@ final class DispatchStubs {
 			List<OverlayBlockInfo> overlayBlocks) {
 		Map<Integer, OverlayBlockInfo> byRecord = new HashMap<>();
 		for (OverlayBlockInfo info : overlayBlocks) {
-			byRecord.put(info.page().getPageIndex(), info);
+			byRecord.put(info.page().pageIndex(), info);
 		}
 		return byRecord;
 	}
@@ -258,7 +258,7 @@ final class DispatchStubs {
 	 * dispatcher stub (a CALLF whose target is a discovered dispatcher), the stub is
 	 * 12 bytes; otherwise a word at +12 smaller than the page's total paragraph count
 	 * is a module_word. The module_word cannot be validated against the page's
-	 * relocation seg_index values ({@link RTLinkOverlayPage#getModuleBases()}) — a
+	 * relocation seg_index values ({@link RTLinkOverlayPage#moduleBases()}) — a
 	 * module referenced only by stubs never appears there. Every module_word observed
 	 * here is collected into {@code stubModuleBases}, keyed by overlay block name, so
 	 * {@link ModuleSegments#mergeStubBases} can complete each page's set with exactly those
@@ -327,7 +327,7 @@ final class DispatchStubs {
 			if (CodeSeeds.isResidentCode(memory, moduleWordAddr.add(1)) &&
 				!isDispatcherCallf(memory, space, dispatchers, moduleWordAddr)) {
 				int word = Short.toUnsignedInt(memory.getShort(moduleWordAddr));
-				if (word < target.page().getHeader().getTotalParagraphs()) {
+				if (word < target.page().header().totalParagraphs()) {
 					stubSize = 14;
 					moduleBase = word;
 				}

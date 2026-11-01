@@ -24,7 +24,7 @@ final class OverlayRelocations {
 			MessageLog log) {
 		Memory memory = program.getMemory();
 		Address blockStart = block.getStart();
-		int pageDisplay = page.getPageIndex();
+		int pageDisplay = page.pageIndex();
 
 		// The runtime fixup loop (210d:2e59 in VICEROY.EXE) addresses each patch
 		// site as (frame + seg_index):offset — page-linear seg_index*16 + offset —
@@ -59,9 +59,9 @@ final class OverlayRelocations {
 		int loadDelta = RTLinkOverlayAnalyzer.INITIAL_SEGMENT_VAL;
 		int frameDelta = (int) (blockStart.getOffset() >>> 4) & 0xffff;
 
-		applyList(program, memory, blockStart, page.getRelocations(), loadDelta, pageDisplay,
+		applyList(program, memory, blockStart, page.relocations(), loadDelta, pageDisplay,
 			log);
-		applyList(program, memory, blockStart, page.getSecondRelocations(), frameDelta,
+		applyList(program, memory, blockStart, page.secondRelocations(), frameDelta,
 			pageDisplay, log);
 
 		// List 3 is not applied, and that is final rather than provisional: beyond being
@@ -80,7 +80,7 @@ final class OverlayRelocations {
 	private static void applyList(Program program, Memory memory, Address blockStart,
 			List<RTLinkRelocation> relocations, int delta, int pageDisplay, MessageLog log) {
 		for (RTLinkRelocation reloc : relocations) {
-			int siteOffset = reloc.getSiteOffset();
+			int siteOffset = reloc.siteOffset();
 
 			try {
 				Address relocAddr = blockStart.add(siteOffset);
@@ -90,7 +90,7 @@ final class OverlayRelocations {
 				memory.setShort(relocAddr, (short) segmentValue);
 
 				program.getRelocationTable().add(relocAddr, Status.APPLIED, 0,
-					new long[] { reloc.getOffset(), reloc.getSegmentIndex(), segmentValue },
+					new long[] { reloc.offset(), reloc.segmentIndex(), segmentValue },
 					2, null);
 			}
 			catch (MemoryAccessException | AddressOutOfBoundsException e) {

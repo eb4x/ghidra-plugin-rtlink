@@ -119,7 +119,7 @@ final class ModuleSegments {
 	/** The module bases recorded for {@code block}, plus those {@code page}'s relocations name. */
 	private static SortedSet<Integer> recordedBases(Program program, MemoryBlock block,
 			RTLinkOverlayPage page) {
-		SortedSet<Integer> bases = new TreeSet<>(page.getModuleBases());
+		SortedSet<Integer> bases = new TreeSet<>(page.moduleBases());
 		List<Integer> recorded = RTLinkProgram.moduleBases(program, block);
 		if (recorded != null) {
 			bases.addAll(recorded);
@@ -131,7 +131,7 @@ final class ModuleSegments {
 	static String blockComment(RTLinkOverlayPage page, Collection<Integer> bases) {
 		StringBuilder comment = new StringBuilder(
 			String.format("RTLink/Plus overlay page %d (frame=0x%X)",
-				page.getPageIndex(), page.getFrameSize()));
+				page.pageIndex(), page.frameSize()));
 		if (bases.size() > 1) {
 			comment.append(", module base paragraphs:");
 			for (int base : bases) {

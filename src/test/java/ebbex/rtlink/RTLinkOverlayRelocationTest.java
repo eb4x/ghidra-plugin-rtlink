@@ -82,7 +82,7 @@ public class RTLinkOverlayRelocationTest extends AbstractGenericTest {
 	}
 
 	private static RTLinkOverlayPage parsePage() throws IOException {
-		return new RTLinkOverlayPage(new BinaryReader(new ByteArrayProvider(PAGE), true), 0, 1);
+		return RTLinkOverlayPage.read(new BinaryReader(new ByteArrayProvider(PAGE), true), 0, 1);
 	}
 
 	/** The page parses into one entry per list, with list 2 at the rounded entry index. */
@@ -90,17 +90,17 @@ public class RTLinkOverlayRelocationTest extends AbstractGenericTest {
 	public void testPageParsesWithBothLists() throws IOException {
 		RTLinkOverlayPage page = parsePage();
 
-		assertTrue(page.getHeader().isValid());
-		assertEquals(1, page.getRelocations().size());
-		assertEquals(1, page.getSecondRelocations().size());
-		assertEquals(0, page.getThirdRelocations().size());
+		assertTrue(page.header().isValid());
+		assertEquals(1, page.relocations().size());
+		assertEquals(1, page.secondRelocations().size());
+		assertEquals(0, page.thirdRelocations().size());
 
 		// entry index 1 rounds up to 4, so list 2 sits at byte 16 + 4*4 = 0x20 — this is
 		// the rounding rule on a real page, not a synthetic header
-		assertEquals(0x20, page.getHeader().getSecondRelocOffset());
+		assertEquals(0x20, page.header().secondRelocOffset());
 
-		assertEquals(0x33, page.getRelocations().get(0).getSiteOffset());
-		assertEquals(0x03, page.getSecondRelocations().get(0).getSiteOffset());
+		assertEquals(0x33, page.relocations().get(0).siteOffset());
+		assertEquals(0x03, page.secondRelocations().get(0).siteOffset());
 	}
 
 	/**
@@ -111,7 +111,7 @@ public class RTLinkOverlayRelocationTest extends AbstractGenericTest {
 	@Test
 	public void testListOneTakesImageDeltaAndListTwoTakesFrameDelta() throws Exception {
 		RTLinkOverlayPage page = parsePage();
-		byte[] code = Arrays.copyOfRange(PAGE, page.getHeader().getOverheadSizeBytes(),
+		byte[] code = Arrays.copyOfRange(PAGE, page.header().overheadSizeBytes(),
 			PAGE.length);
 
 		ProgramBuilder builder = new ProgramBuilder("L2TEST", ProgramBuilder._X86_16_REAL_MODE);

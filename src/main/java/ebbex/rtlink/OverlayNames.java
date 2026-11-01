@@ -35,8 +35,8 @@ final class OverlayNames {
 	static int width(List<RTLinkOverlayPage> pages) {
 		int max = 0;
 		for (RTLinkOverlayPage page : pages) {
-			if (page.getCodeSize() > 0) {
-				max = Math.max(max, page.getPageIndex());
+			if (page.codeSize() > 0) {
+				max = Math.max(max, page.pageIndex());
 			}
 		}
 		return width(max);
@@ -46,7 +46,7 @@ final class OverlayNames {
 	static int maxRecordIndex(List<OverlayBlockInfo> overlayBlocks) {
 		int max = 0;
 		for (OverlayBlockInfo info : overlayBlocks) {
-			max = Math.max(max, info.page().getPageIndex());
+			max = Math.max(max, info.page().pageIndex());
 		}
 		return max;
 	}

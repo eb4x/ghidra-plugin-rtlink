@@ -4,8 +4,9 @@ import java.io.IOException;
 
 import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.StructConverter;
-import ghidra.program.model.data.*;
-import ghidra.util.exception.DuplicateNameException;
+import ghidra.program.model.data.CategoryPath;
+import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.StructureDataType;
 
 /**
  * A single 4-byte RTLink/Plus overlay relocation entry.
@@ -16,60 +17,32 @@ import ghidra.util.exception.DuplicateNameException;
  * </pre>
  *
  * The patched word lives at page-linear byte offset {@code seg_index * 16 + offset}
- * (see {@link #getSiteOffset()}). Within one list, the runtime fixup loop adds the same
+ * (see {@link #siteOffset()}). Within one list, the runtime fixup loop adds the same
  * value to the unrelocated segment word at every site, regardless of seg_index — seg_index
  * only relocates the site address, it never selects a different fixup value. Which value
  * depends on the list: the load delta for the first, the page frame for the second.
+ *
+ * @param offset       the site offset, relative to paragraph {@code segmentIndex}
+ * @param segmentIndex the paragraph index within the page code the offset is relative to
  */
-public class RTLinkRelocation implements StructConverter {
+public record RTLinkRelocation(int offset, int segmentIndex) implements StructConverter {
 
 	public static final String NAME = "RTLink_Relocation";
 
-	private int offset;
-	private int segIndex;
-
-	/**
-	 * Constructs a new RTLink/Plus relocation entry
-	 *
-	 * @param reader A {@link BinaryReader} positioned at the start of the entry
-	 * @throws IOException if there was an IO-related error
-	 */
-	public RTLinkRelocation(BinaryReader reader) throws IOException {
-		offset = Short.toUnsignedInt(reader.readNextShort());
-		segIndex = Short.toUnsignedInt(reader.readNextShort());
+	/** The entry at the reader's position. */
+	public static RTLinkRelocation read(BinaryReader reader) throws IOException {
+		int offset = Short.toUnsignedInt(reader.readNextShort());
+		int segmentIndex = Short.toUnsignedInt(reader.readNextShort());
+		return new RTLinkRelocation(offset, segmentIndex);
 	}
 
-	/**
-	 * Gets the site offset, relative to paragraph {@code seg_index} of the page code
-	 *
-	 * @return The offset
-	 */
-	public int getOffset() {
-		return offset;
-	}
-
-	/**
-	 * Gets the paragraph (16-byte unit) index within the page code that the offset
-	 * is relative to
-	 *
-	 * @return The segment index
-	 */
-	public int getSegmentIndex() {
-		return segIndex;
-	}
-
-	/**
-	 * Gets the page-linear byte offset of the patched word:
-	 * {@code seg_index * 16 + offset}
-	 *
-	 * @return The fixup site offset within the page code
-	 */
-	public int getSiteOffset() {
-		return segIndex * 16 + offset;
+	/** The page-linear byte offset of the patched word: {@code seg_index * 16 + offset}. */
+	public int siteOffset() {
+		return segmentIndex * 16 + offset;
 	}
 
 	@Override
-	public DataType toDataType() throws DuplicateNameException {
+	public DataType toDataType() {
 		StructureDataType struct = new StructureDataType(NAME, 0);
 		struct.add(WORD, "offset", "Site offset, relative to paragraph seg_index of the page code");
 		struct.add(WORD, "seg_index", "Paragraph index within the page code (site = seg_index*16 + offset)");
@@ -79,6 +52,6 @@ public class RTLinkRelocation implements StructConverter {
 
 	@Override
 	public String toString() {
-		return String.format("off=%04x segidx=%04x", offset, segIndex);
+		return String.format("off=%04x segidx=%04x", offset, segmentIndex);
 	}
 }
