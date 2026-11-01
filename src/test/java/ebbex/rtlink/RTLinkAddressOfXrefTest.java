@@ -202,6 +202,64 @@ public class RTLinkAddressOfXrefTest extends AbstractGenericTest {
 		}
 	}
 
+	/**
+	 * A negative displacement off a register ({@code [SI-2]}, a disp8 the CPU sign-extends) is
+	 * an offset below the register, not {@code DGROUP:FFFE}, and a sign-extended immediate
+	 * ({@code PUSH -1}, {@code ADD SI,-2}) is a small negative number, not an address. A disp16
+	 * is a plain 16-bit offset however high, and keeps its reference.
+	 */
+	@Test
+	public void testNegativeDisplacementsAndImmediatesAreNotAddresses() throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("NEG", ProgramBuilder._X86_16_REAL_MODE);
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0000", 0x40);
+			builder.withTransaction(() -> code.setExecute(true));
+			builder.createUninitializedMemory("DATA_TOP", "0x2000:0xff00", 0x100);
+			builder.setBytes("0x1000:0x0000",
+			// @formatter:off
+				"8b 44 fe " +    // 0x0000  MOV AX,[SI-0x2]      -> below SI: no ref
+				"8b 41 f0 " +    // 0x0003  MOV AX,[BX+DI-0x10]  -> below BX+DI: no ref
+				"6a ff " +       // 0x0006  PUSH -0x1            -> a constant: no ref
+				"83 c6 fe " +    // 0x0008  ADD SI,-0x2          -> a constant: no ref
+				"8b 87 10 ff " + // 0x000b  MOV AX,[BX+0xff10]   -> disp16: READ ref to FF10
+				"a1 20 ff",      // 0x000f  MOV AX,[0xff20]      -> direct: READ ref to FF20
+			// @formatter:on
+				true);
+			builder.setRegisterValue("DS", "0x1000:0x0000", "0x1000:0x003f", 0x2000);
+
+			Program program = builder.getProgram();
+			ProgramContext context = program.getProgramContext();
+			Register ds = context.getRegister("DS");
+			ReferenceManager refManager = program.getReferenceManager();
+			SegmentedAddressSpace space =
+				(SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();
+
+			RTLinkXrefAnalyzer.Counts counts = new RTLinkXrefAnalyzer.Counts();
+			builder.withTransaction(() -> {
+				for (Instruction instr : program.getListing().getInstructions(true)) {
+					RTLinkXrefAnalyzer.addDataXrefs(instr, context, ds, program.getMemory(),
+						refManager, space, counts);
+				}
+			});
+
+			for (String at : new String[] { "0x0000", "0x0003", "0x0006", "0x0008" }) {
+				assertEquals("no reference from 1000:" + at, 0,
+					refManager.getReferencesFrom(builder.addr("0x1000:" + at)).length);
+			}
+			Reference[] high = refManager.getReferencesFrom(builder.addr("0x1000:0x000b"));
+			assertEquals("[BX+disp16] keeps its reference", 1, high.length);
+			assertEquals(builder.addr("0x2000:0xff10"), high[0].getToAddress());
+			Reference[] direct = refManager.getReferencesFrom(builder.addr("0x1000:0x000f"));
+			assertEquals(1, direct.length);
+			assertEquals(builder.addr("0x2000:0xff20"), direct[0].getToAddress());
+			assertEquals(2, counts.deref);
+			assertEquals(0, counts.addressOf);
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
 	@Test
 	public void testXlatTableImmediates() throws Exception {
 		ProgramBuilder builder = new ProgramBuilder("XLT", ProgramBuilder._X86_16_REAL_MODE);

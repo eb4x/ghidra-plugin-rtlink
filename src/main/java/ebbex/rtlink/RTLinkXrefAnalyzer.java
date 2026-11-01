@@ -350,18 +350,21 @@ public final class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 				continue;
 			}
 
-			Object[] opObjects = instr.getOpObjects(i);
-			String representation = instr.getDefaultOperandRepresentation(i);
-			if (hasSegmentOverride(opObjects, ds) || hasSegmentOverride(representation) ||
-				isStackRelative(opObjects, ds, representation)) {
-				continue;
+			if (firstScalar(instr.getOpObjects(i)) == null) {
+				continue; // no displacement: [BX+SI], a string operand, XLAT's [BX+AL]
 			}
-
-			Scalar disp = firstScalar(opObjects);
-			if (disp == null) {
-				continue; // e.g. [BX+SI] with no displacement
+			// Everything else comes from the encoding, not the displayed operand.
+			byte[] bytes = X86.bytes(instr);
+			int segment = X86.segmentOverride(bytes);
+			X86.MemoryOperand operand = X86.memoryOperand(instr);
+			if (operand == null || (segment != 0 && segment != PREFIX_DS) ||
+				hasFsOrGs(bytes) || (operand.stackDefault() && segment != PREFIX_DS)) {
+				continue; // another segment, or a BP-based operand that defaults to SS
 			}
-			int offset = (int) (disp.getUnsignedValue() & 0xffff);
+			if (operand.based() && operand.offset() < 0) {
+				continue; // [SI-2]: an offset below the register, not DGROUP:FFFE
+			}
+			int offset = operand.offset() & 0xffff;
 
 			RefType rt = instr.getOperandRefType(i);
 			if (rt == null || (!rt.isRead() && !rt.isWrite())) {
@@ -388,46 +391,23 @@ public final class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 	 */
 	private static int addAddressOfXref(Instruction instr, int opIndex, int dgroup,
 			Memory memory, ReferenceManager refManager, SegmentedAddressSpace space) {
-		String mnemonic = instr.getMnemonicString();
-		Register destReg = null;
-		if (mnemonic.equals("PUSH")) {
-			if (opIndex != 0 || instr.getNumOperands() != 1) {
-				return 0;
-			}
-		}
-		else if (mnemonic.equals("MOV") || mnemonic.equals("ADD")) {
-			// Register whitelists are measured per shape (see the class javadoc).
-			// MOV: only registers plausibly used as pointers — CX and DX carry
-			// counts and sizes, and AX carries DOS int 21h AH:AL function
-			// selectors and the low words of 32-bit constants.  ADD: any general
-			// register — a large immediate added to a register is base-plus-index
-			// address math (the &g[i] idiom), and the real sites use all of them.
-			if (opIndex != 1) {
-				return 0;
-			}
-			Object[] dest = instr.getOpObjects(0);
-			if (dest.length != 1 || !(dest[0] instanceof Register reg)) {
-				return 0;
-			}
-			boolean allowed = (mnemonic.equals("ADD") ? GENERAL_REGISTERS : ADDRESS_REGISTERS)
-					.contains(reg.getName());
-			if (!allowed) {
-				return 0;
-			}
-			destReg = reg;
-		}
-		else {
+		// From the encoding: PUSH imm16, MOV r16,imm16 and ADD r16,imm16, never the
+		// sign-extended byte forms (PUSH -1 is a constant, not DGROUP:FFFF).
+		X86.AddressOf addressOf = X86.addressOf(instr.getProgram(), instr);
+		if (addressOf == null) {
 			return 0;
 		}
-
-		Object[] opObjects = instr.getOpObjects(opIndex);
-		if (opObjects.length != 1 || !(opObjects[0] instanceof Scalar imm)) {
+		Register destReg = addressOf.register();
+		// Register whitelists are measured per shape (see the class javadoc). MOV: only
+		// registers plausibly used as pointers — CX and DX carry counts and sizes, and AX
+		// carries DOS int 21h AH:AL function selectors and the low words of 32-bit
+		// constants. ADD: any general register — a large immediate added to a register is
+		// base-plus-index address math (the &g[i] idiom), and the real sites use all of them.
+		if (destReg != null && !(addressOf.added() ? GENERAL_REGISTERS : ADDRESS_REGISTERS)
+				.contains(destReg.getName())) {
 			return 0;
 		}
-		long value = imm.getUnsignedValue();
-		if (value > 0xffff) {
-			return 0;
-		}
+		long value = addressOf.value();
 		if (isRealModeVideoSegment(value)) {
 			return 0;
 		}
@@ -498,16 +478,14 @@ public final class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 			if (cur == null || cur.getFlowType().isCall()) {
 				return null;
 			}
-			if (cur.getMnemonicString().equals("XLAT")) {
-				byte[] bytes = X86.bytes(cur);
-				if (bytes.length != 2 || bytes[1] != (byte) 0xd7) {
-					return null; // bare XLAT: the DS resolution stands
-				}
-				return switch (bytes[0]) {
+			byte[] bytes = X86.bytes(cur);
+			int opcode = X86.opcodeIndex(bytes);
+			if (opcode >= 0 && bytes[opcode] == (byte) 0xd7) { // XLAT
+				return switch (X86.segmentOverride(bytes)) {
 					case 0x2e -> program.getLanguage().getRegister("CS");
 					case 0x36 -> program.getLanguage().getRegister("SS");
 					case 0x26 -> program.getLanguage().getRegister("ES");
-					default -> null; // 3E = explicit DS: — same as no override
+					default -> null; // bare, or 3E = explicit DS: the DS resolution stands
 				};
 			}
 			for (Object obj : cur.getResultObjects()) {
@@ -588,46 +566,14 @@ public final class RTLinkXrefAnalyzer extends AbstractAnalyzer {
 		return block != null && !block.isExecute();
 	}
 
-	/** True if the operand carries an explicit non-DS segment register (override prefix). */
-	private static boolean hasSegmentOverride(Object[] opObjects, Register ds) {
-		for (Object obj : opObjects) {
-			if (obj instanceof Register reg && reg != ds &&
-				SEGMENT_REGISTERS.contains(reg.getName())) {
-				return true;
-			}
-		}
-		return false;
-	}
+	/** The {@code DS:} segment-override prefix. */
+	private static final int PREFIX_DS = 0x3e;
 
-	/** Fallback: detect an {@code ES:}/{@code SS:}/{@code CS:}/{@code FS:}/{@code GS:} prefix. */
-	private static boolean hasSegmentOverride(String representation) {
-		return representation.contains("ES:") || representation.contains("SS:") ||
-			representation.contains("CS:") || representation.contains("FS:") ||
-			representation.contains("GS:");
+	/** True if a 386 {@code FS:} ({@code 64}) or {@code GS:} ({@code 65}) prefix precedes the opcode. */
+	private static boolean hasFsOrGs(byte[] bytes) {
+		int opcode = X86.opcodeIndex(bytes);
+		return opcode > 0 && (X86.hasPrefix(bytes, opcode, 0x64) || X86.hasPrefix(bytes, opcode, 0x65));
 	}
-
-	/**
-	 * True if the operand addresses through {@code BP} or {@code SP} without an explicit
-	 * {@code DS:}: those default to {@code SS}, so {@code [BP-4]} is a local, not
-	 * {@code DGROUP:FFFC}.
-	 */
-	private static boolean isStackRelative(Object[] opObjects, Register ds,
-			String representation) {
-		boolean stackBase = false;
-		for (Object obj : opObjects) {
-			if (obj == ds) {
-				return false;
-			}
-			if (obj instanceof Register reg &&
-				STACK_BASES.contains(reg.getBaseRegister().getName())) {
-				stackBase = true;
-			}
-		}
-		return stackBase && !representation.contains("DS:");
-	}
-
-	/** Base registers of BP and SP, whatever the language's widest form is. */
-	private static final Set<String> STACK_BASES = Set.of("BP", "EBP", "RBP", "SP", "ESP", "RSP");
 
 	private static Scalar firstScalar(Object[] opObjects) {
 		for (Object obj : opObjects) {

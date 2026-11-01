@@ -359,6 +359,88 @@ final class X86 {
 		return modrm != null && modrm.reg() == 4;
 	}
 
+	/**
+	 * An instruction's memory operand, decoded from its ModRM byte (or the {@code A0-A3}
+	 * {@code moffs16} form).
+	 *
+	 * @param offset the offset it adds: a {@code [disp16]} address, the unsigned disp16, or the
+	 *            disp8 as the CPU sign-extends it (so possibly negative)
+	 * @param based whether a base or index register is added to {@code offset}
+	 * @param stackDefault whether it addresses through BP, so defaults to SS
+	 */
+	record MemoryOperand(int offset, boolean based, boolean stackDefault) {
+	}
+
+	/**
+	 * The memory operand of {@code instruction}, or null when it has none with a displacement
+	 * ({@code [BX]}, {@code [BX+SI]}), has a register operand there, or uses 32-bit addressing
+	 * ({@code 67}). Only call this on an instruction known to have a memory operand: any
+	 * opcode that is not {@code A0-A3} is assumed to be followed by a ModRM byte.
+	 */
+	static MemoryOperand memoryOperand(Instruction instruction) {
+		byte[] b = bytes(instruction);
+		int i = opcodeIndex(b);
+		if (i < 0 || hasPrefix(b, i, 0x67)) {
+			return null;
+		}
+		int op = b[i] & 0xff;
+		if (op >= 0xa0 && op <= 0xa3) {
+			return i + 2 < b.length ? new MemoryOperand(word(b, i + 1), false, false) : null;
+		}
+		int at = op == 0x0f ? i + 2 : i + 1;
+		if (at >= b.length) {
+			return null;
+		}
+		ModRm modrm = modRm(b, at);
+		if (modrm.isRegister() || at + modrm.displacementLength() >= b.length) {
+			return null;
+		}
+		if (modrm.isDirect()) {
+			return new MemoryOperand(word(b, at + 1), false, false);
+		}
+		boolean stack = modrm.rm() == 2 || modrm.rm() == 3 || modrm.rm() == 6;
+		return switch (modrm.mod()) {
+			case 1 -> new MemoryOperand(modrm.displacement(b, at), true, stack);
+			case 2 -> new MemoryOperand(word(b, at + 1), true, stack);
+			default -> null; // no displacement
+		};
+	}
+
+	/**
+	 * An immediate an instruction may be using as an address: {@code PUSH imm16} ({@code 68},
+	 * no register), {@code MOV r16,imm16} ({@code B8+r}, {@code C7 /0}) and
+	 * {@code ADD r16,imm16} ({@code 05}, {@code 81 /0}), registers only.
+	 */
+	record AddressOf(Register register, int value, boolean added) {
+	}
+
+	/**
+	 * The full 16-bit immediate {@code instruction} might take the address of, or null. The
+	 * sign-extended byte forms ({@code 6A}, {@code 83}) are not: {@code PUSH -1} is a constant.
+	 */
+	static AddressOf addressOf(Program program, Instruction instruction) {
+		Opcode o = opcode(instruction);
+		if (o == null) {
+			return null;
+		}
+		byte[] b = o.bytes();
+		int at = o.at();
+		if (o.op() == 0x68 && at + 2 < b.length) {
+			return new AddressOf(null, word(b, at + 1), false);
+		}
+		if (o.op() >= 0xb8 && o.op() <= 0xbf && at + 2 < b.length) {
+			return new AddressOf(register(program, o.op() - 0xb8, 2), word(b, at + 1), false);
+		}
+		if (o.op() == 0x05 && at + 2 < b.length) {
+			return new AddressOf(register(program, 0, 2), word(b, at + 1), true);
+		}
+		ModRm modrm = o.op() == 0x81 || o.op() == 0xc7 ? o.modRm() : null;
+		if (modrm == null || !modrm.isRegister() || modrm.reg() != 0 || at + 3 >= b.length) {
+			return null;
+		}
+		return new AddressOf(register(program, modrm.rm(), 2), word(b, at + 2), o.op() == 0x81);
+	}
+
 	/** True for a bare one-byte {@code XLAT} ({@code D7}) with no segment override. */
 	static boolean isPlainXlat(Instruction instruction) {
 		byte[] b = bytes(instruction);
@@ -458,8 +540,13 @@ final class X86 {
 
 	/** True if an {@code 66} prefix precedes the opcode at {@code b[opcode]}: a 32-bit operand. */
 	private static boolean hasOperandSizePrefix(byte[] b, int opcode) {
+		return hasPrefix(b, opcode, 0x66);
+	}
+
+	/** True if {@code prefix} is among the prefixes before the opcode at {@code b[opcode]}. */
+	static boolean hasPrefix(byte[] b, int opcode, int prefix) {
 		for (int i = 0; i < opcode; i++) {
-			if ((b[i] & 0xff) == 0x66) {
+			if ((b[i] & 0xff) == prefix) {
 				return true;
 			}
 		}

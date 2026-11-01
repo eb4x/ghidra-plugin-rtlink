@@ -81,7 +81,13 @@ seven classes and not one. They share package-private statics and must stay in
   `/COLONIZE/VICEROY.EXE` already has its override.
 - **`RTLinkXrefAnalyzer`** — INSTRUCTION, `REFERENCE_ANALYSIS.after()`. Resolves the
   DS-relative data references that Ghidra's own reference pass declines to make on
-  RTLink programs.
+  RTLink programs. The operand is read from its encoding, not its display: the segment
+  override from the prefixes, the SS default from the ModRM (BP-based), and the offset from
+  the displacement bytes. A negative disp8 off a register (`[SI-2]`) is an offset below the
+  register and gets no reference, where a disp16 is a plain 16-bit offset however high.
+  Address-of immediates are only the full imm16 forms (`PUSH imm16`, `MOV r16,imm16`,
+  `ADD r16,imm16`); before 0.8.23 `[SI-2]`, `PUSH -1` and `ADD SI,-2` were taken for
+  `DGROUP:FFFE`/`FFFF` wherever that was mapped data.
 - **`RTLinkFlowRepairAnalyzer`** — BYTE, `LOW_PRIORITY.after()` (dead last). Recovers
   **buried code** — real, evidenced instructions left undisassembled under junk, or
   never reached at all: CALL fall-throughs onto MZ-relocated segment words sealed as
