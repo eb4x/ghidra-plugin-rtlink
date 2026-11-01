@@ -15,8 +15,6 @@ import ghidra.program.model.address.AddressOutOfBoundsException;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.SegmentedAddressSpace;
-import ghidra.program.model.listing.BookmarkManager;
-import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.Memory;
@@ -506,13 +504,7 @@ final class DispatchStubs {
 			// Stub body runs off the end of its block — nothing to clear.
 			return;
 		}
-		// Clear both severities: a resolved stub whose overlay target offset is 0 carries a
-		// JMPF 0000:0000 whose literal (unrelocated) operand the disassembler flags as a
-		// WARNING ("flow into non-existing memory at 0000:0000"), while a conflicting decode
-		// leaves an ERROR — both are stale once the stub is a thunk to its real target.
-		BookmarkManager bookmarkMgr = program.getBookmarkManager();
-		bookmarkMgr.removeBookmarks(stubBody, BookmarkType.ERROR, monitor);
-		bookmarkMgr.removeBookmarks(stubBody, BookmarkType.WARNING, monitor);
+		ErrorMarks.clearResolved(program, stubBody, monitor);
 		resolvedBodies.add(stubBody);
 	}
 }

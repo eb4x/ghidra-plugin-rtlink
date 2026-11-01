@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import db.Transaction;
 import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
 import ghidra.app.services.AnalyzerType;
@@ -22,8 +23,6 @@ import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.data.DataUtilities;
-import ghidra.program.model.listing.BookmarkManager;
-import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryBlock;
@@ -448,29 +447,16 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		AddressSet stubs = resolvedStubBodies;
 		resolvedStubBodies = new AddressSet();
 
-		BookmarkManager bookmarkMgr = program.getBookmarkManager();
-		// Both severities are stale on a resolved stub (see DispatchStubs.clearErrorBookmarks):
-		// a conflicting decode leaves an ERROR, an offset-0 stub's JMPF 0000:0000 leaves a
-		// WARNING, and neither describes anything broken once the stub is a thunk.
-		long stale = bookmarkMgr.getBookmarkAddresses(BookmarkType.ERROR)
-				.union(bookmarkMgr.getBookmarkAddresses(BookmarkType.WARNING))
-				.intersect(stubs)
-				.getNumAddresses();
-		if (stale == 0) {
-			return;
-		}
-		try {
-			program.withTransaction("RTLink: clear resolved-stub bad-instruction bookmarks",
-				() -> {
-					bookmarkMgr.removeBookmarks(stubs, BookmarkType.ERROR, TaskMonitor.DUMMY);
-					bookmarkMgr.removeBookmarks(stubs, BookmarkType.WARNING, TaskMonitor.DUMMY);
-				});
+		long stale;
+		try (Transaction _ =
+			program.openTransaction("RTLink: clear resolved-stub bad-instruction bookmarks")) {
+			stale = ErrorMarks.clearResolved(program, stubs, TaskMonitor.DUMMY);
 		}
 		catch (CancelledException _) {
 			return; // DUMMY monitor never cancels
 		}
-		Msg.info(this, "RTLink/Plus: Cleared " + stale +
-			" stale Bad Instruction bookmark(s) on resolved dispatch stubs");
+		RTLinkProgram.report(this, stale,
+			"RTLink/Plus: Cleared %d stale Bad Instruction bookmark(s) on resolved dispatch stubs");
 	}
 
 	/**

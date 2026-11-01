@@ -68,6 +68,27 @@ final class ErrorMarks {
 	}
 
 	/**
+	 * Remove every ERROR and WARNING bookmark in {@code resolved}, of any category, and return
+	 * how many addresses carried one. For code this analysis has itself resolved — a dispatch
+	 * stub that is now a thunk — where every such mark describes a decode that no longer
+	 * stands: a conflicting decode leaves an ERROR, and an offset-0 stub's literal
+	 * {@code JMPF 0000:0000} a WARNING ("flow into non-existing memory").
+	 */
+	static long clearResolved(Program program, AddressSetView resolved, TaskMonitor monitor)
+			throws CancelledException {
+		BookmarkManager bookmarks = program.getBookmarkManager();
+		long marked = bookmarks.getBookmarkAddresses(BookmarkType.ERROR)
+				.union(bookmarks.getBookmarkAddresses(BookmarkType.WARNING))
+				.intersect(resolved)
+				.getNumAddresses();
+		if (marked > 0) {
+			bookmarks.removeBookmarks(resolved, BookmarkType.ERROR, monitor);
+			bookmarks.removeBookmarks(resolved, BookmarkType.WARNING, monitor);
+		}
+		return marked;
+	}
+
+	/**
 	 * Remove the disassembler's ERROR marks at {@code at} once no flow reaches it: a mark there
 	 * describes the flow that used to, and one that still does may be described by it.
 	 */
