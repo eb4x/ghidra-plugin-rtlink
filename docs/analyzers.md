@@ -68,7 +68,7 @@ seven classes and not one. They share package-private statics and must stay in
   never reached at all: CALL fall-throughs onto MZ-relocated segment words sealed as
   data (`CALL_RETURN`); far jumps/calls through initialized `CS:[imm16]` vectors
   followed; provably terminating routines (`INT 21h/4Ch` and tail-jump chains into
-  one) sealing their callers' fall-throughs (the junk behind each call cleared up to the
+  one) sealing their callers' fall-throughs, direct or through a thunk (the junk behind each call cleared up to the
   first evidenced instruction — on the very first one, a name, external entry or flow
   reference counts, an unreferenced default-named function does not); no-return flags
   that Ghidra's "Non-Returning Functions - Discovered" pass set on routines whose body

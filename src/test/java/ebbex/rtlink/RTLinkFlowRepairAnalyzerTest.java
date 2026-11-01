@@ -969,6 +969,46 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 		}
 	}
 
+	/**
+	 * A call that reaches the terminating routine through a thunk cannot return either.
+	 * <pre>
+	 *   0100  9a 10 01 00 10   CALLF 1000:0110           ; the caller
+	 *   0105  00 00 00 00      junk behind it
+	 *   0110  ea 30 01 00 10   JMPF 1000:0130            ; a thunk of the exit routine
+	 *   0130  b8 01 4c cd 21   MOV AX,0x4C01; INT 0x21   ; DOS terminate
+	 * </pre>
+	 */
+	@Test
+	public void testCallThroughAThunkLosesItsFallThrough() throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("THUNK", ProgramBuilder._X86_16_REAL_MODE);
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0100", 0x40);
+			builder.withTransaction(() -> code.setExecute(true));
+			builder.setBytes("0x1000:0x0100", "9a 10 01 00 10");
+			builder.setBytes("0x1000:0x0110", "ea 30 01 00 10");
+			builder.setBytes("0x1000:0x0130", "b8 01 4c cd 21");
+			builder.disassemble("0x1000:0x0100", 5, false);
+			builder.disassemble("0x1000:0x0105", 4, false);
+			builder.disassemble("0x1000:0x0110", 5, false);
+			builder.disassemble("0x1000:0x0130", 5, false);
+			Function exit = builder.createFunction("0x1000:0x0130");
+			Function thunk = builder.createFunction("0x1000:0x0110");
+			builder.withTransaction(() -> thunk.setThunkedFunction(exit));
+			Program program = builder.getProgram();
+			assertTrue("setup: 0110 must be a thunk", thunk.isThunk());
+
+			assertEquals(1, sealNonReturning(builder));
+
+			assertEquals("the call through the thunk cannot return", FlowOverride.CALL_RETURN,
+				program.getListing().getInstructionAt(builder.addr("0x1000:0x0100")).getFlowOverride());
+			assertNull("and the junk behind it is cleared",
+				program.getListing().getInstructionAt(builder.addr("0x1000:0x0105")));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
 	/** A routine that plainly returns must never be taken for a terminating one. */
 	@Test
 	public void testOrdinaryCallKeepsItsFallThrough() throws Exception {

@@ -22,7 +22,6 @@ import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.RefType;
-import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.util.exception.CancelledException;
@@ -180,23 +179,7 @@ final class StaleNoReturns {
 	private static List<Instruction> calls(Program program, List<Function> functions) {
 		List<Instruction> calls = new ArrayList<>();
 		for (Function function : functions) {
-			List<Address> entries = new ArrayList<>(List.of(function.getEntryPoint()));
-			Address[] thunks = function.getFunctionThunkAddresses(true);
-			if (thunks != null) {
-				entries.addAll(List.of(thunks));
-			}
-			for (Address entry : entries) {
-				for (Reference reference : program.getReferenceManager().getReferencesTo(entry)) {
-					if (!reference.getReferenceType().isCall()) {
-						continue;
-					}
-					Instruction call =
-						program.getListing().getInstructionAt(reference.getFromAddress());
-					if (call != null) {
-						calls.add(call);
-					}
-				}
-			}
+			calls.addAll(CodeEvidence.callsTo(program, function));
 		}
 		return calls;
 	}

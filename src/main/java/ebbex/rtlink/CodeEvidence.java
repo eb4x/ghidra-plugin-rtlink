@@ -1,9 +1,12 @@
 package ebbex.rtlink;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Predicate;
 
 import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.RefType;
@@ -65,6 +68,32 @@ final class CodeEvidence {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Every instruction that calls {@code function}, directly or through one of its thunks, in
+	 * a list copied up front: a caller about to change references must not iterate them live
+	 * (past 1700 references to one address the iterator is live rather than a snapshot).
+	 */
+	static List<Instruction> callsTo(Program program, Function function) {
+		List<Address> entries = new ArrayList<>(List.of(function.getEntryPoint()));
+		Address[] thunks = function.getFunctionThunkAddresses(true);
+		if (thunks != null) {
+			entries.addAll(List.of(thunks));
+		}
+		List<Instruction> calls = new ArrayList<>();
+		for (Address entry : entries) {
+			for (Reference reference : program.getReferenceManager().getReferencesTo(entry)) {
+				if (!reference.getReferenceType().isCall()) {
+					continue;
+				}
+				Instruction call = program.getListing().getInstructionAt(reference.getFromAddress());
+				if (call != null) {
+					calls.add(call);
+				}
+			}
+		}
+		return calls;
 	}
 
 	/**

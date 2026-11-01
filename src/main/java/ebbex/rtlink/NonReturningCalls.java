@@ -70,18 +70,14 @@ final class NonReturningCalls {
 			if (!function.hasNoReturn()) {
 				function.setNoReturn(true);
 			}
-			// Copied first: the clear below removes references, and past 1700 of them the
-			// reference iterator is live rather than a snapshot.
-			List<Reference> callers = new ArrayList<>();
-			program.getReferenceManager().getReferencesTo(function.getEntryPoint())
-					.forEach(callers::add);
-			for (Reference reference : callers) {
+			// Through its thunks too: a thunk delegates its no-return to the routine. And a
+			// copy, since the clear below removes references.
+			for (Instruction collected : CodeEvidence.callsTo(program, function)) {
 				monitor.checkCancelled();
-				if (!reference.getReferenceType().isCall()) {
-					continue;
-				}
-				Instruction call = listing.getInstructionAt(reference.getFromAddress());
-				if (call == null || call.getFlowOverride() == FlowOverride.CALL_RETURN ||
+				// Re-fetched: clearing junk behind an earlier call may have taken this one.
+				Instruction call = listing.getInstructionAt(collected.getMinAddress());
+				if (call == null || !call.getFlowType().isCall() ||
+					call.getFlowOverride() == FlowOverride.CALL_RETURN ||
 					call.getFallThrough() == null) {
 					continue;
 				}
