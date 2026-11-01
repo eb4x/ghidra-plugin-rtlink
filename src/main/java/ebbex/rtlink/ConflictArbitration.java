@@ -303,10 +303,8 @@ final class ConflictArbitration {
 			found = true;
 		}
 
-		Address before = buried.previous();
-		Instruction predecessor = before == null ? null : listing.getInstructionContaining(before);
-		if (predecessor != null && buried.equals(predecessor.getFallThrough()) &&
-			!junkStarts.contains(predecessor.getMinAddress()) &&
+		Instruction predecessor = CodeEvidence.fallingInto(program, buried);
+		if (predecessor != null && !junkStarts.contains(predecessor.getMinAddress()) &&
 			evidencedThroughChain(program, predecessor)) {
 			evidence.add(predecessor.getMinAddress(), predecessor.getMaxAddress());
 			found = true;

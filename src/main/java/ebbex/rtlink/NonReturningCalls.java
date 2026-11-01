@@ -153,8 +153,7 @@ final class NonReturningCalls {
 	 * exit, now terminal, no longer explains.
 	 */
 	private static void dropFallThroughMarks(Program program, Address after) {
-		Instruction above = program.getListing().getInstructionContaining(after.previous());
-		if (above != null && after.equals(above.getFallThrough())) {
+		if (CodeEvidence.fallingInto(program, after) != null) {
 			return;
 		}
 		ErrorMarks.removeUnreached(program, after);

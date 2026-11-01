@@ -70,6 +70,26 @@ final class CodeEvidence {
 		return false;
 	}
 
+	/** True if an instruction already decoded covers {@code at} without starting there. */
+	static boolean splitsInstruction(Program program, Address at) {
+		Instruction covering = program.getListing().getInstructionContaining(at);
+		return covering != null && !covering.getMinAddress().equals(at);
+	}
+
+	/** The instruction just before {@code at} if it falls through to {@code at}, else null. */
+	static Instruction fallingInto(Program program, Address at) {
+		Address before = at.previous();
+		Instruction previous =
+			before == null ? null : program.getListing().getInstructionContaining(before);
+		return previous != null && at.equals(previous.getFallThrough()) ? previous : null;
+	}
+
+	/** Create a function at {@code at} unless one already contains it; true if one was made. */
+	static boolean makeFunction(Program program, Address at, TaskMonitor monitor) {
+		return program.getFunctionManager().getFunctionContaining(at) == null &&
+			new CreateFunctionCmd(at).applyTo(program, monitor);
+	}
+
 	/**
 	 * Every instruction that calls {@code function}, directly or through one of its thunks, in
 	 * a list copied up front: a caller about to change references must not iterate them live
@@ -102,9 +122,8 @@ final class CodeEvidence {
 	 */
 	static void promoteIfCalled(Program program, Address target, TaskMonitor monitor) {
 		if (program.getListing().getInstructionAt(target) != null &&
-			program.getFunctionManager().getFunctionContaining(target) == null &&
 			hasReferenceTo(program, target, RefType::isCall)) {
-			new CreateFunctionCmd(target).applyTo(program, monitor);
+			makeFunction(program, target, monitor);
 		}
 	}
 }

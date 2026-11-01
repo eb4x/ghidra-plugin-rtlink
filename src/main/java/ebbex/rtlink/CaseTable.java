@@ -9,7 +9,6 @@ import java.util.function.IntFunction;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressOutOfBoundsException;
 import ghidra.program.model.address.SegmentedAddress;
-import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryAccessException;
 
@@ -89,11 +88,7 @@ final class CaseTable {
 			destination.getOffset() >= table.getOffset() && destination.getOffset() < tableEnd) {
 			return null; // a case target inside its own table
 		}
-		Instruction existing = program.getListing().getInstructionContaining(destination);
-		if (existing != null && !existing.getMinAddress().equals(destination)) {
-			return null; // splits an instruction already there
-		}
-		return destination;
+		return CodeEvidence.splitsInstruction(program, destination) ? null : destination;
 	}
 
 	/** How many words fit between {@code table} and the end of its 64KB segment. */

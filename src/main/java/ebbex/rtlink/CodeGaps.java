@@ -164,9 +164,7 @@ final class CodeGaps {
 		// Last entry first: of entries sharing a tail, the one that falls into it owns it,
 		// and each earlier one then keeps only the bytes up to its jump into that tail.
 		for (Address start : decoded.reversed()) {
-			if (program.getFunctionManager().getFunctionContaining(start) == null) {
-				new CreateFunctionCmd(start).applyTo(program, monitor);
-			}
+			CodeEvidence.makeFunction(program, start, monitor);
 		}
 		return decoded.size();
 	}
@@ -575,12 +573,7 @@ final class CodeGaps {
 
 	/** True when the instruction above the gap falls straight into it. */
 	private static boolean fallsInto(Program program, Address start) {
-		Address before = start.previous();
-		if (before == null) {
-			return false;
-		}
-		Instruction previous = program.getListing().getInstructionContaining(before);
-		return previous != null && start.equals(previous.getFallThrough());
+		return CodeEvidence.fallingInto(program, start) != null;
 	}
 
 	/** True when {@code bytes} contains a fill run — {@value FillerIslands#FILLER_MIN_RUN} zeros. */

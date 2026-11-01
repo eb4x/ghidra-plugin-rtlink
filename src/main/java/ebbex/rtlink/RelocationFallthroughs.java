@@ -102,8 +102,7 @@ final class RelocationFallthroughs {
 	 */
 	private static Instruction callFallingThroughTo(Program program, Address word) {
 		Listing listing = program.getListing();
-		Instruction covering = listing.getInstructionContaining(word);
-		if (covering != null && !covering.getMinAddress().equals(word)) {
+		if (CodeEvidence.splitsInstruction(program, word)) {
 			return null; // operand of a live instruction
 		}
 		Address before = word.previous();
