@@ -107,7 +107,10 @@ DOS emulated floating point (INT 34h–3Dh) into the x87 it encodes.
 ## Housekeeping rules
 
 - All analyzers set `setSupportsOneTimeAnalysis()` so they can be re-run from
-  Analysis → One Shot on an already-analyzed program.
+  Analysis → One Shot on an already-analyzed program. A re-run does what a fresh import
+  would and no more: `RTLinkOverlayAnalyzer` re-resolves the dispatch stubs, and only that
+  pass seeds the VM runtime, so a program without CALLF+JMPF stubs (or whose overlay blocks
+  were renamed) gets no seeds.
 - Analyzers hand results to one another only through the program, and every such record —
   the program-info flags, the overlay module bases, the VM seed count, the switch dispatch
   marks — is read and written through `RTLinkProgram`, along with the two gates below.
