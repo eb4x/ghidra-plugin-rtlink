@@ -95,29 +95,20 @@ final class ConflictArbitration {
 				continue; // already repaired (idempotency for one-shot re-runs)
 			}
 
-			PseudoInstruction decoded = CodeSeeds.decode(new PseudoDisassembler(program), buried);
-			if (decoded == null || decoded.getLength() <= 0) {
-				continue; // the buried bytes do not decode; nothing to arbitrate
-			}
-			int length = decoded.getLength();
-
-			AddressSet junkStarts = collectJunkClearStarts(program, buried, length);
-			if (junkStarts == null) {
-				Msg.warn(RTLinkFlowRepairAnalyzer.class,
-					"RTLink: conflict at " + buried +
+			Clear clear;
+			switch (judge(program, buried)) {
+				case Clear c -> clear = c;
+				case BothSides _ -> {
+					Msg.warn(RTLinkFlowRepairAnalyzer.class, "RTLink: conflict at " + buried +
 						" has evidence on both sides; left for manual review");
-				continue;
-			}
-			if (junkStarts.isEmpty()) {
-				continue; // no conflicting instruction found anymore
-			}
-
-			AddressSet evidence = new AddressSet();
-			if (!buriedHasEvidence(program, buried, junkStarts, evidence)) {
-				continue; // no evidence: leave it exactly as it is
+					continue;
+				}
+				case Undecodable _, NoJunk _, NoEvidence _ -> {
+					continue; // nothing to arbitrate, or no evidence: leave it as it is
+				}
 			}
 
-			new ClearFlowAndRepairCmd(junkStarts, evidence, false, false, true)
+			new ClearFlowAndRepairCmd(clear.junkStarts(), clear.evidence(), false, false, true)
 					.applyTo(program, monitor);
 			if (listing.getInstructionAt(buried) == null) {
 				new DisassembleCommand(buried, null, true).applyTo(program, monitor);
@@ -126,11 +117,55 @@ final class ConflictArbitration {
 				continue; // repair failed; the disassembler re-marks as needed
 			}
 
-			fixupAround(program, buried, evidence, monitor);
+			fixupAround(program, buried, clear.evidence(), monitor);
 			dropMark(bookmarks, buried);
 			repaired++;
 		}
 		return repaired;
+	}
+
+	/** What the evidence says about the conflict burying an address. */
+	private sealed interface Verdict permits Undecodable, BothSides, NoJunk, NoEvidence, Clear {
+	}
+
+	/** The buried bytes do not decode: nothing to arbitrate. */
+	private record Undecodable() implements Verdict {
+	}
+
+	/** Evidence on both sides: left for manual review. */
+	private record BothSides() implements Verdict {
+	}
+
+	/** No conflicting instruction is there any more. */
+	private record NoJunk() implements Verdict {
+	}
+
+	/** The buried side has no evidence: leave it exactly as it is. */
+	private record NoEvidence() implements Verdict {
+	}
+
+	/** The junk loses: clear from {@code junkStarts}, keeping {@code evidence}. */
+	private record Clear(AddressSet junkStarts, AddressSet evidence) implements Verdict {
+	}
+
+	/** Weigh the evidence on both sides of the conflict burying {@code buried}. */
+	private static Verdict judge(Program program, Address buried) {
+		PseudoInstruction decoded = CodeSeeds.decode(new PseudoDisassembler(program), buried);
+		if (decoded == null || decoded.getLength() <= 0) {
+			return new Undecodable();
+		}
+		AddressSet junkStarts = collectJunkClearStarts(program, buried, decoded.getLength());
+		if (junkStarts == null) {
+			return new BothSides();
+		}
+		if (junkStarts.isEmpty()) {
+			return new NoJunk();
+		}
+		AddressSet evidence = new AddressSet();
+		if (!buriedHasEvidence(program, buried, junkStarts, evidence)) {
+			return new NoEvidence();
+		}
+		return new Clear(junkStarts, evidence);
 	}
 
 	/**
@@ -142,19 +177,10 @@ final class ConflictArbitration {
 	 */
 	static boolean recover(Program program, Address buried, AddressSet decoded,
 			TaskMonitor monitor) {
-		PseudoInstruction pseudo = CodeSeeds.decode(new PseudoDisassembler(program), buried);
-		if (pseudo == null || pseudo.getLength() <= 0) {
+		if (!(judge(program, buried) instanceof Clear clear)) {
 			return false;
 		}
-		AddressSet junkStarts = collectJunkClearStarts(program, buried, pseudo.getLength());
-		if (junkStarts == null || junkStarts.isEmpty()) {
-			return false;
-		}
-		AddressSet evidence = new AddressSet();
-		if (!buriedHasEvidence(program, buried, junkStarts, evidence)) {
-			return false;
-		}
-		new ClearFlowAndRepairCmd(junkStarts, evidence, false, false, false)
+		new ClearFlowAndRepairCmd(clear.junkStarts(), clear.evidence(), false, false, false)
 				.applyTo(program, monitor);
 		DisassembleCommand disassemble = new DisassembleCommand(buried, null, true);
 		disassemble.enableCodeAnalysis(false);
