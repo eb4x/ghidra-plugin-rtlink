@@ -596,6 +596,10 @@ public final class RTLinkSampleGenerator {
 				if (fixup.label != null && owner == null) {
 					throw new IllegalStateException(name + ": undefined label " + fixup.label);
 				}
+				if (fixup.kind == Kind.FAR_OFFSET && owner != fixup.target) {
+					throw new IllegalStateException(name + ": far pointer to " + fixup.label +
+						" names " + fixup.target.name + ", which does not define it");
+				}
 				int value = switch (fixup.kind) {
 					case REL8 -> local(fixup.label) - (fixup.site + 1);
 					case REL16 -> local(fixup.label) - (fixup.site + 2);

@@ -421,10 +421,11 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 			builder.disassemble("0x2000:0x0080", 1, true);
 			addAnalysisJump(builder, JMP, "0x2000:0x0080");
 
-			resolve(builder);
+			assertEquals("the dispatch itself is still resolved", 1, resolve(builder));
 
-			assertTrue("a resolution no constant explains must survive",
-				computedJumpTargets(builder, JMP).contains(builder.addr("0x2000:0x0080")));
+			assertEquals("a resolution no constant explains survives beside the true ones",
+				Set.of(builder.addr("0x2000:0x0080"), builder.addr(BODY_A), builder.addr(BODY_B)),
+				computedJumpTargets(builder, JMP));
 		}
 		finally {
 			builder.dispose();

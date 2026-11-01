@@ -67,7 +67,7 @@ final class FillerIslands {
 	private FillerIslands() {
 	}
 
-	/** Clear every unclaimed island of instructions decoded from fill; returns how many. */
+	/** Clear every unclaimed island of instructions decoded from fill; returns how many instructions. */
 	static int clear(Program program, TaskMonitor monitor) throws CancelledException {
 		Listing listing = program.getListing();
 		Set<Address> visited = new LinkedHashSet<>();

@@ -216,6 +216,10 @@ public class RTLinkViceroyScript extends GhidraScript {
 		var extra = new java.util.ArrayList<String>();
 		for (String name : new String[] { "CODE_94", "CODE_98" }) {
 			MemoryBlock block = currentProgram.getMemory().getBlock(name);
+			if (block == null) {
+				println("UNEXPECTED: no block " + name + " — is this the GOG build of VICEROY.EXE?");
+				return false;
+			}
 			for (Function f : functions.getFunctions(
 				new ghidra.program.model.address.AddressSet(block.getStart(), block.getEnd()), true)) {
 				if (!expected.contains(f.getEntryPoint()) && !tolerated.contains(f.getEntryPoint())) {

@@ -735,11 +735,14 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 			builder.disassemble("0x1000:0x0110", 5, true);
 			builder.createFunction("0x1000:0x0110");
 
-			fillGaps(builder);
+			assertEquals("no gap is filled", 0, fillGaps(builder));
 
 			assertNull("a jump slot is no routine", builder.getProgram()
 					.getFunctionManager()
 					.getFunctionAt(builder.addr("0x1000:0x0101")));
+			assertNull("nor is it decoded", builder.getProgram()
+					.getListing()
+					.getInstructionAt(builder.addr("0x1000:0x0101")));
 		}
 		finally {
 			builder.dispose();
@@ -1048,7 +1051,8 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 			builder.createFunction("0x1000:0x0125");
 			builder.createFunction("0x1000:0x0120");
 
-			sealNonReturning(builder);
+			assertEquals("the routine above terminates, but nothing calls it", 0,
+				sealNonReturning(builder));
 
 			Listing listing = builder.getProgram().getListing();
 			assertEquals("the callee's INT 21h is not an exit", FlowOverride.NONE,
@@ -1411,7 +1415,8 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 			builder.disassemble("0x1000:0x0100", 6, true);
 			builder.disassemble("0x1000:0x0110", 16, false); // junk decoded from the fill
 
-			clearFiller(builder);
+			assertEquals("the eight 00 00 instructions decoded from the fill are cleared", 8,
+				clearFiller(builder));
 
 			Instruction mov = builder.getProgram()
 					.getListing()

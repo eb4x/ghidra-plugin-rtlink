@@ -96,7 +96,11 @@ public class RTLinkExtractTest {
 			byte[] rel = Files.readAllBytes(out.resolve(name + ".rel.bin"));
 			boolean[] site = new boolean[raw.length];
 			for (Entry e : page.entries()) {
-				int delta = e.list() == 1 ? 0x1000 : 0x2000;
+				int delta = switch (e.list()) {
+					case 1 -> 0x1000;
+					case 2 -> 0x2000;
+					default -> 0; // list 3 is applied unrelocated
+				};
 				assertEquals(name + " site 0x" + Integer.toHexString(e.site()),
 					(RTLinkExtract.word(raw, e.site()) + delta) & 0xffff,
 					RTLinkExtract.word(rel, e.site()));

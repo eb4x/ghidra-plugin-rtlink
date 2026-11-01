@@ -85,7 +85,11 @@ public class RTLinkSmokeScript extends GhidraScript {
 			fail("no symbol " + name);
 			return null;
 		}
-		return symbols.next().getAddress();
+		Address at = symbols.next().getAddress();
+		if (symbols.hasNext()) {
+			fail("more than one symbol " + name);
+		}
+		return at;
 	}
 
 	// ---------------------------------------------------------------- overlay analyzer
