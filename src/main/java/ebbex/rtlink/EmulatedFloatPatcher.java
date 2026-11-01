@@ -227,38 +227,14 @@ final class EmulatedFloatPatcher {
 		Memory memory = program.getMemory();
 		Address addr = insn.getMinAddress();
 		try {
-			// Work out the real instruction's extent first, while only reading. The
-			// rewritten instruction is at least as long as the INT it replaces, and the
-			// code after it was decoded from what are really its operand bytes.
-			byte opcode;
-			int span;
+			Rewrite rewrite = plan(memory, addr, vector);
+			if (rewrite == null) {
+				return null;
+			}
+			byte opcode = rewrite.opcode();
+			int span = rewrite.span();
+			int storedEsc = rewrite.storedEsc();
 			Address escAddr = addr.add(2);
-			int storedEsc = -1; // the INT 3Ch byte, when the rewrite changes it
-
-			if (vector <= LAST_ESC_INT) {
-				// CD 3n modrm...  ->  9B D8+n modrm...   (WAIT + ESC; operands untouched)
-				opcode = (byte) (FIRST_ESC_OPCODE + vector - FIRST_ESC_INT);
-				span = 3 + displacementLength(memory, escAddr);
-			}
-			else if (vector == WAIT_INT) {
-				// CD 3D  ->  9B 90   (WAIT + NOP; FWAIT takes no operands)
-				opcode = OPCODE_NOP;
-				span = 2;
-			}
-			else {
-				// CD 3C <b> modrm...  ->  9B <seg> <ESC> modrm...
-				// Bits 7-6 of <b> pick the segment, and the ESC is <b> with both put back.
-				// See SEGMENT_OVERRIDE_INT.
-				int b = Byte.toUnsignedInt(memory.getByte(escAddr));
-				if ((b & ESC_LOW_MASK) != ESC_LOW_BITS) {
-					return null; // not an ESC under any segment; leave it as an INT
-				}
-				opcode = SEGMENT_PREFIXES[b >> 6];
-				if ((b | ESC_SEGMENT_BITS) != b) {
-					storedEsc = b;
-				}
-				span = 4 + displacementLength(memory, addr.add(3));
-			}
 
 			// Clear before writing: Ghidra refuses to modify bytes that a defined
 			// instruction covers, so the INT and the mis-decoded code after it have to go
@@ -312,6 +288,44 @@ final class EmulatedFloatPatcher {
 		catch (MemoryAccessException | AddressOutOfBoundsException _) {
 			return null;
 		}
+	}
+
+	/**
+	 * The rewrite of one emulator call, worked out before anything is changed.
+	 *
+	 * @param opcode the byte that follows the {@code WAIT}: an ESC, a segment prefix, or a NOP
+	 * @param span the real instruction's length, at least the {@code INT}'s
+	 * @param storedEsc the {@code INT 3Ch} operand byte when the rewrite changes it, else -1
+	 */
+	private record Rewrite(byte opcode, int span, int storedEsc) {
+	}
+
+	/**
+	 * Plan the rewrite of the emulator call {@code INT vector} at {@code addr}, only reading;
+	 * null when it is not one to rewrite. The code after it was decoded from what are really
+	 * its operand bytes, so the span is read from those.
+	 */
+	private static Rewrite plan(Memory memory, Address addr, int vector)
+			throws MemoryAccessException {
+		Address escAddr = addr.add(2);
+		if (vector <= LAST_ESC_INT) {
+			// CD 3n modrm...  ->  9B D8+n modrm...   (WAIT + ESC; operands untouched)
+			return new Rewrite((byte) (FIRST_ESC_OPCODE + vector - FIRST_ESC_INT),
+				3 + displacementLength(memory, escAddr), -1);
+		}
+		if (vector == WAIT_INT) {
+			// CD 3D  ->  9B 90   (WAIT + NOP; FWAIT takes no operands)
+			return new Rewrite(OPCODE_NOP, 2, -1);
+		}
+		// CD 3C <b> modrm...  ->  9B <seg> <ESC> modrm...
+		// Bits 7-6 of <b> pick the segment, and the ESC is <b> with both put back.
+		// See SEGMENT_OVERRIDE_INT.
+		int b = Byte.toUnsignedInt(memory.getByte(escAddr));
+		if ((b & ESC_LOW_MASK) != ESC_LOW_BITS) {
+			return null; // not an ESC under any segment; leave it as an INT
+		}
+		return new Rewrite(SEGMENT_PREFIXES[b >> 6], 4 + displacementLength(memory, addr.add(3)),
+			(b | ESC_SEGMENT_BITS) != b ? b : -1);
 	}
 
 	/**
