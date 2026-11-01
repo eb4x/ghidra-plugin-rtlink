@@ -353,12 +353,9 @@ final class DispatchStubs {
 				RefType.UNCONDITIONAL_CALL, SourceType.ANALYSIS, 0);
 
 			CodeSeeds.label(symbolTable,
-				String.format(OverlayNames.STUB_PREFIX + "%0" + width + "d_%04X",
-					pageNumber, targetOffset),
-				stubAddr);
+				OverlayNames.stubLabel(pageNumber, targetOffset, width), stubAddr);
 			CodeSeeds.label(symbolTable,
-				String.format("OVL%0" + width + "d_%04X", pageNumber, targetOffset),
-				targetAddr);
+				OverlayNames.targetLabel(pageNumber, targetOffset, width), targetAddr);
 
 			overlayEntryPoints.add(targetAddr);
 			pendingThunks.add(new StubTarget(stubAddr, targetAddr, stubSize));

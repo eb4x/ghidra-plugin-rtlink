@@ -11,10 +11,43 @@ import ghidra.program.model.mem.MemoryBlock;
  */
 final class OverlayNames {
 
+	/** Prefix of an overlay page's code block, {@code OVERLAY_NN}. */
+	static final String BLOCK_PREFIX = "OVERLAY_";
+
+	/** Prefix of an overlay page's header block, {@code RTLINK_HDR_NN}. */
+	static final String HEADER_PREFIX = "RTLINK_HDR_";
+
 	/** Prefix of a dispatch stub's gate label, {@code OVLSTUB_NN_OOOO}. */
 	static final String STUB_PREFIX = "OVLSTUB_";
 
+	/** Prefix of a dispatch stub's target label, {@code OVLNN_OOOO}. */
+	static final String TARGET_PREFIX = "OVL";
+
 	private OverlayNames() {
+	}
+
+	/** The code block of {@code record}: {@code OVERLAY_NN}. */
+	static String blockName(int record, int width) {
+		return BLOCK_PREFIX + number(record, width);
+	}
+
+	/** The header block of {@code record}: {@code RTLINK_HDR_NN}. */
+	static String headerName(int record, int width) {
+		return HEADER_PREFIX + number(record, width);
+	}
+
+	/** The gate label of a stub into {@code record} at {@code offset}: {@code OVLSTUB_NN_OOOO}. */
+	static String stubLabel(int record, int offset, int width) {
+		return STUB_PREFIX + number(record, width) + String.format("_%04X", offset);
+	}
+
+	/** The label of a stub's target in {@code record} at {@code offset}: {@code OVLNN_OOOO}. */
+	static String targetLabel(int record, int offset, int width) {
+		return TARGET_PREFIX + number(record, width) + String.format("_%04X", offset);
+	}
+
+	private static String number(int record, int width) {
+		return String.format("%0" + width + "d", record);
 	}
 
 	/**
@@ -53,6 +86,6 @@ final class OverlayNames {
 
 	/** The overlay block holding {@code record}'s code, or null. */
 	static MemoryBlock findOverlayBlock(Memory memory, int record, int width) {
-		return memory.getBlock(String.format("OVERLAY_%0" + width + "d", record));
+		return memory.getBlock(blockName(record, width));
 	}
 }

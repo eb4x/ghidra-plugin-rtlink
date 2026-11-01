@@ -252,7 +252,8 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	private static boolean hasOverlayBlocks(Program program) {
 		for (MemoryBlock block : program.getMemory().getBlocks()) {
 			String name = block.getName();
-			if (name.startsWith("OVERLAY_") || name.startsWith("RTLINK_HDR_")) {
+			if (name.startsWith(OverlayNames.BLOCK_PREFIX) ||
+				name.startsWith(OverlayNames.HEADER_PREFIX)) {
 				return true;
 			}
 		}
@@ -344,7 +345,7 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			long codeFileOffset = page.codeFileOffset();
 			codeSize = (int) Math.min(codeSize, fileSize - codeFileOffset);
 
-			String blockName = String.format("OVERLAY_%0" + width + "d", page.pageIndex());
+			String blockName = OverlayNames.blockName(page.pageIndex(), width);
 
 			// Note the module bases known from the relocation table in the block
 			// comment; CS-relative absolute offsets in module code (e.g. switch jump
@@ -553,7 +554,7 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 
 			int headerAndRelocSize = page.header().overheadSizeBytes();
 			Address headerBase = AddressSpace.OTHER_SPACE.getAddress(0);
-			String name = String.format("RTLINK_HDR_%0" + width + "d", page.pageIndex());
+			String name = OverlayNames.headerName(page.pageIndex(), width);
 
 			MemoryBlock headerBlock = MemoryBlockUtils.createInitializedBlock(program, true,
 				name, headerBase, fileBytes, page.fileOffset(), headerAndRelocSize,
