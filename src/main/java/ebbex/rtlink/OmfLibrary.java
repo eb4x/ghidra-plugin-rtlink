@@ -136,7 +136,7 @@ final class OmfLibrary {
 				int length = u16(bytes, at + 1);
 				int content = at + 3;
 				int contentEnd = content + length - 1; // the checksum byte closes the record
-				if (contentEnd > bytes.length || length < 1) {
+				if (contentEnd >= bytes.length || length < 1) {
 					throw new IOException(String.format("bad record at 0x%x", at));
 				}
 				Cursor cursor = new Cursor(bytes, content, contentEnd);

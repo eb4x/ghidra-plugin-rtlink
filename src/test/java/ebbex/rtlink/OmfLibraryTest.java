@@ -3,6 +3,7 @@ package ebbex.rtlink;
 import static org.junit.Assert.*;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 
 import org.junit.Test;
@@ -39,6 +40,15 @@ public class OmfLibraryTest {
 		IOException e = assertThrows(IOException.class,
 			() -> OmfLibrary.parse(OmfTestLibrary.library(spec)));
 		assertTrue(e.getMessage(), e.getMessage().contains("nested deeper"));
+	}
+
+	/** An object cut short by its final checksum byte is truncated, not a complete module. */
+	@Test
+	public void testRecordMissingItsChecksumIsRefused() {
+		byte[] object = OmfTestLibrary.module(module());
+		byte[] truncated = Arrays.copyOf(object, object.length - 1);
+		IOException e = assertThrows(IOException.class, () -> OmfLibrary.parse(truncated));
+		assertTrue(e.getMessage(), e.getMessage().contains("bad record"));
 	}
 
 	/** An empty unit repeated 2^32-1 times adds nothing, at once. */
