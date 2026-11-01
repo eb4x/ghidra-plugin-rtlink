@@ -29,7 +29,7 @@ seven classes and not one. They share package-private statics and must stay in
   `CsDispatch` is the `JMP CS:[BX+disp16]` idiom and its `CMP` guard count, shared by
   the first two; `CaseRange` bounds a dispatch's case targets by its function. It also
   claims the VM dispatch `JMP DX` for `RTLinkDispatcherJumpAnalyzer` (below) where the
-  jump resolves against its page.
+  jump resolves against its page, and only while that analyzer is enabled.
 - **`RTLinkDispatcherJumpAnalyzer`** — BYTE, `DATA_ANALYSIS.before()`. Resolves the VM
   nucleus' constant-pair dispatch (`MOV AX,entry ; MOV DX,body ; … ; MOV [SI-4],AX ;
   JMP DX`). `JMP DX` is a near jump: its targets are `CS:imm` for the `MOV DX`

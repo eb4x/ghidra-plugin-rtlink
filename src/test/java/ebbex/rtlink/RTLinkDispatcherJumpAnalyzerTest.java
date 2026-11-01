@@ -1,6 +1,7 @@
 package ebbex.rtlink;
 
 import static org.junit.Assert.*;
+import static org.junit.Assume.assumeTrue;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -92,6 +93,55 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 		builder.withTransaction(() -> builder.getProgram().getReferenceManager()
 				.addMemoryReference(builder.addr(from), builder.addr(to), RefType.COMPUTED_JUMP,
 					SourceType.ANALYSIS, 0));
+	}
+
+	/** Claim the dispatch jumps as the table pass does, inside a transaction. */
+	private static int claim(ProgramBuilder builder) throws Exception {
+		Program program = builder.getProgram();
+		return builder.tx(() -> RTLinkDispatcherJumpAnalyzer.claimDispatchJumps(program,
+			program.getMemory(), TaskMonitor.DUMMY));
+	}
+
+	/**
+	 * Where {@code currentCS} resolves against the page (stock Ghidra), the jump is claimed with
+	 * its two {@code CS:imm} references. Skipped on an SDK whose {@code currentCS} reads CS from
+	 * context: there the claim stands aside by design.
+	 */
+	@Test
+	public void testDispatchJumpIsClaimedWhereCsResolvesAgainstThePage() throws Exception {
+		ProgramBuilder builder = dispatchProgram();
+		try {
+			Program program = builder.getProgram();
+			assumeTrue(X86.resolvesAgainstPage(program,
+				program.getListing().getInstructionAt(builder.addr(JMP))));
+
+			assertEquals(1, claim(builder));
+			assertEquals(Set.of(builder.addr(BODY_A), builder.addr(BODY_B)),
+				computedJumpTargets(builder, JMP));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/** With the dispatcher analyzer switched off, the table pass claims nothing for it. */
+	@Test
+	public void testDisabledAnalyzerClaimsNothing() throws Exception {
+		ProgramBuilder builder = dispatchProgram();
+		try {
+			Program program = builder.getProgram();
+			assumeTrue("only where a claim would otherwise happen", X86.resolvesAgainstPage(
+				program, program.getListing().getInstructionAt(builder.addr(JMP))));
+			builder.withTransaction(() -> program.getOptions(Program.ANALYSIS_PROPERTIES)
+					.setBoolean(RTLinkDispatcherJumpAnalyzer.NAME, false));
+			Set<Address> before = computedJumpTargets(builder, JMP);
+
+			assertEquals(0, claim(builder));
+			assertEquals("no reference is added", before, computedJumpTargets(builder, JMP));
+		}
+		finally {
+			builder.dispose();
+		}
 	}
 
 	@Test

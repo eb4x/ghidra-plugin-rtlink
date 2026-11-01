@@ -71,7 +71,7 @@ import ghidra.util.task.TaskMonitor;
  */
 public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 
-	private static final String NAME = "RTLink Dispatcher Jump";
+	static final String NAME = "RTLink Dispatcher Jump";
 	private static final String DESCRIPTION =
 		"Resolves the RTLink/Plus VM nucleus' constant-pair dispatch (MOV DX,imm16 ; " +
 			"MOV [SI-disp],AX ; JMP DX): deletes the computed jumps stock resolves against the " +
@@ -199,10 +199,14 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 	 * read as a switch at all. Only where the jump does resolve against the page
 	 * ({@link X86#resolvesAgainstPage}): with #9703 the switch pass reads it correctly, and
 	 * pre-empting it there moves VICEROY's nucleus function boundaries ({@code 210d:0c7f} ends
-	 * up inside {@code 210d:0e52}).
+	 * up inside {@code 210d:0e52}). Not at all where this analyzer is switched off: the claim is
+	 * half of its work, and the other half would never follow.
 	 */
 	static int claimDispatchJumps(Program program, AddressSetView set, TaskMonitor monitor)
 			throws CancelledException {
+		if (!RTLinkProgram.isAnalyzerEnabled(program, NAME)) {
+			return 0;
+		}
 		List<Instruction> dispatchers = new ArrayList<>();
 		for (Instruction jmp : program.getListing().getInstructions(set, true)) {
 			monitor.checkCancelled();
