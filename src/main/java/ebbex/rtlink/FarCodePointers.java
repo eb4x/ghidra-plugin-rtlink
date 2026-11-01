@@ -65,14 +65,20 @@ final class FarCodePointers {
 	private static final int DX = 2;
 	private static final int DIRECT = -1;
 
-	/** A tracked value: CS itself, or a 16-bit constant. */
-	private sealed interface Value permits HoldsCs, Constant {
+	/**
+	 * A tracked value: CS itself, a 16-bit constant, or, on the stack only, a value nothing is
+	 * known about (deques refuse null).
+	 */
+	private sealed interface Value permits HoldsCs, Constant, Unknown {
 	}
 
 	private record HoldsCs() implements Value {
 	}
 
 	private record Constant(int value) implements Value {
+	}
+
+	private record Unknown() implements Value {
 	}
 
 	private static final Value CS_VALUE = new HoldsCs();
@@ -487,16 +493,13 @@ final class FarCodePointers {
 				return null;
 			}
 			Value value = stack.pop();
-			return value == UNKNOWN ? null : value;
+			return value instanceof Unknown ? null : value;
 		}
 
 		private static Value nullable(Value value) {
-			return value == null ? UNKNOWN : value;
+			return value == null ? new Unknown() : value;
 		}
 	}
-
-	/** A stack placeholder for a value nothing is known about (deques refuse null). */
-	private static final Value UNKNOWN = new Constant(Integer.MIN_VALUE);
 
 	private static final int BX = 3;
 	private static final int BP = 5;
