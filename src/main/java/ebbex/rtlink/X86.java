@@ -10,7 +10,6 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
-import ghidra.program.model.scalar.Scalar;
 
 /**
  * Facts about 16-bit real-mode x86 instructions that several analyzers need, read the way they
@@ -551,10 +550,6 @@ final class X86 {
 			}
 		}
 		return false;
-	}
-
-	static boolean isScalar(Scalar scalar, long value) {
-		return scalar != null && scalar.getUnsignedValue() == value;
 	}
 
 	// ---------------------------------------------------------------- segments
