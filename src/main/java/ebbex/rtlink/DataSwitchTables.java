@@ -61,7 +61,7 @@ final class DataSwitchTables {
 	 * all from this one dispatch. Adding computed references is what makes it stand down.
 	 */
 	static List<Address> recover(Program program, Instruction dispatch, MemoryBlock block) {
-		Register base = dataDispatchRegister(dispatch);
+		Register base = dataDispatchRegister(program, dispatch);
 		if (base == null) {
 			return null;
 		}
@@ -74,9 +74,8 @@ final class DataSwitchTables {
 		boolean indexAdded = false;
 		for (int i = 0; i < POINTER_SCAN_LIMIT && instruction != null; i++) {
 			if (!indexAdded) {
-				if ("ADD".equals(instruction.getMnemonicString()) &&
-					base.equals(instruction.getRegister(0)) &&
-					instruction.getRegister(1) != null) {
+				X86.RegisterPair add = X86.registerPair(program, instruction, X86.ADD * 8);
+				if (add != null && base.equals(add.destination())) {
 					indexAdded = true;
 				}
 				else if (X86.changes(instruction, base)) {
@@ -154,7 +153,7 @@ final class DataSwitchTables {
 	 * A {@code CS:} override means the CS-relative form, which {@link CsDispatch}
 	 * handles; a displacement means a single function pointer, not a table.
 	 */
-	private static Register dataDispatchRegister(Instruction dispatch) {
+	private static Register dataDispatchRegister(Program program, Instruction dispatch) {
 		if (!dispatch.getFlowType().isComputed() || !dispatch.getFlowType().isJump()) {
 			return null;
 		}
@@ -167,13 +166,13 @@ final class DataSwitchTables {
 		if (modrm.mod() != 0 || modrm.reg() != DATA_DISPATCH_REG_OPCODE) {
 			return null;
 		}
-		// The operand is memory, not a register, so getRegister() does not answer this —
-		// the base register has to be picked out of the operand's objects.
-		for (Object operand : dispatch.getOpObjects(0)) {
-			if (operand instanceof Register register) {
-				return register;
-			}
-		}
-		return null;
+		// A single base register: rm 4 = [SI], 5 = [DI], 7 = [BX]. The two-register forms
+		// ([BX+SI] and the like) are not a table pointer built in one register.
+		return switch (modrm.rm()) {
+			case 4 -> X86.register(program, 6, 2);
+			case 5 -> X86.register(program, 7, 2);
+			case 7 -> X86.register(program, 3, 2);
+			default -> null;
+		};
 	}
 }

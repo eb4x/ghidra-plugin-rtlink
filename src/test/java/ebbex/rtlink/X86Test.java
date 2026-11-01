@@ -95,6 +95,81 @@ public class X86Test extends AbstractGenericTest {
 		with("8b d8", (_, insn) -> assertNull(X86.movImmediate(insn))); // MOV BX,AX
 	}
 
+	/** Every encoding of an ALU op with an immediate on a register, and none on memory. */
+	@Test
+	public void testAluImmediateComesFromTheBytes() throws Exception {
+		with("3d 22 00", (program, insn) -> assertEquals( // CMP AX,0x22
+			new X86.RegisterImmediate(reg(program, "AX"), 0x22), X86.aluImmediate(program, insn, X86.CMP)));
+		with("3c 58", (program, insn) -> assertEquals( // CMP AL,0x58
+			new X86.RegisterImmediate(reg(program, "AL"), 0x58), X86.aluImmediate(program, insn, X86.CMP)));
+		with("81 fb 10 01", (program, insn) -> assertEquals( // CMP BX,0x110
+			new X86.RegisterImmediate(reg(program, "BX"), 0x110), X86.aluImmediate(program, insn, X86.CMP)));
+		with("83 f9 09", (program, insn) -> assertEquals( // CMP CX,9
+			new X86.RegisterImmediate(reg(program, "CX"), 9), X86.aluImmediate(program, insn, X86.CMP)));
+		with("83 f9 ff", (program, insn) -> assertEquals("83 sign-extends", // CMP CX,-1
+			new X86.RegisterImmediate(reg(program, "CX"), 0xffff), X86.aluImmediate(program, insn, X86.CMP)));
+		with("80 e4 0f", (program, insn) -> assertEquals( // AND AH,0xf
+			new X86.RegisterImmediate(reg(program, "AH"), 0xf), X86.aluImmediate(program, insn, X86.AND)));
+		with("3d 22 00", (program, insn) -> assertNull("not an AND", X86.aluImmediate(program, insn, X86.AND)));
+		with("83 3e 56 2a 09", (program, insn) -> assertNull("CMP word ptr [0x2a56],9: memory", //
+			X86.aluImmediate(program, insn, X86.CMP)));
+	}
+
+	/** The direction bit decides which register is the destination. */
+	@Test
+	public void testRegisterPairFollowsTheDirectionBit() throws Exception {
+		with("8b d8", (program, insn) -> assertEquals( // MOV BX,AX (8B: reg <- rm)
+			new X86.RegisterPair(reg(program, "BX"), reg(program, "AX")), X86.registerPair(program, insn, X86.MOV)));
+		with("89 c3", (program, insn) -> assertEquals( // MOV BX,AX (89: rm <- reg)
+			new X86.RegisterPair(reg(program, "BX"), reg(program, "AX")), X86.registerPair(program, insn, X86.MOV)));
+		with("03 c0", (program, insn) -> assertEquals( // ADD AX,AX
+			new X86.RegisterPair(reg(program, "AX"), reg(program, "AX")), X86.registerPair(program, insn, X86.ADD * 8)));
+		with("02 46 fe", (program, insn) -> assertNull("ADD AL,[BP-2]: memory", //
+			X86.registerPair(program, insn, X86.ADD * 8)));
+	}
+
+	@Test
+	public void testShiftsExchangesAndDivides() throws Exception {
+		with("d1 e0", (program, insn) -> assertEquals( // SHL AX,1
+			new X86.Shift(X86.SHL, reg(program, "AX"), 1, false), X86.shift(program, insn)));
+		with("c1 e0 01", (program, insn) -> assertEquals( // SHL AX,1 (186 form)
+			new X86.Shift(X86.SHL, reg(program, "AX"), 1, false), X86.shift(program, insn)));
+		with("d2 e8", (program, insn) -> assertEquals( // SHR AL,CL
+			new X86.Shift(X86.SHR, reg(program, "AL"), 0, true), X86.shift(program, insn)));
+		with("93", (program, insn) -> assertEquals( // XCHG AX,BX
+			new X86.RegisterPair(reg(program, "AX"), reg(program, "BX")), X86.exchange(program, insn)));
+		with("87 d9", (program, insn) -> { // XCHG CX,BX
+			X86.RegisterPair pair = X86.exchange(program, insn);
+			assertEquals(java.util.Set.of(reg(program, "CX"), reg(program, "BX")),
+				java.util.Set.of(pair.destination(), pair.source()));
+		});
+		with("90", (program, insn) -> assertNull("NOP is no exchange", X86.exchange(program, insn)));
+		with("f6 f3", (program, insn) -> assertEquals(reg(program, "BL"), X86.byteDivisor(program, insn)));
+		with("fe c1", (program, insn) -> assertEquals(reg(program, "CL"), X86.incremented(program, insn)));
+		with("41", (program, insn) -> assertEquals(reg(program, "CX"), X86.incremented(program, insn)));
+	}
+
+	@Test
+	public void testJumpsByEncoding() throws Exception {
+		with("ff e2", (program, insn) -> { // JMP DX
+			assertEquals(reg(program, "DX"), X86.jumpRegister(program, insn));
+			assertTrue(X86.isUnconditionalJump(insn));
+			assertFalse(X86.isFarJump(insn));
+		});
+		with("2e ff 2e 56 06", (program, insn) -> { // JMPF CS:[0x656]
+			assertNull(X86.jumpRegister(program, insn));
+			assertTrue(X86.isFarJump(insn));
+			assertTrue(X86.isUnconditionalJump(insn));
+		});
+		with("ea 60 06 5d 27", (_, insn) -> assertTrue(X86.isFarJump(insn))); // JMPF 275d:0660
+		with("eb fe", (_, insn) -> assertTrue(X86.isUnconditionalJump(insn)));
+		with("74 fe", (_, insn) -> assertFalse("JZ is conditional", X86.isUnconditionalJump(insn)));
+		with("ff d2", (program, insn) -> { // CALL DX
+			assertNull(X86.jumpRegister(program, insn));
+			assertFalse(X86.isUnconditionalJump(insn));
+		});
+	}
+
 	@Test
 	public void testPrefixesAndSegmentOverride() throws Exception {
 		with("f3 26 a5", (program, insn) -> { // REP MOVSW ES:..

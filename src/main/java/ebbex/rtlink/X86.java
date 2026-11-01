@@ -152,6 +152,219 @@ final class X86 {
 		return previous != null && block.contains(previous.getMinAddress()) ? previous : null;
 	}
 
+	// ---------------------------------------------------------------- operands from bytes
+
+	private static final String[] REGISTERS_16 = { "AX", "CX", "DX", "BX", "SP", "BP", "SI", "DI" };
+	private static final String[] REGISTERS_8 = { "AL", "CL", "DL", "BL", "AH", "CH", "DH", "BH" };
+
+	/** The general register numbered {@code n} (0-7) in a ModRM or opcode, {@code size} 1 or 2 bytes. */
+	static Register register(Program program, int n, int size) {
+		return program.getLanguage().getRegister((size == 1 ? REGISTERS_8 : REGISTERS_16)[n & 7]);
+	}
+
+	/** A register and the immediate an instruction combines with it. */
+	record RegisterImmediate(Register register, long value) {
+	}
+
+	/** The two registers of a register-to-register instruction, destination first. */
+	record RegisterPair(Register destination, Register source) {
+	}
+
+	/** The opcode and, when present, the ModRM byte of an instruction past its prefixes. */
+	private record Opcode(byte[] bytes, int at, int op) {
+
+		/** The ModRM byte after the opcode, or null past the end. */
+		ModRm modRm() {
+			return at + 1 < bytes.length ? X86.modRm(bytes, at + 1) : null;
+		}
+	}
+
+	/** The instruction's opcode past its prefixes, or null with a {@code 66} prefix or no opcode. */
+	private static Opcode opcode(Instruction instruction) {
+		byte[] b = bytes(instruction);
+		int i = opcodeIndex(b);
+		if (i < 0 || hasOperandSizePrefix(b, i)) {
+			return null;
+		}
+		return new Opcode(b, i, b[i] & 0xff);
+	}
+
+	/**
+	 * The register and immediate of an ALU instruction with immediate operand {@code /ext}
+	 * ({@code 0} ADD, {@code 1} OR, {@code 4} AND, {@code 5} SUB, {@code 6} XOR, {@code 7} CMP)
+	 * on a register: the accumulator forms {@code ext*8+4 ib} (AL) and {@code ext*8+5 iw} (AX),
+	 * or {@code 80 /ext ib}, {@code 81 /ext iw} and {@code 83 /ext ib} with {@code mod == 3}.
+	 * The {@code 83} immediate is sign-extended to 16 bits, as the CPU does. Null for any other
+	 * instruction, a memory operand included.
+	 */
+	static RegisterImmediate aluImmediate(Program program, Instruction instruction, int ext) {
+		Opcode o = opcode(instruction);
+		if (o == null) {
+			return null;
+		}
+		if (o.op() == ext * 8 + 4 || o.op() == ext * 8 + 5) {
+			int size = o.op() == ext * 8 + 4 ? 1 : 2;
+			Long value = immediate(o.bytes(), o.at() + 1, size);
+			return value == null ? null : new RegisterImmediate(register(program, 0, size), value);
+		}
+		if (o.op() < 0x80 || o.op() > 0x83 || o.op() == 0x82) {
+			return null;
+		}
+		ModRm modrm = o.modRm();
+		if (modrm == null || !modrm.isRegister() || modrm.reg() != ext) {
+			return null;
+		}
+		int size = o.op() == 0x80 ? 1 : 2;
+		Long value = immediate(o.bytes(), o.at() + 2, o.op() == 0x81 ? 2 : 1);
+		if (value == null) {
+			return null;
+		}
+		if (o.op() == 0x83) {
+			value = (long) (byte) value.longValue() & 0xffff;
+		}
+		return new RegisterImmediate(register(program, modrm.rm(), size), value);
+	}
+
+	/**
+	 * The registers of a register-to-register ALU or {@code MOV} instruction: opcode
+	 * {@code base} to {@code base+3} with {@code mod == 3}, where {@code base} is
+	 * {@code ext*8} for the ALU group ({@code 00} ADD, {@code 08} OR, {@code 20} AND, …) or
+	 * {@code 0x88} for {@code MOV}. In {@code base} and {@code base+1} the destination is
+	 * {@code rm}, in {@code base+2} and {@code base+3} it is {@code reg}; the even opcodes are
+	 * byte-sized. Null for any other instruction.
+	 */
+	static RegisterPair registerPair(Program program, Instruction instruction, int base) {
+		Opcode o = opcode(instruction);
+		if (o == null || o.op() < base || o.op() > base + 3) {
+			return null;
+		}
+		ModRm modrm = o.modRm();
+		if (modrm == null || !modrm.isRegister()) {
+			return null;
+		}
+		int size = (o.op() & 1) == 0 ? 1 : 2;
+		Register rm = register(program, modrm.rm(), size);
+		Register reg = register(program, modrm.reg(), size);
+		return o.op() - base < 2 ? new RegisterPair(rm, reg) : new RegisterPair(reg, rm);
+	}
+
+	/** Opcode base of {@code MOV r/m,r} for {@link #registerPair}. */
+	static final int MOV = 0x88;
+
+	/** ALU {@code /ext} numbers, for {@link #aluImmediate}; times 8, the {@link #registerPair} base. */
+	static final int ADD = 0, OR = 1, AND = 4, CMP = 7;
+
+	/** A shift of a register: {@code /ext} ({@code 4} SHL, {@code 5} SHR, …) by a count or by CL. */
+	record Shift(int ext, Register register, int count, boolean byCl) {
+	}
+
+	/** Shift {@code /ext} numbers, for {@link Shift#ext}. */
+	static final int SHL = 4, SHR = 5;
+
+	/**
+	 * The shift of a register in {@code instruction}: {@code D0/D1} by 1, {@code D2/D3} by CL,
+	 * {@code C0/C1 ib} by an immediate, all with {@code mod == 3}. Null for any other.
+	 */
+	static Shift shift(Program program, Instruction instruction) {
+		Opcode o = opcode(instruction);
+		if (o == null || !(o.op() >= 0xd0 && o.op() <= 0xd3 || o.op() == 0xc0 || o.op() == 0xc1)) {
+			return null;
+		}
+		ModRm modrm = o.modRm();
+		if (modrm == null || !modrm.isRegister()) {
+			return null;
+		}
+		Register register = register(program, modrm.rm(), (o.op() & 1) == 0 ? 1 : 2);
+		if (o.op() <= 0xd1) {
+			return new Shift(modrm.reg(), register, 1, false);
+		}
+		if (o.op() <= 0xd3) {
+			return new Shift(modrm.reg(), register, 0, true);
+		}
+		Long count = immediate(o.bytes(), o.at() + 2, 1);
+		return count == null ? null : new Shift(modrm.reg(), register, count.intValue(), false);
+	}
+
+	/**
+	 * The two registers {@code XCHG} swaps — {@code 90+r} (AX with r16) or {@code 86/87} with
+	 * {@code mod == 3} — or null for any other instruction ({@code 90} itself is NOP).
+	 */
+	static RegisterPair exchange(Program program, Instruction instruction) {
+		Opcode o = opcode(instruction);
+		if (o == null) {
+			return null;
+		}
+		if (o.op() > 0x90 && o.op() <= 0x97) {
+			return new RegisterPair(register(program, 0, 2), register(program, o.op() - 0x90, 2));
+		}
+		return o.op() == 0x86 || o.op() == 0x87 ? registerPair(program, instruction, 0x84) : null;
+	}
+
+	/** The divisor of a byte {@code DIV r8} ({@code F6 /6}, {@code mod == 3}), or null. */
+	static Register byteDivisor(Program program, Instruction instruction) {
+		Opcode o = opcode(instruction);
+		ModRm modrm = o == null || o.op() != 0xf6 ? null : o.modRm();
+		return modrm != null && modrm.isRegister() && modrm.reg() == 6
+				? register(program, modrm.rm(), 1)
+				: null;
+	}
+
+	/** The register {@code INC} increments — {@code 40+r} or {@code FE/FF /0} with {@code mod == 3} — or null. */
+	static Register incremented(Program program, Instruction instruction) {
+		Opcode o = opcode(instruction);
+		if (o == null) {
+			return null;
+		}
+		if (o.op() >= 0x40 && o.op() <= 0x47) {
+			return register(program, o.op() - 0x40, 2);
+		}
+		ModRm modrm = o.op() == 0xfe || o.op() == 0xff ? o.modRm() : null;
+		return modrm != null && modrm.isRegister() && modrm.reg() == 0
+				? register(program, modrm.rm(), o.op() == 0xfe ? 1 : 2)
+				: null;
+	}
+
+	/** The register a near {@code JMP r16} ({@code FF /4}, {@code mod == 3}) jumps through, or null. */
+	static Register jumpRegister(Program program, Instruction instruction) {
+		Opcode o = opcode(instruction);
+		ModRm modrm = o == null || o.op() != 0xff ? null : o.modRm();
+		return modrm != null && modrm.isRegister() && modrm.reg() == 4
+				? register(program, modrm.rm(), 2)
+				: null;
+	}
+
+	/** True for a far {@code JMP}: {@code EA ptr16:16} or {@code FF /5} through memory. */
+	static boolean isFarJump(Instruction instruction) {
+		Opcode o = opcode(instruction);
+		if (o == null) {
+			return false;
+		}
+		if (o.op() == 0xea) {
+			return true;
+		}
+		ModRm modrm = o.op() == 0xff ? o.modRm() : null;
+		return modrm != null && !modrm.isRegister() && modrm.reg() == 5;
+	}
+
+	/** True for any unconditional {@code JMP}: {@code E9}, {@code EB}, {@code FF /4}, or a {@link #isFarJump far} one. */
+	static boolean isUnconditionalJump(Instruction instruction) {
+		Opcode o = opcode(instruction);
+		if (o == null) {
+			return false;
+		}
+		if (o.op() == 0xe9 || o.op() == 0xeb || isFarJump(instruction)) {
+			return true;
+		}
+		ModRm modrm = o.op() == 0xff ? o.modRm() : null;
+		return modrm != null && modrm.reg() == 4;
+	}
+
+	/** True for a bare one-byte {@code XLAT} ({@code D7}) with no segment override. */
+	static boolean isPlainXlat(Instruction instruction) {
+		byte[] b = bytes(instruction);
+		return b.length == 1 && b[0] == (byte) 0xd7;
+	}
+
 	// ---------------------------------------------------------------- registers
 
 	/** True if {@code a} and {@code b} share bits: {@code AX} and {@code AH}, not {@code AH} and {@code AL}. */
@@ -175,11 +388,12 @@ final class X86 {
 	 * {@code OR AH,AH; JNZ} remainder check after a byte divide (NEBULAR OVERLAY_27).
 	 */
 	static boolean changes(Instruction instruction, Register register) {
-		String mnemonic = instruction.getMnemonicString();
-		if (("OR".equals(mnemonic) || "AND".equals(mnemonic)) &&
-			instruction.getRegister(0) != null &&
-			instruction.getRegister(0).equals(instruction.getRegister(1))) {
-			return false;
+		Program program = instruction.getProgram();
+		for (int base : new int[] { OR * 8, AND * 8 }) {
+			RegisterPair pair = registerPair(program, instruction, base);
+			if (pair != null && pair.destination().equals(pair.source())) {
+				return false;
+			}
 		}
 		return writes(instruction, register);
 	}

@@ -4,8 +4,8 @@ import java.util.Arrays;
 
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.Instruction;
+import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
-import ghidra.program.model.scalar.Scalar;
 
 /**
  * The CS-relative switch idiom, {@code JMP word ptr CS:[BX + disp16]}: its displacement and
@@ -77,11 +77,9 @@ final class CsDispatch {
 	 * rather than guessing.
 	 */
 	static int entryCount(Instruction dispatch, MemoryBlock block) {
+		Program program = dispatch.getProgram();
 		Instruction exchange = dispatch.getPrevious();
-		if (exchange == null || !"XCHG".equals(exchange.getMnemonicString())) {
-			return -1;
-		}
-		Register index = otherRegister(exchange, "BX");
+		Register index = exchange == null ? null : exchangedWithBx(program, exchange);
 		if (index == null) {
 			return -1;
 		}
@@ -99,15 +97,15 @@ final class CsDispatch {
 		Register pendingDivisor = null; // divide crossed, its constant not yet seen
 		Instruction instruction = X86.previousInBlock(scale, block);
 		for (int i = 0; i < GUARD_SCAN_LIMIT && instruction != null; i++) {
-			if ("CMP".equals(instruction.getMnemonicString()) &&
-				index.equals(instruction.getRegister(0))) {
-				Scalar bound = instruction.getScalar(1);
+			if (comparesWith(instruction, index)) {
+				Long bound = guardBound(program, instruction, index);
 				if (bound == null || pendingDivisor != null) {
 					return -1;
 				}
-				long entries = bound.getUnsignedValue() / divisor + 1;
+				long entries = bound / divisor + 1;
 				return entries > MAX_TABLE_ENTRIES ? -1 : (int) entries;
 			}
+			Register byteDivisor = byteDivisorOf(program, instruction, index);
 			if (pendingDivisor != null && "MOV".equals(instruction.getMnemonicString()) &&
 				pendingDivisor.equals(X86.movDestination(instruction))) {
 				Long value = X86.movImmediate(instruction);
@@ -117,11 +115,11 @@ final class CsDispatch {
 				divisor = value;
 				pendingDivisor = null;
 			}
-			else if (isByteDivideOf(instruction, index)) {
+			else if (byteDivisor != null) {
 				if (divisor != 1 || pendingDivisor != null) {
 					return -1; // a second divide: not an idiom this understands
 				}
-				pendingDivisor = instruction.getRegister(0);
+				pendingDivisor = byteDivisor;
 			}
 			else if (X86.changes(instruction, index)) {
 				return -1; // the compared value is not the value that indexes the table
@@ -153,18 +151,18 @@ final class CsDispatch {
 	 */
 	private static int countFromByteOffsetIndex(Instruction before, Register index,
 			MemoryBlock block) {
+		Program program = before.getProgram();
 		Instruction instruction = before;
 		for (int i = 0; i < GUARD_SCAN_LIMIT && instruction != null; i++) {
 			if (!block.contains(instruction.getMinAddress())) {
 				return -1;
 			}
-			if ("CMP".equals(instruction.getMnemonicString()) &&
-				index.equals(instruction.getRegister(0))) {
-				Scalar bound = instruction.getScalar(1);
+			if (comparesWith(instruction, index)) {
+				Long bound = guardBound(program, instruction, index);
 				if (bound == null) {
 					return -1;
 				}
-				long entries = bound.getUnsignedValue() / 2 + 1;
+				long entries = bound / 2 + 1;
 				return entries > MAX_TABLE_ENTRIES ? -1 : (int) entries;
 			}
 			if (X86.changes(instruction, index)) {
@@ -181,40 +179,58 @@ final class CsDispatch {
 	 * the switch; both prove the index is about to address a table of words.
 	 */
 	static boolean isDoublingOf(Instruction instruction, Register index) {
-		String mnemonic = instruction.getMnemonicString();
-		if (!index.equals(instruction.getRegister(0))) {
-			return false;
+		Program program = instruction.getProgram();
+		X86.Shift shift = X86.shift(program, instruction);
+		if (shift != null) {
+			return shift.ext() == X86.SHL && !shift.byCl() && shift.count() == 1 &&
+				index.equals(shift.register());
 		}
-		if ("SHL".equals(mnemonic)) {
-			return X86.isScalar(instruction.getScalar(1), 1);
-		}
-		return "ADD".equals(mnemonic) && index.equals(instruction.getRegister(1));
+		X86.RegisterPair add = X86.registerPair(program, instruction, X86.ADD * 8);
+		return add != null && index.equals(add.destination()) && index.equals(add.source());
 	}
 
 	/**
-	 * True for {@code DIV r8} where {@code index} is AX — the only 8-bit divide form,
-	 * quotient in AL/AX. The remainder lands in AH, so the {@code OR AH,AH; JNZ}
-	 * exactness check between the divide and the scaling never writes the index
-	 * register and needs no special handling here.
+	 * True for a {@code CMP} that reads {@code index}, from its p-code inputs: the guard, or a
+	 * comparison against something other than an immediate that ends the match.
 	 */
-	private static boolean isByteDivideOf(Instruction instruction, Register index) {
-		if (!"DIV".equals(instruction.getMnemonicString()) || !"AX".equals(index.getName())) {
+	private static boolean comparesWith(Instruction instruction, Register index) {
+		if (!"CMP".equals(instruction.getMnemonicString())) {
 			return false;
 		}
-		Register divisor = instruction.getRegister(0);
-		return divisor != null && divisor.getMinimumByteSize() == 1;
+		for (Object input : instruction.getInputObjects()) {
+			if (index.equals(input)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
-	/** The register operand of {@code instruction} that is not {@code name}, or null. */
-	private static Register otherRegister(Instruction instruction, String name) {
-		Register first = instruction.getRegister(0);
-		Register second = instruction.getRegister(1);
-		if (first == null || second == null) {
+	/** The bound of a {@code CMP index,imm} guard, or null if {@code instruction} is not one. */
+	private static Long guardBound(Program program, Instruction instruction, Register index) {
+		X86.RegisterImmediate compare = X86.aluImmediate(program, instruction, X86.CMP);
+		return compare != null && index.equals(compare.register()) ? compare.value() : null;
+	}
+
+	/**
+	 * The divisor of a {@code DIV r8} where {@code index} is AX — the only 8-bit divide form,
+	 * quotient in AL/AX — or null. The remainder lands in AH, so the {@code OR AH,AH; JNZ}
+	 * exactness check between the divide and the scaling never writes the index register and
+	 * needs no special handling here.
+	 */
+	private static Register byteDivisorOf(Program program, Instruction instruction,
+			Register index) {
+		return "AX".equals(index.getName()) ? X86.byteDivisor(program, instruction) : null;
+	}
+
+	/** The register {@code XCHG} swaps with {@code BX}, or null if {@code instruction} is not that. */
+	private static Register exchangedWithBx(Program program, Instruction instruction) {
+		X86.RegisterPair pair = X86.exchange(program, instruction);
+		if (pair == null) {
 			return null;
 		}
-		if (name.equals(first.getName())) {
-			return second;
+		if ("BX".equals(pair.destination().getName())) {
+			return pair.source();
 		}
-		return name.equals(second.getName()) ? first : null;
+		return "BX".equals(pair.source().getName()) ? pair.destination() : null;
 	}
 }

@@ -10,7 +10,6 @@ import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
-import ghidra.program.model.scalar.Scalar;
 
 /**
  * The switch of the MSC {@code _output} formatter state machine, whose index comes out of
@@ -96,8 +95,8 @@ final class FormatterFsm {
 		}
 		// MOV BX,AX
 		Instruction widen = X86.previousInBlock(scale, block);
-		if (widen == null || !"MOV".equals(widen.getMnemonicString()) ||
-			!bx.equals(widen.getRegister(0)) || !ax.equals(widen.getRegister(1))) {
+		X86.RegisterPair move = widen == null ? null : X86.registerPair(program, widen, X86.MOV);
+		if (move == null || !bx.equals(move.destination()) || !ax.equals(move.source())) {
 			return null;
 		}
 		// CBW
@@ -107,40 +106,34 @@ final class FormatterFsm {
 		}
 		// MOV [BP-x],AL — the state variable's slot
 		Instruction store = X86.previousInBlock(extend, block);
-		Scalar stateSlot = store == null ? null : bpDisplacement(store, 0);
-		if (stateSlot == null || !"MOV".equals(store.getMnemonicString()) ||
-			!al.equals(store.getRegister(1))) {
+		Integer stateSlot = store == null ? null : bpSlot(store, OPCODE_MOV_RM8_R8);
+		if (stateSlot == null) {
 			return null;
 		}
 		// SHR AL,CL
 		Instruction shift = X86.previousInBlock(store, block);
-		if (shift == null || !"SHR".equals(shift.getMnemonicString()) ||
-			!al.equals(shift.getRegister(0)) || !cl.equals(shift.getRegister(1))) {
+		if (shift == null || !isShiftByCl(program, shift, X86.SHR, al)) {
 			return null;
 		}
 		// INC CL
 		Instruction bump = X86.previousInBlock(shift, block);
-		if (bump == null || !"INC".equals(bump.getMnemonicString()) ||
-			!cl.equals(bump.getRegister(0))) {
+		if (bump == null || !cl.equals(X86.incremented(program, bump))) {
 			return null;
 		}
 		// XLAT — the transition lookup
 		Instruction translate = X86.previousInBlock(bump, block);
-		if (translate == null || !isPlainXlat(translate)) {
+		if (translate == null || !X86.isPlainXlat(translate)) {
 			return null;
 		}
 		// ADD AL,[BP-x] — same slot the next state is stored back to
 		Instruction stateIn = X86.previousInBlock(translate, block);
-		Scalar indexSlot = stateIn == null ? null : bpDisplacement(stateIn, 1);
-		if (indexSlot == null || !"ADD".equals(stateIn.getMnemonicString()) ||
-			!al.equals(stateIn.getRegister(0)) ||
-			indexSlot.getSignedValue() != stateSlot.getSignedValue()) {
+		Integer indexSlot = stateIn == null ? null : bpSlot(stateIn, OPCODE_ADD_R8_RM8);
+		if (indexSlot == null || !indexSlot.equals(stateSlot)) {
 			return null;
 		}
 		// SHL AL,CL
 		Instruction classScale = X86.previousInBlock(stateIn, block);
-		if (classScale == null || !"SHL".equals(classScale.getMnemonicString()) ||
-			!al.equals(classScale.getRegister(0)) || !cl.equals(classScale.getRegister(1))) {
+		if (classScale == null || !isShiftByCl(program, classScale, X86.SHL, al)) {
 			return null;
 		}
 		// MOV CL,3
@@ -173,23 +166,23 @@ final class FormatterFsm {
 			if (X86.changes(instruction, bx)) {
 				return null;
 			}
+			X86.RegisterImmediate mask = X86.aluImmediate(program, instruction, X86.AND);
+			X86.RegisterImmediate compare = X86.aluImmediate(program, instruction, X86.CMP);
 			if ("XLAT".equals(mnemonic)) {
-				if (!isPlainXlat(instruction)) {
+				if (!X86.isPlainXlat(instruction)) {
 					return null;
 				}
 				sawClassLookup = true;
 			}
-			else if ("AND".equals(mnemonic) && al.equals(instruction.getRegister(0)) &&
-				X86.isScalar(instruction.getScalar(1), 0xf)) {
+			else if (mask != null && al.equals(mask.register()) && mask.value() == 0xf) {
 				sawClassMask = true;
 			}
-			else if ("CMP".equals(mnemonic) && al.equals(instruction.getRegister(0))) {
-				Scalar bound = instruction.getScalar(1);
+			else if ("CMP".equals(mnemonic) && readsRegister(instruction, al)) {
 				// The compared value is c-' ', a byte; a bound past 0xdf could not be one.
-				if (bound == null || bound.getUnsignedValue() > 0xdf) {
+				if (compare == null || !al.equals(compare.register()) || compare.value() > 0xdf) {
 					return null;
 				}
-				classLimit = (int) bound.getUnsignedValue();
+				classLimit = (int) compare.value();
 			}
 			instruction = X86.previousInBlock(instruction, block);
 		}
@@ -302,37 +295,48 @@ final class FormatterFsm {
 		return highest + 1;
 	}
 
-	/**
-	 * True for a bare one-byte {@code XLAT} ({@code D7}). A segment override changes which
-	 * table the lookup reads, so an overridden {@code XLAT} must not match the FSM idiom.
-	 */
-	private static boolean isPlainXlat(Instruction instruction) {
-		byte[] bytes = X86.bytes(instruction);
-		return "XLAT".equals(instruction.getMnemonicString()) && bytes.length == 1 &&
-			bytes[0] == (byte) 0xd7;
-	}
+	/** {@code MOV r/m8,r8}: the state store {@code MOV [BP-x],AL}. */
+	private static final int OPCODE_MOV_RM8_R8 = 0x88;
+
+	/** {@code ADD r8,r/m8}: the state load {@code ADD AL,[BP-x]}. */
+	private static final int OPCODE_ADD_R8_RM8 = 0x02;
 
 	/**
-	 * The constant displacement of a {@code [BP + disp]} memory operand at {@code opIndex},
-	 * or null if the operand is anything else.
+	 * The displacement of the {@code [BP + disp]} slot that {@code instruction}, opcode
+	 * {@code opcode} with AL as its register operand, reads or writes; null for any other
+	 * instruction. Only the bare {@code [BP + disp8/16]} form ({@code rm == 6}, {@code mod} 1
+	 * or 2) is accepted, not {@code [BP+SI+disp]}: this is one byte-identical library routine,
+	 * and its state variable is a plain local.
 	 */
-	private static Scalar bpDisplacement(Instruction instruction, int opIndex) {
-		Register bp = null;
-		Scalar displacement = null;
-		for (Object object : instruction.getOpObjects(opIndex)) {
-			if (object instanceof Register register && "BP".equals(register.getName())) {
-				bp = register;
-			}
-			else if (object instanceof Scalar scalar) {
-				if (displacement != null) {
-					return null;
-				}
-				displacement = scalar;
-			}
-			else {
-				return null;
+	private static Integer bpSlot(Instruction instruction, int opcode) {
+		byte[] b = X86.bytes(instruction);
+		int i = X86.opcodeIndex(b);
+		if (i < 0 || i + 1 >= b.length || X86.segmentOverride(b) != 0 || (b[i] & 0xff) != opcode) {
+			return null;
+		}
+		X86.ModRm modrm = X86.modRm(b, i + 1);
+		if (modrm.rm() != 6 || modrm.reg() != 0 || (modrm.mod() != 1 && modrm.mod() != 2) ||
+			i + 1 + modrm.displacementLength() >= b.length) {
+			return null;
+		}
+		return modrm.displacement(b, i + 1);
+	}
+
+	/** True for shift {@code /ext} of {@code register} by CL. */
+	private static boolean isShiftByCl(Program program, Instruction instruction, int ext,
+			Register register) {
+		X86.Shift shift = X86.shift(program, instruction);
+		return shift != null && shift.ext() == ext && shift.byCl() &&
+			register.equals(shift.register());
+	}
+
+	/** True if {@code register} is among the instruction's p-code inputs. */
+	private static boolean readsRegister(Instruction instruction, Register register) {
+		for (Object input : instruction.getInputObjects()) {
+			if (register.equals(input)) {
+				return true;
 			}
 		}
-		return bp == null ? null : displacement;
+		return false;
 	}
 }
