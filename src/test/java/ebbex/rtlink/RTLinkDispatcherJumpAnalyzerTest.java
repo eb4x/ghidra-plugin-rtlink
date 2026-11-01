@@ -103,7 +103,7 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	/** Claim the dispatch jumps as the table pass does, inside a transaction. */
 	private static int claim(ProgramBuilder builder) throws Exception {
 		Program program = builder.getProgram();
-		return builder.tx(() -> RTLinkDispatcherJumpAnalyzer.claimDispatchJumps(program,
+		return builder.tx(() -> VmDispatch.claim(program,
 			program.getMemory(), TaskMonitor.DUMMY));
 	}
 

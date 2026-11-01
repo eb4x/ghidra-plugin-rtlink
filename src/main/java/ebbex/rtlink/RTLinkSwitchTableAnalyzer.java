@@ -97,7 +97,7 @@ public final class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 			return false; // canAnalyze accepts any segmented MZ; these tables are RTLink's
 		}
 		// The VM dispatch jumps race DecompilerSwitchAnalyzer just as the tables do.
-		RTLinkProgram.report(this, RTLinkDispatcherJumpAnalyzer.claimDispatchJumps(program, set, monitor),
+		RTLinkProgram.report(this, VmDispatch.claim(program, set, monitor),
 			"RTLink/Plus: Claimed %d VM dispatch jump(s) ahead of the switch analysis");
 
 		ReferenceManager refManager = program.getReferenceManager();
