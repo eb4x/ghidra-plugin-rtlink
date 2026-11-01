@@ -312,10 +312,8 @@ public final class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		if (i < 0 || i + 1 >= bytes.length || (bytes[i] & 0xff) != 0xff) {
 			return false;
 		}
-		int modrm = bytes[i + 1] & 0xff;
-		int mod = (modrm >> 6) & 0x3;
-		int reg = (modrm >> 3) & 0x7;
-		return mod == 0x3 && reg == 0x4; // /4 = JMP r/m, register form
+		X86.ModRm modrm = X86.modRm(bytes, i + 1);
+		return modrm.isRegister() && modrm.reg() == 4; // /4 = JMP r/m, register form
 	}
 
 	/**
@@ -338,25 +336,17 @@ public final class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		if (i < 0 || i + 2 >= bytes.length || (bytes[i] & 0xff) != OPCODE_MOV_RM_R) {
 			return false;
 		}
-		int modrm = bytes[i + 1] & 0xff;
-		int mod = (modrm >> 6) & 0x3;
-		int rm = modrm & 0x7;
+		X86.ModRm modrm = X86.modRm(bytes, i + 1);
 		// Memory form with a base register: 16-bit rm 4=[SI] 5=[DI] 6=[BP] 7=[BX]; mod 1/2
 		// carry a displacement (mod 0 has none, and rm 6 mod 0 is the [disp16] direct form).
-		if (rm < 0x4 || mod == 0x0 || mod == 0x3) {
+		if (modrm.rm() < 4 || modrm.mod() == 0 || modrm.isRegister()) {
 			return false;
 		}
-		long disp;
-		if (mod == 0x1) {
-			disp = bytes[i + 2]; // signed disp8
+		if (modrm.mod() == 2 && i + 3 >= bytes.length) {
+			return false;
 		}
-		else { // mod == 2, signed disp16
-			if (i + 3 >= bytes.length) {
-				return false;
-			}
-			disp = (short) X86.word(bytes, i + 2);
-		}
-		return disp < 0; // a return-slot patch stores below the frame pointer
+		// a return-slot patch stores below the frame pointer
+		return modrm.displacement(bytes, i + 1) < 0;
 	}
 
 	/**

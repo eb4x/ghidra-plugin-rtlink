@@ -70,6 +70,58 @@ final class X86 {
 		return (b[at] & 0xff) | ((b[at + 1] & 0xff) << 8);
 	}
 
+	/**
+	 * A 16-bit ModRM byte: {@code mod} (bits 7-6), {@code reg} (5-3, a register or an opcode
+	 * extension {@code /n}) and {@code rm} (2-0).
+	 */
+	record ModRm(int mod, int reg, int rm) {
+
+		/** True for {@code mod == 3}: {@code rm} names a register, not memory. */
+		boolean isRegister() {
+			return mod == 3;
+		}
+
+		/** True for {@code mod == 0, rm == 6}: a bare {@code [disp16]}, no base register. */
+		boolean isDirect() {
+			return mod == 0 && rm == 6;
+		}
+
+		/**
+		 * The signed displacement following the ModRM byte at {@code b[at]}: a disp8 for
+		 * {@code mod == 1}, a disp16 for {@code mod == 2}, else 0 (the {@link #isDirect} disp16
+		 * is an address, not a displacement).
+		 */
+		int displacement(byte[] b, int at) {
+			return switch (mod) {
+				case 1 -> b[at + 1];
+				case 2 -> (short) word(b, at + 1);
+				default -> 0;
+			};
+		}
+
+		/** Bytes of displacement (or {@link #isDirect} address) following the ModRM byte. */
+		int displacementLength() {
+			if (isDirect()) {
+				return 2;
+			}
+			return switch (mod) {
+				case 1 -> 1;
+				case 2 -> 2;
+				default -> 0;
+			};
+		}
+	}
+
+	/** The ModRM byte at {@code b[at]}. */
+	static ModRm modRm(byte[] b, int at) {
+		return modRm(b[at] & 0xff);
+	}
+
+	/** The ModRM byte {@code modrm}. */
+	static ModRm modRm(int modrm) {
+		return new ModRm((modrm >> 6) & 3, (modrm >> 3) & 7, modrm & 7);
+	}
+
 	/** A {@code ptr16:16} far pointer, as {@code CALLF}, {@code JMPF} and a far vector store it. */
 	record FarPointer(int segment, int offset) {
 		Address in(SegmentedAddressSpace space) {

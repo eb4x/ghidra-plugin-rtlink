@@ -328,13 +328,7 @@ final class EmulatedFloatPatcher {
 	 */
 	private static int displacementLength(Memory memory, Address addr)
 			throws MemoryAccessException {
-		int modrm = Byte.toUnsignedInt(memory.getByte(addr));
-		return switch (modrm >> 6) {
-			case 0 -> (modrm & 0x7) == 0x6 ? 2 : 0; // [disp16]: the only mod-0 form with one
-			case 1 -> 1;
-			case 2 -> 2;
-			default -> 0; // mod 3: register operand, no memory reference
-		};
+		return X86.modRm(Byte.toUnsignedInt(memory.getByte(addr))).displacementLength();
 	}
 
 }

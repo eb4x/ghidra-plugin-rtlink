@@ -273,10 +273,10 @@ final class FarCodePointers {
 			}
 			switch (op) {
 				case 0x8c -> { // MOV r/m16,sreg
-					int modrm = b[i + 1] & 0xff;
-					Value value = segmentValue((modrm >> 3) & 3);
-					if (modrm >> 6 == 3) {
-						values[modrm & 7] = value;
+					X86.ModRm modrm = X86.modRm(b, i + 1);
+					Value value = segmentValue(modrm.reg() & 3);
+					if (modrm.isRegister()) {
+						values[modrm.rm()] = value;
 					}
 					else {
 						store(instruction, slot(b, i + 1, segment), value);
@@ -284,16 +284,15 @@ final class FarCodePointers {
 					return true;
 				}
 				case 0x8e -> { // MOV sreg,r/m16
-					int modrm = b[i + 1] & 0xff;
-					int sreg = ES + ((modrm >> 3) & 3);
-					values[sreg] = modrm >> 6 == 3 ? values[modrm & 7] : null;
+					X86.ModRm modrm = X86.modRm(b, i + 1);
+					values[ES + (modrm.reg() & 3)] = modrm.isRegister() ? values[modrm.rm()] : null;
 					return true;
 				}
 				case 0x89 -> { // MOV r/m16,r16
-					int modrm = b[i + 1] & 0xff;
-					Value value = values[(modrm >> 3) & 7];
-					if (modrm >> 6 == 3) {
-						values[modrm & 7] = value;
+					X86.ModRm modrm = X86.modRm(b, i + 1);
+					Value value = values[modrm.reg()];
+					if (modrm.isRegister()) {
+						values[modrm.rm()] = value;
 					}
 					else {
 						store(instruction, slot(b, i + 1, segment), value);
@@ -301,18 +300,18 @@ final class FarCodePointers {
 					return true;
 				}
 				case 0x8b -> { // MOV r16,r/m16
-					int modrm = b[i + 1] & 0xff;
-					values[(modrm >> 3) & 7] = modrm >> 6 == 3 ? values[modrm & 7] : null;
+					X86.ModRm modrm = X86.modRm(b, i + 1);
+					values[modrm.reg()] = modrm.isRegister() ? values[modrm.rm()] : null;
 					return true;
 				}
 				case 0xc7 -> { // MOV r/m16,imm16
-					int modrm = b[i + 1] & 0xff;
-					if (((modrm >> 3) & 7) != 0) {
+					X86.ModRm modrm = X86.modRm(b, i + 1);
+					if (modrm.reg() != 0) {
 						return false;
 					}
 					Value value = new Constant(X86.word(b, b.length - 2));
-					if (modrm >> 6 == 3) {
-						values[modrm & 7] = value;
+					if (modrm.isRegister()) {
+						values[modrm.rm()] = value;
 					}
 					else {
 						store(instruction, slot(b, i + 1, segment), value);
@@ -320,11 +319,11 @@ final class FarCodePointers {
 					return true;
 				}
 				case 0x87 -> { // XCHG r/m16,r16
-					int modrm = b[i + 1] & 0xff;
-					int reg = (modrm >> 3) & 7;
-					if (modrm >> 6 == 3) {
-						Value swap = values[modrm & 7];
-						values[modrm & 7] = values[reg];
+					X86.ModRm modrm = X86.modRm(b, i + 1);
+					int reg = modrm.reg();
+					if (modrm.isRegister()) {
+						Value swap = values[modrm.rm()];
+						values[modrm.rm()] = values[reg];
 						values[reg] = swap;
 					}
 					else {
@@ -401,12 +400,12 @@ final class FarCodePointers {
 				for (Instruction insn : program.getListing().getInstructions(callee.getBody(), true)) {
 					byte[] b = X86.bytes(insn);
 					int i = X86.opcodeIndex(b);
-					if (i < 0 || i + 1 >= b.length || ((b[i + 1] & 0xff) >> 6) == 3) {
+					if (i < 0 || i + 1 >= b.length || X86.modRm(b, i + 1).isRegister()) {
 						continue;
 					}
 					int segment = X86.segmentOverride(b);
 					int op = b[i] & 0xff;
-					int reg = ((b[i + 1] & 0xff) >> 3) & 7;
+					int reg = X86.modRm(b, i + 1).reg();
 					if (op == 0x89 && reg == DX) {
 						stored.put(slot(b, i + 1, segment), 0);
 					}
@@ -524,19 +523,13 @@ final class FarCodePointers {
 
 	/** The memory word a 16-bit ModRM at {@code b[m]} addresses. */
 	private static Slot slot(byte[] b, int m, int segment) {
-		int modrm = b[m] & 0xff;
-		int mod = modrm >> 6;
-		int rm = modrm & 7;
-		if (mod == 0 && rm == 6) {
+		X86.ModRm modrm = X86.modRm(b, m);
+		if (modrm.isDirect()) {
 			return new Slot(segmentOrImplied(segment, false), DIRECT, X86.word(b, m + 1));
 		}
+		int rm = modrm.rm();
 		boolean stackBased = rm == 2 || rm == 3 || rm == 6;
-		int disp = switch (mod) {
-			case 1 -> b[m + 1];
-			case 2 -> (short) X86.word(b, m + 1);
-			default -> 0;
-		};
-		return new Slot(segmentOrImplied(segment, stackBased), rm, disp);
+		return new Slot(segmentOrImplied(segment, stackBased), rm, modrm.displacement(b, m));
 	}
 
 	private static int segmentOrImplied(int segment, boolean stackBased) {

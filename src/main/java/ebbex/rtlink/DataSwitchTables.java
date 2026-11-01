@@ -184,8 +184,8 @@ final class DataSwitchTables {
 		if (bytes.length != 2 || bytes[0] != DATA_DISPATCH_OPCODE) {
 			return null;
 		}
-		int modrm = bytes[1] & 0xff;
-		if ((modrm >> 6) != 0 || ((modrm >> 3) & 0x7) != DATA_DISPATCH_REG_OPCODE) {
+		X86.ModRm modrm = X86.modRm(bytes, 1);
+		if (modrm.mod() != 0 || modrm.reg() != DATA_DISPATCH_REG_OPCODE) {
 			return null;
 		}
 		// The operand is memory, not a register, so getRegister() does not answer this —
