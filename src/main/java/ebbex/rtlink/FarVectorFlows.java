@@ -58,15 +58,11 @@ final class FarVectorFlows {
 
 		for (Instruction instruction : listing.getInstructions(true)) {
 			monitor.checkCancelled();
-			int offset = vectorOffset(instruction, FAR_CALL_VECTOR);
-			boolean isCall = offset >= 0;
-			if (!isCall) {
-				offset = vectorOffset(instruction, FAR_JUMP_VECTOR);
-			}
-			if (offset < 0) {
+			Vector vector = Vector.of(instruction);
+			if (vector == null) {
 				continue;
 			}
-			Address target = farPointerAt(program, instruction, offset);
+			Address target = farPointerAt(program, instruction, vector.offset());
 			if (target == null) {
 				continue;
 			}
@@ -79,7 +75,7 @@ final class FarVectorFlows {
 			}
 			if (!referenced) {
 				references.addMemoryReference(instruction.getMinAddress(), target,
-					isCall ? RefType.COMPUTED_CALL : RefType.COMPUTED_JUMP, SourceType.ANALYSIS,
+					vector.call() ? RefType.COMPUTED_CALL : RefType.COMPUTED_JUMP, SourceType.ANALYSIS,
 					Reference.MNEMONIC);
 			}
 			if (!decoded) {
@@ -100,14 +96,29 @@ final class FarVectorFlows {
 		return resolved;
 	}
 
-	/** The {@code disp16} after {@code pattern} if the instruction is exactly that plus a disp16, else -1. */
-	private static int vectorOffset(Instruction instruction, byte[] pattern) {
-		byte[] bytes = X86.bytes(instruction);
-		if (bytes.length != pattern.length + 2 ||
-			!Arrays.equals(bytes, 0, pattern.length, pattern, 0, pattern.length)) {
-			return -1;
+	/**
+	 * A far flow through a code-segment vector: the vector's {@code CS} offset, and whether it
+	 * is a call ({@code CALLF}) or a jump ({@code JMPF}).
+	 */
+	private record Vector(int offset, boolean call) {
+
+		/** The vector {@code instruction} flows through, or null if it is neither form. */
+		static Vector of(Instruction instruction) {
+			byte[] bytes = X86.bytes(instruction);
+			if (matches(bytes, FAR_CALL_VECTOR)) {
+				return new Vector(X86.word(bytes, FAR_CALL_VECTOR.length), true);
+			}
+			if (matches(bytes, FAR_JUMP_VECTOR)) {
+				return new Vector(X86.word(bytes, FAR_JUMP_VECTOR.length), false);
+			}
+			return null;
 		}
-		return X86.word(bytes, pattern.length);
+
+		/** True if {@code bytes} are exactly {@code pattern} plus a disp16. */
+		private static boolean matches(byte[] bytes, byte[] pattern) {
+			return bytes.length == pattern.length + 2 &&
+				Arrays.equals(bytes, 0, pattern.length, pattern, 0, pattern.length);
+		}
 	}
 
 	/**
