@@ -138,33 +138,9 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			return true;
 		}
 
-		List<FileBytes> allFileBytes = program.getMemory().getAllFileBytes();
-		if (allFileBytes.isEmpty()) {
-			return false;
-		}
-
-		FileBytes fileBytes = allFileBytes.get(0);
-		try (FileBytesProvider provider = new FileBytesProvider(fileBytes)) {
-			BinaryReader reader = new BinaryReader(provider, true);
-
-			OldDOSHeader header = new OldDOSHeader(reader);
-			if (!header.isDosSignature()) {
-				return false;
-			}
-
-			long imageEnd = computeImageEnd(header);
-			long overlayStart = (imageEnd + 15) & ~15L;
-			if (overlayStart <= 0 || overlayStart >= fileBytes.getSize()) {
-				return false;
-			}
-
-			if (!detectRTLinkOverlay(reader, overlayStart, fileBytes.getSize())) {
-				return false;
-			}
-
-			List<RTLinkOverlayPage> allPages =
-				RTLinkOverlayPage.parseAllPages(reader, overlayStart, fileBytes.getSize());
-			if (allPages.size() < 2) {
+		try {
+			OverlayImage image = OverlayImage.read(program, true);
+			if (image == null) {
 				return false;
 			}
 			if (hasOverlayBlocks(program)) {
@@ -176,39 +152,7 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 					"re-import the program to analyze its overlays");
 				return false;
 			}
-
-			Msg.info(this, String.format(
-				"RTLink/Plus: Found %d overlay pages at file offset 0x%X",
-				allPages.size(), overlayStart));
-
-			List<OverlayBlockInfo> overlayBlocks =
-				createOverlayBlocks(program, fileBytes, allPages, log, monitor);
-			// Before the stub scan disassembles anything; again inside it, once the stubs
-			// have named the modules the relocation table cannot.
-			ModuleSegments.assign(program, log);
-
-			if (applyRelocations && !overlayBlocks.isEmpty()) {
-				monitor.setMessage("RTLink: Applying overlay relocations...");
-				for (OverlayBlockInfo info : overlayBlocks) {
-					monitor.checkCancelled();
-					OverlayRelocations.apply(program, info.block(), info.page(), log);
-				}
-			}
-
-			if (createStubXrefs && !overlayBlocks.isEmpty()) {
-				monitor.setMessage("RTLink: Discovering dispatch stubs...");
-				DispatchStubs.resolve(program, overlayBlocks, resolvedStubBodies, log, monitor);
-			}
-
-			if (markupHeaders) {
-				monitor.setMessage("RTLink: Marking up page headers...");
-				markupOverlayHeaders(program, fileBytes, allPages, log, monitor);
-			}
-
-			monitor.setMessage("RTLink: Determining data segment (DGROUP)...");
-			maybeAssumeDataSegment(program, log);
-
-			RTLinkProgram.markOverlayAnalyzed(program);
+			analyzeFresh(program, image, log, monitor);
 			return true;
 		}
 		catch (CancelledException e) {
@@ -219,6 +163,79 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			Msg.error(this, "RTLink overlay analysis failed", e);
 			return false;
 		}
+	}
+
+	/**
+	 * The overlay image after the MZ load image: the file it is read from, where it starts,
+	 * and its pages.
+	 */
+	private record OverlayImage(FileBytes fileBytes, long overlayStart,
+			List<RTLinkOverlayPage> pages) {
+
+		/**
+		 * The program's overlay image, or null when it has fewer than two pages. With
+		 * {@code detect}, also null unless the file is a DOS executable whose overlay area
+		 * passes {@link #detectRTLinkOverlay}: what a fresh import requires, where a
+		 * retrofit trusts the program's own flag that it once did.
+		 */
+		static OverlayImage read(Program program, boolean detect) throws IOException {
+			List<FileBytes> allFileBytes = program.getMemory().getAllFileBytes();
+			if (allFileBytes.isEmpty()) {
+				return null;
+			}
+			FileBytes fileBytes = allFileBytes.get(0);
+			try (FileBytesProvider provider = new FileBytesProvider(fileBytes)) {
+				BinaryReader reader = new BinaryReader(provider, true);
+				OldDOSHeader header = new OldDOSHeader(reader);
+				long overlayStart = (computeImageEnd(header) + 15) & ~15L;
+				if (detect && (!header.isDosSignature() || overlayStart <= 0 ||
+					overlayStart >= fileBytes.getSize() ||
+					!detectRTLinkOverlay(reader, overlayStart, fileBytes.getSize()))) {
+					return null;
+				}
+				List<RTLinkOverlayPage> pages =
+					RTLinkOverlayPage.parseAllPages(reader, overlayStart, fileBytes.getSize());
+				return pages.size() < 2 ? null : new OverlayImage(fileBytes, overlayStart, pages);
+			}
+		}
+	}
+
+	/** Create, relocate and resolve the overlays of a program seen for the first time. */
+	private void analyzeFresh(Program program, OverlayImage image, MessageLog log,
+			TaskMonitor monitor) throws Exception {
+		FileBytes fileBytes = image.fileBytes();
+		List<RTLinkOverlayPage> allPages = image.pages();
+		Msg.info(this, String.format("RTLink/Plus: Found %d overlay pages at file offset 0x%X",
+			allPages.size(), image.overlayStart()));
+
+		List<OverlayBlockInfo> overlayBlocks =
+			createOverlayBlocks(program, fileBytes, allPages, log, monitor);
+		// Before the stub scan disassembles anything; again inside it, once the stubs have
+		// named the modules the relocation table cannot.
+		ModuleSegments.assign(program, log);
+
+		if (applyRelocations && !overlayBlocks.isEmpty()) {
+			monitor.setMessage("RTLink: Applying overlay relocations...");
+			for (OverlayBlockInfo info : overlayBlocks) {
+				monitor.checkCancelled();
+				OverlayRelocations.apply(program, info.block(), info.page(), log);
+			}
+		}
+
+		if (createStubXrefs && !overlayBlocks.isEmpty()) {
+			monitor.setMessage("RTLink: Discovering dispatch stubs...");
+			DispatchStubs.resolve(program, overlayBlocks, resolvedStubBodies, log, monitor);
+		}
+
+		if (markupHeaders) {
+			monitor.setMessage("RTLink: Marking up page headers...");
+			markupOverlayHeaders(program, fileBytes, allPages, log, monitor);
+		}
+
+		monitor.setMessage("RTLink: Determining data segment (DGROUP)...");
+		maybeAssumeDataSegment(program, log);
+
+		RTLinkProgram.markOverlayAnalyzed(program);
 	}
 
 	@Override
@@ -477,20 +494,12 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	 */
 	private void repairStubThunks(Program program, MessageLog log, TaskMonitor monitor)
 			throws CancelledException {
-		List<FileBytes> allFileBytes = program.getMemory().getAllFileBytes();
-		if (allFileBytes.isEmpty()) {
-			return;
-		}
-		FileBytes fileBytes = allFileBytes.get(0);
-		try (FileBytesProvider provider = new FileBytesProvider(fileBytes)) {
-			BinaryReader reader = new BinaryReader(provider, true);
-			OldDOSHeader header = new OldDOSHeader(reader);
-			long overlayStart = (computeImageEnd(header) + 15) & ~15L;
-			List<RTLinkOverlayPage> allPages =
-				RTLinkOverlayPage.parseAllPages(reader, overlayStart, fileBytes.getSize());
-			if (allPages.size() < 2) {
+		try {
+			OverlayImage image = OverlayImage.read(program, false);
+			if (image == null) {
 				return;
 			}
+			List<RTLinkOverlayPage> allPages = image.pages();
 
 			// Rebuild the OverlayBlockInfo list from the existing blocks, mirroring
 			// createOverlayBlocks()'s skip logic so stub page indexing lines up.
