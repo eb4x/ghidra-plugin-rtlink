@@ -55,13 +55,22 @@ seven classes and not one. They share package-private statics and must stay in
   immediately before a register-indirect `JMP`, fed by a `MOV reg,imm16`.
 - **`RTLinkSwitchOverrideAnalyzer`** — INSTRUCTION, `FUNCTION_ANALYSIS.after()`, and again
   in `analysisEnded`. Writes the decompiler jump-table overrides for the same tables, from
-  the table pass's own record: the dispatches it marked (user property map
-  `RTLink switch dispatch`) and the `COMPUTED_JUMP` references it laid down — never by
-  re-deriving the table, which by then reads a program with more functions and code. An
-  override already present (its own, or the user's) is left alone. Cannot be merged into
-  the table analyzer: the override symbols need a defined `FunctionDB` to hang a namespace
-  off, which does not exist that early; `analysisEnded` catches dispatches whose function
-  appeared after this pass last saw them.
+  the table pass's own record: the targets it recovered, kept per dispatch (user property
+  map `RTLink pending switch`). Never from the references, which stock
+  `DecompilerSwitchAnalysisCmd` replaces in any function it visits where a jump table's
+  decompiled cases disagree with them, and never by re-deriving the table, which by then
+  reads a program with more functions and code. The table pass writes the override itself
+  where the function already exists (before 0.8.21 it waited for this pass, so a function
+  holding one of our dispatches and a jump we declined could lose our references to stock
+  first, and the override was then written from stock's). The override symbols need a
+  defined `FunctionDB` to hang a namespace off, which often does not exist that early;
+  this pass and `analysisEnded` catch dispatches whose function appeared later. Once the
+  function exists the record is consumed: an override already present (its own, or the
+  user's) is left alone, one the user deletes stays deleted, and a failed write is
+  reported once (up to 0.8.20 the mark stayed, so a deleted override came back and a
+  failure warned at every analysis end). The target-less marks of 0.8.20 and earlier
+  (`RTLink switch dispatch`) are removed at the first analysis end; every one on
+  `/COLONIZE/VICEROY.EXE` already has its override.
 - **`RTLinkXrefAnalyzer`** — INSTRUCTION, `REFERENCE_ANALYSIS.after()`. Resolves the
   DS-relative data references that Ghidra's own reference pass declines to make on
   RTLink programs.
@@ -114,8 +123,8 @@ DOS emulated floating point (INT 34h–3Dh) into the x87 it encodes.
   pass seeds the VM runtime, so a program without CALLF+JMPF stubs (or whose overlay blocks
   were renamed) gets no seeds.
 - Analyzers hand results to one another only through the program, and every such record —
-  the program-info flags, the overlay module bases, the VM seed count, the switch dispatch
-  marks — is read and written through `RTLinkProgram`, along with the two gates below.
+  the program-info flags, the overlay module bases, the VM seed count, the pending switch
+  records — is read and written through `RTLinkProgram`, along with the two gates below.
 - `canAnalyze` accepts any segmented MZ (`RTLinkProgram.isSegmentedMz`; it is asked before
   analysis, when nothing is known yet), so every RTLink analyzer's `added()` returns at once
   unless `RTLinkOverlayAnalyzer` found overlays (`isOverlayAnalyzed`). Two exceptions:

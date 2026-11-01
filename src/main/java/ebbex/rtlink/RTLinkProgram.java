@@ -13,7 +13,7 @@ import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.util.PropertyMapManager;
-import ghidra.program.model.util.VoidPropertyMap;
+import ghidra.program.model.util.StringPropertyMap;
 import ghidra.util.Msg;
 import ghidra.util.exception.DuplicateNameException;
 
@@ -24,7 +24,7 @@ import ghidra.util.exception.DuplicateNameException;
  * reopened, or re-run from One Shot, as on a fresh import.
  * <p>
  * The records are program-info options (flags, the overlay module bases, the VM seed count)
- * and one user property map (the switch dispatches). The program is the only state; nothing
+ * and one user property map (the switches still waiting for their override). The program is the only state; nothing
  * here is cached.
  */
 final class RTLinkProgram {
@@ -54,8 +54,14 @@ final class RTLinkProgram {
 	 */
 	private static final String FLOAT_EMULATED = "DOS Emulated Floating Point";
 
-	/** User property map marking every switch dispatch the table pass resolved. */
-	private static final String SWITCH_DISPATCHES = "RTLink switch dispatch";
+	/**
+	 * User property map holding, per switch dispatch still waiting for its decompiler override,
+	 * the targets the table pass recovered (hex offsets, space-separated).
+	 */
+	private static final String PENDING_SWITCHES = "RTLink pending switch";
+
+	/** The target-less marks of 0.8.20 and earlier; see {@link #dropLegacySwitchMarks}. */
+	private static final String LEGACY_SWITCH_DISPATCHES = "RTLink switch dispatch";
 
 	private RTLinkProgram() {
 	}
@@ -154,26 +160,71 @@ final class RTLinkProgram {
 		return bases;
 	}
 
-	// ---------------------------------------------------------------- switch dispatches
+	// ---------------------------------------------------------------- pending switches
 
-	/** Mark {@code dispatch} as a switch the table pass resolved. */
-	static void markSwitchDispatch(Program program, Address dispatch) {
+	/**
+	 * Record {@code targets} as the switch at {@code dispatch} that still needs its override.
+	 * The targets are kept with the record because the references cannot be trusted later:
+	 * stock switch analysis may replace them before the function exists.
+	 */
+	static void recordSwitch(Program program, Address dispatch, List<Address> targets) {
 		PropertyMapManager properties = program.getUsrPropertyManager();
-		VoidPropertyMap marks = properties.getVoidPropertyMap(SWITCH_DISPATCHES);
-		if (marks == null) {
+		StringPropertyMap pending = properties.getStringPropertyMap(PENDING_SWITCHES);
+		if (pending == null) {
 			try {
-				marks = properties.createVoidPropertyMap(SWITCH_DISPATCHES);
+				pending = properties.createStringPropertyMap(PENDING_SWITCHES);
 			}
 			catch (DuplicateNameException e) {
 				throw new AssertionError(e); // just looked it up
 			}
 		}
-		marks.add(dispatch);
+		pending.add(dispatch, targets.stream()
+				.map(target -> Long.toHexString(target.getOffset()))
+				.collect(Collectors.joining(" ")));
 	}
 
-	/** The switch dispatches marked within {@code set}. */
-	static AddressIterator switchDispatches(Program program, AddressSetView set) {
-		VoidPropertyMap marks = program.getUsrPropertyManager().getVoidPropertyMap(SWITCH_DISPATCHES);
-		return marks == null ? AddressIterator.EMPTY_ITERATOR : marks.getPropertyIterator(set);
+	/** The dispatches within {@code set} still waiting for their override. */
+	static AddressIterator pendingSwitches(Program program, AddressSetView set) {
+		StringPropertyMap pending = program.getUsrPropertyManager().getStringPropertyMap(PENDING_SWITCHES);
+		return pending == null ? AddressIterator.EMPTY_ITERATOR : pending.getPropertyIterator(set);
+	}
+
+	/** The targets recorded for the pending switch at {@code dispatch}, or an empty list. */
+	static List<Address> switchTargets(Program program, Address dispatch) {
+		StringPropertyMap pending = program.getUsrPropertyManager().getStringPropertyMap(PENDING_SWITCHES);
+		String recorded = pending == null ? null : pending.getString(dispatch);
+		if (recorded == null || recorded.isBlank()) {
+			return List.of();
+		}
+		List<Address> targets = new ArrayList<>();
+		for (String offset : recorded.split(" ")) {
+			try {
+				targets.add(dispatch.getNewAddress(Long.parseLong(offset, 16)));
+			}
+			catch (NumberFormatException _) {
+				return List.of();
+			}
+		}
+		return targets;
+	}
+
+	/** Drop the pending record at {@code dispatch}: its override exists or cannot be written. */
+	static void consumeSwitch(Program program, Address dispatch) {
+		StringPropertyMap pending = program.getUsrPropertyManager().getStringPropertyMap(PENDING_SWITCHES);
+		if (pending != null) {
+			pending.remove(dispatch);
+		}
+	}
+
+	/**
+	 * Remove the switch marks of 0.8.20 and earlier, which carried no targets. Every marked
+	 * dispatch in {@code /COLONIZE/VICEROY.EXE} already has its override (confirmed by viceroy),
+	 * so nothing is lost. Delete once viceroy confirms the program has been through it.
+	 */
+	static void dropLegacySwitchMarks(Program program) {
+		PropertyMapManager properties = program.getUsrPropertyManager();
+		if (properties.getVoidPropertyMap(LEGACY_SWITCH_DISPATCHES) != null) {
+			properties.removePropertyMap(LEGACY_SWITCH_DISPATCHES);
+		}
 	}
 }

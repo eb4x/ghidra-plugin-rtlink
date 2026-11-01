@@ -47,7 +47,8 @@ import ghidra.util.task.TaskMonitor;
  * disassembly exist, nothing rewrites them.
  * <p>
  * Fixing the references leaves the decompiler's own p-code still reading the table at the page
- * segment. {@link RTLinkSwitchOverrideAnalyzer} completes the repair once functions exist.
+ * segment. A jump-table override completes the repair: written here where the function already
+ * exists, otherwise by {@link RTLinkSwitchOverrideAnalyzer} once it does.
  * <p>
  * <b>The formatter FSM</b> fails for a third reason: its switch index is produced by
  * {@code XLAT}, so no {@code CMP} in the instruction stream bounds it and the decompiler
@@ -117,10 +118,9 @@ public final class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 					RefType.COMPUTED_JUMP, SourceType.ANALYSIS, Reference.MNEMONIC);
 				targets.addRange(destination, destination);
 			}
-			// The mark and the references are what RTLinkSwitchOverrideAnalyzer writes its
-			// override from: re-deriving the table later would read a program that has
-			// changed since (more functions, more code) and could disagree with them.
-			RTLinkProgram.markSwitchDispatch(program, instruction.getMinAddress());
+			// The override is written from this record, not from the references (stock switch
+			// analysis may replace them) nor by re-deriving the table later.
+			RTLinkProgram.recordSwitch(program, instruction.getMinAddress(), destinations);
 			dispatches.add(instruction);
 		}
 
@@ -143,7 +143,20 @@ public final class RTLinkSwitchTableAnalyzer extends AbstractAnalyzer {
 			CreateFunctionCmd.fixupFunctionBody(program, dispatch, monitor);
 		}
 
+		// Where the function already exists, override now. DecompilerSwitchAnalysisCmd re-walks
+		// every jump table of a function it visits and replaces the references of any whose
+		// decompiled table disagrees with them; with the override in place the decompiler's
+		// table is exactly these targets, so ours survive.
+		int overridden = 0;
+		for (Instruction dispatch : dispatches) {
+			monitor.checkCancelled();
+			if (RTLinkSwitchOverrideAnalyzer.writeOverride(program, dispatch.getMinAddress(), log)) {
+				overridden++;
+			}
+		}
+
 		RTLinkProgram.report(this, dispatches.size(), "RTLink/Plus: Recovered %d switch table(s)");
+		RTLinkProgram.report(this, overridden, "RTLink/Plus: Wrote %d switch table override(s)");
 		return true;
 	}
 

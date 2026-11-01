@@ -191,6 +191,51 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 		}
 	}
 
+	// ---------------------------------------------------------------- recorded targets
+
+	/**
+	 * The targets kept for a pending override come back as the same addresses, in the
+	 * dispatch's own space and segment form, both in a segment off the 64KB page and in an
+	 * overlay; a consumed record comes back empty.
+	 */
+	@Test
+	public void testRecordedTargetsRoundTrip() throws Exception {
+		ProgramBuilder builder = resident("0x1aea:0x000b", 0x112, VICEROY_1AEA);
+		try {
+			assertRoundTrip(builder.getProgram(), builder.addr("0x1aea:0x001d"),
+				List.of(builder.addr("0x1aea:0x0080"), builder.addr("0x1aea:0x0118")));
+		}
+		finally {
+			builder.dispose();
+		}
+		builder = overlay("OVERLAY_25", 0xa20, 0x316, "90", List.of(0, 0xb));
+		try {
+			Program program = builder.getProgram();
+			MemoryBlock block = program.getMemory().getBlock("OVERLAY_25");
+			assertRoundTrip(program, block.getStart().add(0x321), offsets(block, 0xd2, 0x30e));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	private static void assertRoundTrip(Program program, Address dispatch, List<Address> targets) {
+		int txId = program.startTransaction("record");
+		try {
+			RTLinkProgram.recordSwitch(program, dispatch, targets);
+			List<Address> read = RTLinkProgram.switchTargets(program, dispatch);
+			assertEquals(targets, read);
+			assertEquals(targets.toString(), read.toString());
+			assertEquals(dispatch, RTLinkProgram.pendingSwitches(program,
+				new AddressSet(dispatch, dispatch)).next());
+			RTLinkProgram.consumeSwitch(program, dispatch);
+			assertEquals(List.of(), RTLinkProgram.switchTargets(program, dispatch));
+		}
+		finally {
+			program.endTransaction(txId, true);
+		}
+	}
+
 	// ---------------------------------------------------------------- overlay module tables
 
 	/**

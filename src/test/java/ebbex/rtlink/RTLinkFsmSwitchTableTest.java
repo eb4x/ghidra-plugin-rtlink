@@ -3,6 +3,8 @@ package ebbex.rtlink;
 import static org.junit.Assert.*;
 
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 
 import org.junit.Test;
 
@@ -10,13 +12,17 @@ import generic.test.AbstractGenericTest;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
-import ghidra.program.model.address.AddressSet;
+import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
+import ghidra.program.model.pcode.HighFunction;
+import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.SourceType;
+import ghidra.program.model.symbol.Symbol;
 import ghidra.util.task.TaskMonitor;
 
 /**
@@ -201,11 +207,11 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 	}
 
 	/**
-	 * The table pass marks the dispatch and lays down its references; the override pass
-	 * writes the override once, from them, and leaves it alone after that.
+	 * Where the function already exists, the table pass writes the override itself, before
+	 * stock switch analysis can visit the function and replace the references.
 	 */
 	@Test
-	public void testDispatchIsMarkedAndOverriddenOnce() throws Exception {
+	public void testTablePassOverridesWhereTheFunctionExists() throws Exception {
 		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
 		try {
 			Program program = builder.getProgram();
@@ -214,13 +220,11 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 
 			runTablePass(builder);
 
-			Address dispatch = builder.addr(DISPATCH);
-			assertTrue("the dispatch is marked", RTLinkProgram
-					.switchDispatches(program, new AddressSet(dispatch, dispatch))
-					.hasNext());
-			assertEquals("the override is written from the references", 1, writeOverrides(builder));
-			assertEquals("and left alone after that", 0, writeOverrides(builder));
+			assertEquals("the table pass wrote the override", caseStubs(builder, 8),
+				overrideTargets(builder));
+			assertEquals("the override pass has nothing left to do", 0, writeOverrides(builder));
 
+			Address dispatch = builder.addr(DISPATCH);
 			int refs = program.getReferenceManager().getReferencesFrom(dispatch).length;
 			assertEquals(8, refs);
 			runTablePass(builder);
@@ -232,9 +236,63 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 		}
 	}
 
+	/**
+	 * A dispatch found before its function is overridden later from the targets the table pass
+	 * recovered, even when stock switch analysis has replaced its references in between.
+	 */
+	@Test
+	public void testDeferredOverrideComesFromTheRecoveredTargets() throws Exception {
+		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
+		try {
+			Program program = builder.getProgram();
+			markOverlayAnalyzed(builder);
+			runTablePass(builder);
+			assertNull("no function yet, so no override", overrideTargets(builder));
+
+			Address dispatch = builder.addr(DISPATCH);
+			builder.withTransaction(() -> {
+				ReferenceManager references = program.getReferenceManager();
+				references.removeAllReferencesFrom(dispatch);
+				references.addMemoryReference(dispatch, builder.addr("0x1100:0x0010"),
+					RefType.COMPUTED_JUMP, SourceType.ANALYSIS, Reference.MNEMONIC);
+			});
+			builder.createFunction("0x1100:0x0040");
+
+			assertEquals(1, writeOverrides(builder));
+			assertEquals("written from the recovered targets, not the references",
+				caseStubs(builder, 8), overrideTargets(builder));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/** An override the user deletes is not written again at the next analysis end. */
+	@Test
+	public void testDeletedOverrideStaysDeleted() throws Exception {
+		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
+		try {
+			Program program = builder.getProgram();
+			markOverlayAnalyzed(builder);
+			runTablePass(builder);
+			builder.createFunction("0x1100:0x0040");
+			assertEquals(1, writeOverrides(builder));
+
+			builder.withTransaction(() -> program.getSymbolTable()
+					.removeSymbolSpecial(overrideSpace(builder).getSymbol()));
+			assertNull(overrideTargets(builder));
+
+			assertEquals("nothing is rewritten", 0, writeOverrides(builder));
+			assertNull("the deletion stands", overrideTargets(builder));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
 	/** A dispatch that already has computed references — stock's guess — is not taken over. */
 	@Test
-	public void testDispatchWithForeignReferencesIsNotMarked() throws Exception {
+	public void testDispatchWithForeignReferencesIsNotTakenOver() throws Exception {
 		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
 		try {
 			Program program = builder.getProgram();
@@ -244,15 +302,48 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 						RefType.COMPUTED_JUMP, SourceType.ANALYSIS, Reference.MNEMONIC));
 
 			runTablePass(builder);
+			builder.createFunction("0x1100:0x0040");
 
-			Address dispatch = builder.addr(DISPATCH);
-			assertFalse(RTLinkProgram
-					.switchDispatches(program, new AddressSet(dispatch, dispatch))
-					.hasNext());
+			assertEquals(0, writeOverrides(builder));
+			assertNull(overrideTargets(builder));
 		}
 		finally {
 			builder.dispose();
 		}
+	}
+
+	/** The first {@code count} case stubs, in address order. */
+	private static Set<Address> caseStubs(ProgramBuilder builder, int count) {
+		Set<Address> stubs = new TreeSet<>();
+		for (int i = 0; i < count; i++) {
+			stubs.add(builder.addr(String.format("0x1100:0x%04x", 0x80 + 4 * i)));
+		}
+		return stubs;
+	}
+
+	/** The override namespace {@code <func>::override::jmp_<dispatch>}, or null. */
+	private static Namespace overrideSpace(ProgramBuilder builder) {
+		Program program = builder.getProgram();
+		Address dispatch = builder.addr(DISPATCH);
+		Function function = program.getFunctionManager().getFunctionContaining(dispatch);
+		Namespace overrides = function == null ? null : HighFunction.findOverrideSpace(function);
+		return overrides == null ? null
+				: HighFunction.findNamespace(program.getSymbolTable(), overrides, "jmp_" + dispatch);
+	}
+
+	/** The case destinations of the dispatch's override, or null when it has none. */
+	private static Set<Address> overrideTargets(ProgramBuilder builder) {
+		Namespace space = overrideSpace(builder);
+		if (space == null) {
+			return null;
+		}
+		Set<Address> targets = new TreeSet<>();
+		for (Symbol symbol : builder.getProgram().getSymbolTable().getSymbols(space)) {
+			if (symbol.getName().startsWith("case")) {
+				targets.add(symbol.getAddress());
+			}
+		}
+		return targets;
 	}
 
 	private static void markOverlayAnalyzed(ProgramBuilder builder) {
