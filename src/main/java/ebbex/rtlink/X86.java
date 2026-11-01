@@ -143,6 +143,17 @@ final class X86 {
 
 	// ---------------------------------------------------------------- segments
 
+	/**
+	 * True if {@code jump} resolves its target against its 64KB page rather than the CS it runs
+	 * with: stock's {@code currentCS} writes {@code (inst_next >> 4) & 0xf000} into CS as part of
+	 * the jump, where upstream PR #9703 (the dailydriver fork) reads CS from context and writes
+	 * nothing. A near jump writes CS for no other reason.
+	 */
+	static boolean resolvesAgainstPage(Program program, Instruction jump) {
+		Register cs = program.getRegister("CS");
+		return cs != null && writes(jump, cs);
+	}
+
 	/** The program's segmented (real-mode) default address space. */
 	static SegmentedAddressSpace space(Program program) {
 		return (SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();

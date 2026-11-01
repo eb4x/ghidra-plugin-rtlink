@@ -172,6 +172,7 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 				// flow (this reference) is already deleted, so nothing re-decodes the target.
 				new ClearFlowAndRepairCmd(target, false, true, true).applyTo(program, monitor);
 			}
+			dropPageGuessMarks(program, jmp);
 			int added = resolveBodies(program, jmp, monitor);
 			if (jmp.getComment(CommentType.PLATE) == null) {
 				jmp.setComment(CommentType.PLATE, DISPATCHER_COMMENT);
@@ -184,34 +185,90 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 	}
 
 	/**
+	 * Lay down the true {@code CS:imm} references on every VM dispatch jump in {@code set} ahead
+	 * of {@code CODE_ANALYSIS}, for {@link RTLinkSwitchTableAnalyzer} to call; returns how many
+	 * jumps it claimed.
+	 * <p>
+	 * {@code DecompilerSwitchAnalyzer} runs at {@code CODE_ANALYSIS}, long before this pass, and
+	 * leaves alone any computed branch that already carries a computed reference. Where
+	 * {@code currentCS} still resolves against the 64KB page (stock Ghidra; the dailydriver fork
+	 * carries #9703), it reads {@code JMP DX} as a switch over the page and plants a reference to
+	 * every byte of the code below it — 110 on the smoke sample, {@code 1000:0000} to
+	 * {@code 1000:006f}, junk decoded at each — which no immediate explains, so
+	 * {@link #resolveDispatchJumps} could not take them back. Claimed first, the jump is never
+	 * read as a switch at all. Only where the jump does resolve against the page
+	 * ({@link X86#resolvesAgainstPage}): with #9703 the switch pass reads it correctly, and
+	 * pre-empting it there moves VICEROY's nucleus function boundaries ({@code 210d:0c7f} ends
+	 * up inside {@code 210d:0e52}).
+	 */
+	static int claimDispatchJumps(Program program, AddressSetView set, TaskMonitor monitor)
+			throws CancelledException {
+		List<Instruction> dispatchers = new ArrayList<>();
+		for (Instruction jmp : program.getListing().getInstructions(set, true)) {
+			monitor.checkCancelled();
+			if (X86.resolvesAgainstPage(program, jmp) && isDispatcherJump(program, jmp)) {
+				dispatchers.add(jmp);
+			}
+		}
+		int claimed = 0;
+		for (Instruction jmp : dispatchers) {
+			monitor.checkCancelled();
+			if (referenceBodies(program, jmp) > 0) {
+				claimed++;
+			}
+		}
+		return claimed;
+	}
+
+	/**
 	 * Reference every {@code CS:imm} body from {@code jmp} and disassemble the ones not yet
 	 * decoded; returns how many references were added. A body is only taken in an
 	 * initialized executable block, and never into an overlay space: the nucleus is resident.
 	 */
 	private static int resolveBodies(Program program, Instruction jmp, TaskMonitor monitor) {
-		if (!(jmp.getMinAddress() instanceof SegmentedAddress at)) {
-			return 0;
-		}
-		int segment = X86.codeSegment(program, jmp, at);
-		ReferenceManager references = program.getReferenceManager();
-		int added = 0;
-		for (long imm : loadedImmediates(program, jmp, jmp.getRegister(0))) {
-			Address body =
-				((SegmentedAddressSpace) at.getAddressSpace()).getAddress(segment, (int) imm);
-			if (!CodeSeeds.isResidentCode(program.getMemory(), body)) {
-				continue;
-			}
-			if (!CodeEvidence.refersTo(jmp, body, RefType::isJump)) {
-				references.addMemoryReference(jmp.getMinAddress(), body, RefType.COMPUTED_JUMP,
-					SourceType.ANALYSIS, Reference.MNEMONIC);
-				added++;
-			}
+		int added = referenceBodies(program, jmp);
+		for (Address body : bodies(program, jmp)) {
 			if (program.getListing().getInstructionAt(body) == null &&
 				program.getListing().getDefinedDataContaining(body) == null) {
 				new DisassembleCommand(body, null, true).applyTo(program, monitor);
 			}
 		}
 		return added;
+	}
+
+	/**
+	 * Reference every {@code CS:imm} body from {@code jmp}, decoding nothing; returns how many
+	 * references were added. The early claim needs no more: the reference is what the switch
+	 * pass checks, and the bodies are decoded in this pass's own slot.
+	 */
+	private static int referenceBodies(Program program, Instruction jmp) {
+		ReferenceManager references = program.getReferenceManager();
+		int added = 0;
+		for (Address body : bodies(program, jmp)) {
+			if (!CodeEvidence.refersTo(jmp, body, RefType::isJump)) {
+				references.addMemoryReference(jmp.getMinAddress(), body, RefType.COMPUTED_JUMP,
+					SourceType.ANALYSIS, Reference.MNEMONIC);
+				added++;
+			}
+		}
+		return added;
+	}
+
+	/** The {@code CS:imm} bodies of {@code jmp} in resident code. */
+	private static List<Address> bodies(Program program, Instruction jmp) {
+		if (!(jmp.getMinAddress() instanceof SegmentedAddress at)) {
+			return List.of();
+		}
+		int segment = X86.codeSegment(program, jmp, at);
+		List<Address> bodies = new ArrayList<>();
+		for (long imm : loadedImmediates(program, jmp, jmp.getRegister(0))) {
+			Address body =
+				((SegmentedAddressSpace) at.getAddressSpace()).getAddress(segment, (int) imm);
+			if (CodeSeeds.isResidentCode(program.getMemory(), body)) {
+				bodies.add(body);
+			}
+		}
+		return bodies;
 	}
 
 	/**
@@ -347,6 +404,23 @@ public class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 			}
 		}
 		return matched;
+	}
+
+	/**
+	 * Drop the disassembler's marks at the page-relative guesses {@code page + imm} that nothing
+	 * flows to. Once {@link #claimDispatchJumps} has referenced the true bodies, stock's constant
+	 * propagation still tries to decode at its own guess but leaves no reference behind for
+	 * {@link #matchedBogusRefs} to find — only the mark, where the guess lands mid-code: on the
+	 * smoke sample {@code 1000:0067}, one byte before the float routine at {@code 1000:0068}.
+	 */
+	private static void dropPageGuessMarks(Program program, Instruction jmp) {
+		long pageBase = (jmp.getMaxAddress().getOffset() + 1) & PAGE_MASK;
+		for (long imm : loadedImmediates(program, jmp, jmp.getRegister(0))) {
+			Address guess = jmp.getMinAddress().getAddressSpace().getAddress(pageBase + imm);
+			if (program.getListing().getInstructionAt(guess) == null) {
+				ErrorMarks.removeUnreached(program, guess);
+			}
+		}
 	}
 
 	/** Flat-address bits of a 64KB page base: what {@code currentCS} keeps of the PC. */

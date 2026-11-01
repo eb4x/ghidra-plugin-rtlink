@@ -27,7 +27,9 @@ seven classes and not one. They share package-private statics and must stay in
   `OverlaySwitchTables` (module-relative tables in overlay pages), `DataSwitchTables`
   (DGROUP tables behind `JMP [reg]`), `FormatterFsm` (the `XLAT`-indexed printf FSM).
   `CsDispatch` is the `JMP CS:[BX+disp16]` idiom and its `CMP` guard count, shared by
-  the first two; `CaseRange` bounds a dispatch's case targets by its function.
+  the first two; `CaseRange` bounds a dispatch's case targets by its function. It also
+  claims the VM dispatch `JMP DX` for `RTLinkDispatcherJumpAnalyzer` (below) where the
+  jump resolves against its page.
 - **`RTLinkDispatcherJumpAnalyzer`** — BYTE, `DATA_ANALYSIS.before()`. Resolves the VM
   nucleus' constant-pair dispatch (`MOV AX,entry ; MOV DX,body ; … ; MOV [SI-4],AX ;
   JMP DX`). `JMP DX` is a near jump: its targets are `CS:imm` for the `MOV DX`
@@ -37,9 +39,15 @@ seven classes and not one. They share package-private statics and must stay in
   disassembles junk there; with no window to pre-empt it, this runs after 596/600/602
   but before `ASCII Strings` (~905): it deletes the computed-jump refs an immediate
   explains against any base but the jump's own segment, clears the junk they seeded and
-  its ERROR bookmarks, then adds the `CS:imm` refs and disassembles the bodies. Where
-  `currentCS` reads CS from context (the dailydriver fork) stock is already right and only
-  the plate comment changes. Up to 0.6.0 this took the body for an overlay offset and
+  its ERROR bookmarks, then adds the `CS:imm` refs and disassembles the bodies. Stock 12.2
+  adds a worse failure at `CODE_ANALYSIS`: `DecompilerSwitchAnalyzer` reads `JMP DX` as a
+  switch over the page and references every byte below it (110 on the smoke sample), which
+  no immediate explains. So where the jump writes CS (stock's `currentCS`, not the fork's),
+  the switch-table pass lays down the `CS:imm` refs first and the switch pass skips the
+  jump; this pass then only drops the marks stock leaves at its `page + imm` guesses. Where
+  `currentCS` reads CS from context (upstream #9703, the dailydriver fork) stock is
+  already right and only the plate comment changes; claiming early there moves VICEROY's
+  nucleus function boundaries, so it doesn't. Up to 0.6.0 this took the body for an overlay offset and
   deleted the correct refs too, clearing 37 routines of VICEROY's nucleus. Gated by a
   near-unforgeable fingerprint: the return-slot patch (`MOV [base-neg-disp],reg`)
   immediately before a register-indirect `JMP`, fed by a `MOV reg,imm16`.
