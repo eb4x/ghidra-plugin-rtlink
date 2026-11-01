@@ -1,15 +1,10 @@
 package ebbex.rtlink;
 
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Instruction;
-import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 
 /**
@@ -97,30 +92,11 @@ final class OverlaySwitchTables {
 			return null;
 		}
 		Address table = start.add(tableOffset);
-
-		Set<Address> destinations = new LinkedHashSet<>();
-		Listing listing = program.getListing();
-		try {
-			for (int i = 0; i < entries; i++) {
-				int offset = program.getMemory().getShort(table.add(2L * i)) & 0xffff;
-				long destinationOffset = moduleStart + offset;
-				if (destinationOffset >= blockSize) {
-					return null;
-				}
-				if (destinationOffset >= tableOffset && destinationOffset < tableEnd) {
-					return null; // a case target inside its own table: the base is wrong
-				}
-				Address destination = start.add(destinationOffset);
-				Instruction existing = listing.getInstructionContaining(destination);
-				if (existing != null && !existing.getMinAddress().equals(destination)) {
-					return null; // mid-instruction target: the base resolution is wrong
-				}
-				destinations.add(destination);
-			}
-		}
-		catch (MemoryAccessException _) {
-			return null;
-		}
-		return new ArrayList<>(destinations);
+		long base = moduleStart;
+		// A target inside the table or mid-instruction means the base resolution is wrong.
+		return CaseTable.readAll(program, table, entries, offset -> {
+			long destinationOffset = base + offset;
+			return destinationOffset < blockSize ? start.add(destinationOffset) : null;
+		});
 	}
 }

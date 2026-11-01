@@ -1,16 +1,12 @@
 package ebbex.rtlink;
 
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.Instruction;
-import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
@@ -248,29 +244,11 @@ final class FormatterFsm {
 			!block.contains(space.getAddress(segment, (int) lastByte))) {
 			return null;
 		}
-		Listing listing = program.getListing();
-		Set<Address> destinations = new LinkedHashSet<>();
-		try {
-			for (int i = 0; i < states; i++) {
-				int offset = program.getMemory().getShort(jumpTable.add(2L * i)) & 0xffff;
-				if (offset >= displacement && offset <= lastByte) {
-					return null; // a case target inside the table: the count is wrong
-				}
-				Address destination = space.getAddress(segment, offset);
-				if (!range.contains(destination)) {
-					return null;
-				}
-				Instruction existing = listing.getInstructionContaining(destination);
-				if (existing != null && !existing.getMinAddress().equals(destination)) {
-					return null;
-				}
-				destinations.add(destination);
-			}
-		}
-		catch (MemoryAccessException _) {
-			return null;
-		}
-		return new ArrayList<>(destinations);
+		// A case target inside the table means the count is wrong.
+		return CaseTable.readAll(program, jumpTable, states, offset -> {
+			Address destination = space.getAddress(segment, offset);
+			return range.contains(destination) ? destination : null;
+		});
 	}
 
 	/**

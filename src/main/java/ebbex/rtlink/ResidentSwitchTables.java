@@ -1,15 +1,11 @@
 package ebbex.rtlink;
 
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 
 /**
@@ -51,22 +47,10 @@ final class ResidentSwitchTables {
 		if (!block.contains(table) || !block.contains(space.getAddress(segment, (int) lastByte))) {
 			return null;
 		}
-
-		Set<Address> destinations = new LinkedHashSet<>();
-		try {
-			for (int i = 0; i < entries; i++) {
-				int offset = program.getMemory().getShort(table.add(2L * i)) & 0xffff;
-				Address destination = space.getAddress(segment, offset);
-				if (!block.contains(destination)) {
-					return null;
-				}
-				destinations.add(destination);
-			}
-		}
-		catch (MemoryAccessException _) {
-			return null;
-		}
-		return new ArrayList<>(destinations);
+		return CaseTable.readAll(program, table, entries, offset -> {
+			Address destination = space.getAddress(segment, offset);
+			return block.contains(destination) ? destination : null;
+		});
 	}
 
 	/**

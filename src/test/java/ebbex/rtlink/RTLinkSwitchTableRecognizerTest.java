@@ -152,6 +152,31 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 		}
 	}
 
+	/**
+	 * A resident table is held to the same entry tests as the other forms: an entry that lands
+	 * inside the table's own bytes, or in the middle of an instruction already decoded, means
+	 * the guard or the anchor was misread, and the table is refused rather than half-planted.
+	 */
+	@Test
+	public void testResidentTableRefusesImpossibleEntries() throws Exception {
+		assertResidentTableRefused("an entry inside the table",
+			VICEROY_1AEA.replace("a7 22 00 80 00", "a7 22 00 24 00"));
+		assertResidentTableRefused("an entry inside MOV BP,SP at 000d",
+			VICEROY_1AEA.replace("a7 22 00 80 00", "a7 22 00 0e 00"));
+	}
+
+	private static void assertResidentTableRefused(String why, String hex) throws Exception {
+		ProgramBuilder builder = resident("0x1aea:0x000b", 0x112, hex);
+		try {
+			Program program = builder.getProgram();
+			decode(program, builder.addr("0x1aea:0x000c"), 0x16);
+			assertNull(why, recover(program, builder.addr("0x1aea:0x001d")));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
 	/** The same bytes in a segment on a 64KB page: currentCS gets that right, so hands off. */
 	@Test
 	public void testPageAlignedSegmentIsLeftToStock() throws Exception {

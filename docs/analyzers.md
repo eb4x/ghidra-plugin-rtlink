@@ -27,7 +27,9 @@ seven classes and not one. They share package-private statics and must stay in
   `OverlaySwitchTables` (module-relative tables in overlay pages), `DataSwitchTables`
   (DGROUP tables behind `JMP [reg]`), `FormatterFsm` (the `XLAT`-indexed printf FSM).
   `CsDispatch` is the `JMP CS:[BX+disp16]` idiom and its `CMP` guard count, shared by
-  the first two; `CaseRange` bounds a dispatch's case targets by its function. It also
+  the first two; `CaseRange` bounds a dispatch's case targets by its function; `CaseTable`
+  reads every form's entries, and refuses a table with an entry inside its own bytes or in
+  the middle of a decoded instruction (the resident form accepted both before 0.8.20). It also
   claims the VM dispatch `JMP DX` for `RTLinkDispatcherJumpAnalyzer` (below) where the
   jump resolves against its page, and only while that analyzer is enabled.
 - **`RTLinkDispatcherJumpAnalyzer`** — BYTE, `DATA_ANALYSIS.before()`. Resolves the VM

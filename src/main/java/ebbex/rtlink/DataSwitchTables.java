@@ -1,19 +1,13 @@
 package ebbex.rtlink;
 
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 import ghidra.program.model.address.Address;
-import ghidra.program.model.address.AddressOutOfBoundsException;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.Instruction;
-import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.util.Msg;
 
@@ -132,32 +126,16 @@ final class DataSwitchTables {
 			return null;
 		}
 
-		Listing listing = program.getListing();
-		Set<Address> destinations = new LinkedHashSet<>();
-		try {
-			for (int i = 0; i < CsDispatch.MAX_TABLE_ENTRIES; i++) {
-				int offset = program.getMemory().getShort(table.add(2L * i)) & 0xffff;
+		// The first entry that is not a case target of this function ends the table — there
+		// is nothing else to say where it stops. "Case target" cannot mean "already an
+		// instruction": these targets are reachable only through the table, so nothing has
+		// disassembled them yet. It means inside the dispatching function and not splitting
+		// an instruction that is already there — the test every table form makes.
+		List<Address> destinations =
+			CaseTable.readWhile(program, table, CsDispatch.MAX_TABLE_ENTRIES, offset -> {
 				Address destination = space.getAddress(segment, offset);
-				// The first entry that is not a case target of this function ends the
-				// table — there is nothing else to say where it stops. "Case target"
-				// cannot mean "already an instruction": these targets are reachable only
-				// through the table, so nothing has disassembled them yet. It means
-				// inside the dispatching function and not splitting an instruction that
-				// is already there — the same test the overlay path makes.
-				if (!range.contains(destination)) {
-					break;
-				}
-				Instruction existing = listing.getInstructionContaining(destination);
-				if (existing != null && !existing.getMinAddress().equals(destination)) {
-					break;
-				}
-				destinations.add(destination);
-			}
-		}
-		catch (MemoryAccessException | AddressOutOfBoundsException _) {
-			// Unreadable memory after the last entry ends the table like any non-entry does;
-			// the entries already read stand.
-		}
+				return range.contains(destination) ? destination : null;
+			});
 
 		// One entry is not a switch; it is a coincidence.
 		if (destinations.size() < MIN_DATA_TABLE_ENTRIES) {
@@ -167,7 +145,7 @@ final class DataSwitchTables {
 					table, destinations.size(), range));
 			return null;
 		}
-		return new ArrayList<>(destinations);
+		return destinations;
 	}
 
 	/**
