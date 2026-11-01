@@ -121,6 +121,31 @@ public class RTLinkVmRuntimeSeedTest extends AbstractGenericTest {
 		}
 	}
 
+	/**
+	 * Re-running the overlay analyzer (One Shot) on a program without corroborating dispatch
+	 * stubs must not seed what a fresh import would not: the entry stub alone is no proof of
+	 * the VM scheme.
+	 */
+	@Test
+	public void testRetrofitWithoutDispatchStubsSeedsNothing() throws Exception {
+		ProgramBuilder builder =
+			program(ENTRY, ENTRY_STUB, new String[] { INIT_BODY, STARTUP }, true);
+		try {
+			Program program = builder.getProgram();
+			builder.withTransaction(() -> RTLinkProgram.markOverlayAnalyzed(program));
+			builder.tx(() -> new RTLinkOverlayAnalyzer().added(program,
+				program.getMemory(), TaskMonitor.DUMMY, new MessageLog()));
+
+			assertFalse("no __astart without dispatch stubs",
+				hasSymbol(program, builder.addr(STARTUP), "__astart"));
+			assertNull("and no function seeded at the startup",
+				program.getFunctionManager().getFunctionAt(builder.addr(STARTUP)));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
 	@Test
 	public void testEntryWithoutStubShapeIsLeftAlone() throws Exception {
 		// A plain JMPF at the entry (no leading CALLF) is not the stub.
@@ -191,11 +216,15 @@ public class RTLinkVmRuntimeSeedTest extends AbstractGenericTest {
 	@Test
 	public void testTargetOutsideDispatcherBlockIsNotSeeded() throws Exception {
 		// AX arm 1 immediate 0x0500 lies past the 0x400-byte block: must be skipped while
-		// the in-block arm 2 still seeds.
+		// the in-block arm 2 still seeds. The target is real code in another block, so only
+		// the block test can refuse it.
 		String outOfBlock = DISPATCH.replace("b8 00 03", "b8 00 05");
 		ProgramBuilder builder = program(DISPATCH_SITE, outOfBlock,
 			new String[] { INNER_A, VENDOR_B, INNER_B }, false);
 		try {
+			MemoryBlock other = builder.createMemory("OTHER", "0x1050:0x0000", 0x10);
+			builder.withTransaction(() -> other.setExecute(true));
+			builder.setBytes("0x1050:0x0000", "c3");
 			int seeded =
 				seed(builder, Map.of(DISPATCHER_PHYSICAL, DISPATCHER_SEGMENT));
 			assertEquals("only the in-block vendor target may seed", 1, seeded);

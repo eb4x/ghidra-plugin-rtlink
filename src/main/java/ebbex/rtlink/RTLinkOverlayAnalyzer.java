@@ -121,14 +121,9 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			// assume DS. Husks first, so the thunk pass finds real code at its targets.
 			HuskRepair.repair(program, log, monitor);
 			if (createStubXrefs) {
-				// Retrofit the VM-runtime entry seeds too, unless the stub pass already
-				// did: dispatch-stub discovery is a cheap byte scan, and everything
-				// VmRuntimeSeeds does is a no-op where a prior run or hand
-				// analysis already claimed the address.
-				if (!repairStubThunks(program, log, monitor)) {
-					VmRuntimeSeeds.seed(program, DispatchStubs.discoverDispatchers(program, monitor),
-						log, monitor);
-				}
+				// The stub pass also retrofits the VM-runtime entry seeds, and only it: a
+				// binary without corroborating dispatch stubs gets none, as on a fresh import.
+				repairStubThunks(program, log, monitor);
 			}
 			ModuleSegments.assign(program, log);
 			maybeAssumeDataSegment(program, log);
@@ -485,14 +480,13 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 	 * thunks are left untouched, and {@link StubThunks#create} repairs stubs that
 	 * ended up as plain functions as well as overlay targets carrying a stale
 	 * no-return flag (which silently truncates the decompilation of every caller of
-	 * every stub forwarding to them). Returns true if that also seeded the VM runtime
-	 * entries.
+	 * every stub forwarding to them).
 	 */
-	private boolean repairStubThunks(Program program, MessageLog log, TaskMonitor monitor)
+	private void repairStubThunks(Program program, MessageLog log, TaskMonitor monitor)
 			throws CancelledException {
 		List<FileBytes> allFileBytes = program.getMemory().getAllFileBytes();
 		if (allFileBytes.isEmpty()) {
-			return false;
+			return;
 		}
 		FileBytes fileBytes = allFileBytes.get(0);
 		try (FileBytesProvider provider = new FileBytesProvider(fileBytes)) {
@@ -502,7 +496,7 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 			List<RTLinkOverlayPage> allPages =
 				RTLinkOverlayPage.parseAllPages(reader, overlayStart, fileBytes.getSize());
 			if (allPages.size() < 2) {
-				return false;
+				return;
 			}
 
 			// Rebuild the OverlayBlockInfo list from the existing blocks, mirroring
@@ -518,20 +512,18 @@ public class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 					OverlayNames.findOverlayBlock(memory, page.getPageIndex(), width);
 				if (block == null) {
 					// Unexpected layout (blocks renamed/removed); leave the program alone.
-					return false;
+					return;
 				}
 				overlayBlocks.add(new OverlayBlockInfo(page, block));
 			}
 
-			return DispatchStubs.resolve(program, overlayBlocks, resolvedStubBodies, log,
-				monitor);
+			DispatchStubs.resolve(program, overlayBlocks, resolvedStubBodies, log, monitor);
 		}
 		catch (CancelledException e) {
 			throw e;
 		}
 		catch (Exception e) {
 			log.appendMsg("RTLink: stub thunk retrofit failed: " + e.getMessage());
-			return false;
 		}
 	}
 

@@ -54,9 +54,10 @@ final class DispatchStubs {
 
 	/**
 	 * Resolve the dispatch stubs and trampolines, adding the body of every stub resolved to
-	 * {@code resolvedBodies}; true if it seeded the VM runtime entries.
+	 * {@code resolvedBodies}. The VM runtime entries are seeded here and nowhere else, and only
+	 * where real CALLF+JMPF stubs corroborate the scheme.
 	 */
-	static boolean resolve(Program program, List<OverlayBlockInfo> overlayBlocks,
+	static void resolve(Program program, List<OverlayBlockInfo> overlayBlocks,
 			AddressSet resolvedBodies, MessageLog log, TaskMonitor monitor)
 			throws CancelledException {
 		AddressSet overlayEntryPoints = new AddressSet();
@@ -94,7 +95,7 @@ final class DispatchStubs {
 
 		if (jmpfStubs == 0 && trampolines == 0) {
 			log.appendMsg("RTLink: No dispatch stubs found");
-			return false;
+			return;
 		}
 
 		if (jmpfStubs > 0) {
@@ -118,11 +119,9 @@ final class DispatchStubs {
 
 		// Only a corroborated VM-nucleus binary (real CALLF+JMPF stubs) gets its runtime
 		// entry points seeded.
-		if (jmpfStubs == 0) {
-			return false;
+		if (jmpfStubs > 0) {
+			VmRuntimeSeeds.seed(program, dispatcherSegs, log, monitor);
 		}
-		VmRuntimeSeeds.seed(program, dispatcherSegs, log, monitor);
-		return true;
 	}
 
 	/** Wire each stub to its target as a thunk, clearing the stale marks of those resolved. */
