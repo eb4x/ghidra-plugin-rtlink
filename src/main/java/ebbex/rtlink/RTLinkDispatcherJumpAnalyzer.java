@@ -273,7 +273,7 @@ public final class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		}
 		int segment = X86.codeSegment(program, jmp, at);
 		List<Address> bodies = new ArrayList<>();
-		for (long imm : loadedImmediates(program, jmp, jmp.getRegister(0))) {
+		for (long imm : loadedImmediates(program, jmp, X86.jumpRegister(program, jmp))) {
 			Address body =
 				((SegmentedAddressSpace) at.getAddressSpace()).getAddress(segment, (int) imm);
 			if (CodeSeeds.isResidentCode(program.getMemory(), body)) {
@@ -291,10 +291,11 @@ public final class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 	 * just-constant-loaded register.
 	 */
 	private static boolean isDispatcherJump(Program program, Instruction jmp) {
-		if (!isRegisterIndirectJump(jmp)) {
+		// A near JMP through a single 16-bit register: FF /4, mod == 3.
+		if (!jmp.getFlowType().isComputed() || !jmp.getFlowType().isJump()) {
 			return false;
 		}
-		Register jumpReg = jmp.getRegister(0);
+		Register jumpReg = X86.jumpRegister(program, jmp);
 		if (jumpReg == null) {
 			return false;
 		}
@@ -302,26 +303,6 @@ public final class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 			return false;
 		}
 		return !loadedImmediates(program, jmp, jumpReg).isEmpty();
-	}
-
-	/** A near {@code JMP} through a single 16-bit register: {@code FF /4}, {@code mod == 3}. */
-	private static boolean isRegisterIndirectJump(Instruction jmp) {
-		if (!"JMP".equals(jmp.getMnemonicString())) {
-			return false;
-		}
-		if (!jmp.getFlowType().isComputed() || !jmp.getFlowType().isJump()) {
-			return false;
-		}
-		if (jmp.getNumOperands() != 1 || jmp.getRegister(0) == null) {
-			return false;
-		}
-		byte[] bytes = X86.bytes(jmp);
-		int i = X86.opcodeIndex(bytes);
-		if (i < 0 || i + 1 >= bytes.length || (bytes[i] & 0xff) != 0xff) {
-			return false;
-		}
-		X86.ModRm modrm = X86.modRm(bytes, i + 1);
-		return modrm.isRegister() && modrm.reg() == 4; // /4 = JMP r/m, register form
 	}
 
 	/**
@@ -384,7 +365,7 @@ public final class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 		if (!(jmp.getMinAddress() instanceof SegmentedAddress at)) {
 			return List.of();
 		}
-		Register jumpReg = jmp.getRegister(0);
+		Register jumpReg = X86.jumpRegister(program, jmp);
 		Set<Long> immediates = loadedImmediates(program, jmp, jumpReg);
 		MemoryBlock jumpBlock = program.getMemory().getBlock(jmp.getMinAddress());
 		long pageBase = (jmp.getMaxAddress().getOffset() + 1) & PAGE_MASK;
@@ -417,7 +398,7 @@ public final class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 	 */
 	private static void dropPageGuessMarks(Program program, Instruction jmp) {
 		long pageBase = (jmp.getMaxAddress().getOffset() + 1) & PAGE_MASK;
-		for (long imm : loadedImmediates(program, jmp, jmp.getRegister(0))) {
+		for (long imm : loadedImmediates(program, jmp, X86.jumpRegister(program, jmp))) {
 			Address guess = jmp.getMinAddress().getAddressSpace().getAddress(pageBase + imm);
 			if (program.getListing().getInstructionAt(guess) == null) {
 				ErrorMarks.removeUnreached(program, guess);

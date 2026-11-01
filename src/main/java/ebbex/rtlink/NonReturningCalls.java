@@ -253,8 +253,7 @@ final class NonReturningCalls {
 			// instruction rather than by its flow type: once Ghidra's shared-return pass
 			// has been over a tail jump it carries a CALL flow override, and the flow
 			// type then describes what Ghidra made of it, not what the code does.
-			String mnemonic = instruction.getMnemonicString();
-			boolean tailCall = "JMP".equals(mnemonic) || "JMPF".equals(mnemonic);
+			boolean tailCall = X86.isUnconditionalJump(instruction);
 			if (flow.isTerminal() && !tailCall) {
 				return false; // a return: it comes back
 			}

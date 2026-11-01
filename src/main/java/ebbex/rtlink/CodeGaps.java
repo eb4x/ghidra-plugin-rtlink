@@ -255,8 +255,7 @@ final class CodeGaps {
 	 */
 	private static boolean isJumpSlot(PseudoInstruction instruction) {
 		FlowType flowType = instruction.getFlowType();
-		return flowType.isJump() && !flowType.hasFallthrough() &&
-			!"JMPF".equals(instruction.getMnemonicString());
+		return flowType.isJump() && !flowType.hasFallthrough() && !X86.isFarJump(instruction);
 	}
 
 	/**
@@ -490,7 +489,7 @@ final class CodeGaps {
 		if (!flowType.isJump()) {
 			return false;
 		}
-		if ("JMPF".equals(instruction.getMnemonicString())) {
+		if (X86.isFarJump(instruction)) {
 			return true;
 		}
 		Address[] flows = instruction.getFlows();
