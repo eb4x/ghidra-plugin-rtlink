@@ -81,6 +81,11 @@ final class ConflictArbitration {
 		int repaired = 0;
 		for (Bookmark bookmark : conflicts) {
 			monitor.checkCancelled();
+			// An earlier repair's clear may have taken this mark, and since 12.2 a deleted
+			// bookmark still answers its getters with what it held.
+			if (bookmark.isDeleted()) {
+				continue;
+			}
 			Address buried = bookmark.getAddress();
 
 			if (movedMark(program, bookmark)) {

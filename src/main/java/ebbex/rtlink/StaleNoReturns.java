@@ -143,11 +143,22 @@ final class StaleNoReturns {
 				continue;
 			}
 			Function function = functions.getFunctionAt(mark.getAddress());
-			if (function != null && function.hasNoReturn() && bodyReturns(function)) {
+			if (function == null || !function.hasNoReturn() || isCommitted(function)) {
+				continue;
+			}
+			if (bodyReturns(function)) {
 				stale.add(function);
 			}
 		}
 		return stale;
+	}
+
+	/**
+	 * True if someone has committed to {@code function}'s signature, by hand or by import: the
+	 * no-return flag is then theirs, whatever bookmark the discovery pass left before.
+	 */
+	private static boolean isCommitted(Function function) {
+		return function.getSignatureSource().isHigherPriorityThan(SourceType.ANALYSIS);
 	}
 
 	/**
@@ -217,12 +228,25 @@ final class StaleNoReturns {
 		if (orphan == null) {
 			return false;
 		}
-		Symbol symbol = orphan.getSymbol();
-		if (symbol.getSource() != SourceType.DEFAULT || symbol.isExternalEntryPoint() ||
-			program.getReferenceManager().getReferenceCountTo(fallThrough) != 0) {
+		if (!isOrphan(program, orphan)) {
 			return false;
 		}
 		return program.getFunctionManager().removeFunction(fallThrough);
+	}
+
+	/**
+	 * True if {@code function} is what analysis leaves behind a cut call and nothing more: a
+	 * default name, no references, no comment and no committed signature. A function someone
+	 * split off there by hand carries a default name too, and is told apart only if they left
+	 * something else on it.
+	 */
+	private static boolean isOrphan(Program program, Function function) {
+		Symbol symbol = function.getSymbol();
+		Address entry = function.getEntryPoint();
+		return symbol.getSource() == SourceType.DEFAULT && !symbol.isExternalEntryPoint() &&
+			program.getReferenceManager().getReferenceCountTo(entry) == 0 &&
+			function.getComment() == null && function.getRepeatableComment() == null &&
+			!isCommitted(function);
 	}
 
 	/**

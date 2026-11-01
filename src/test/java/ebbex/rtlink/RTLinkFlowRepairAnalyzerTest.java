@@ -11,12 +11,14 @@ import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.FlowOverride;
+import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.reloc.Relocation.Status;
+import ghidra.program.model.symbol.SourceType;
 import ghidra.util.task.TaskMonitor;
 
 /**
@@ -921,6 +923,49 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 		}
 	}
 
+	/**
+	 * A name someone gave the bytes right behind the call is evidence the clear must respect,
+	 * even on the very first instruction: the call is still sealed, nothing is cleared.
+	 */
+	@Test
+	public void testSealSparesANamedFallThrough() throws Exception {
+		ProgramBuilder builder = abortProgram();
+		try {
+			Program program = builder.getProgram();
+			builder.createLabel("0x1000:0x0105", "handler_table");
+			resolveVectors(builder);
+
+			assertEquals(1, sealNonReturning(builder));
+
+			assertEquals("the call is sealed all the same", FlowOverride.CALL_RETURN,
+				program.getListing().getInstructionAt(builder.addr("0x1000:0x0100")).getFlowOverride());
+			assertNotNull("but the named code behind it is untouched",
+				program.getListing().getInstructionAt(builder.addr("0x1000:0x0105")));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/** A default-named function nothing calls behind the call is analysis' orphan, not evidence. */
+	@Test
+	public void testSealClearsAnOrphanFunctionAtTheFallThrough() throws Exception {
+		ProgramBuilder builder = abortProgram();
+		try {
+			Program program = builder.getProgram();
+			builder.createFunction("0x1000:0x0105");
+			resolveVectors(builder);
+
+			assertEquals(1, sealNonReturning(builder));
+
+			assertNull("the orphan's junk is cleared",
+				program.getListing().getInstructionAt(builder.addr("0x1000:0x0105")));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
 	/** A routine that plainly returns must never be taken for a terminating one. */
 	@Test
 	public void testOrdinaryCallKeepsItsFallThrough() throws Exception {
@@ -1184,6 +1229,45 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 					.getFunctionManager()
 					.getFunctionAt(builder.addr("0x1000:0x0140"))
 					.hasNoReturn());
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/** A discovered verdict on a function whose signature someone has since committed stands. */
+	@Test
+	public void testDiscoveredNoReturnOnCommittedSignatureStands() throws Exception {
+		ProgramBuilder builder = cutCallerProgram("33 c0 cb", true);
+		try {
+			Program program = builder.getProgram();
+			Function callee = program.getFunctionManager().getFunctionAt(builder.addr("0x1000:0x0140"));
+			builder.withTransaction(() -> callee.setSignatureSource(SourceType.USER_DEFINED));
+
+			assertEquals(0, clearStaleNoReturns(builder));
+			assertTrue(callee.hasNoReturn());
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/** A function behind the cut call that someone has commented is theirs, not an orphan. */
+	@Test
+	public void testCommentedFunctionBehindTheCallIsKept() throws Exception {
+		ProgramBuilder builder = cutCallerProgram("33 c0 cb", true);
+		try {
+			Program program = builder.getProgram();
+			Function split = program.getFunctionManager().getFunctionAt(builder.addr("0x1000:0x0106"));
+			builder.withTransaction(() -> split.setComment("split off by hand"));
+
+			assertEquals(1, clearStaleNoReturns(builder));
+
+			assertEquals("the call is restored", FlowOverride.NONE, program.getListing()
+					.getInstructionAt(builder.addr("0x1000:0x0101"))
+					.getFlowOverride());
+			assertNotNull("but the commented function stays",
+				program.getFunctionManager().getFunctionAt(builder.addr("0x1000:0x0106")));
 		}
 		finally {
 			builder.dispose();

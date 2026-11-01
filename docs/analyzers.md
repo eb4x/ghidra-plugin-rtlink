@@ -68,11 +68,15 @@ seven classes and not one. They share package-private statics and must stay in
   never reached at all: CALL fall-throughs onto MZ-relocated segment words sealed as
   data (`CALL_RETURN`); far jumps/calls through initialized `CS:[imm16]` vectors
   followed; provably terminating routines (`INT 21h/4Ch` and tail-jump chains into
-  one) sealing their callers' fall-throughs; no-return flags that Ghidra's
-  "Non-Returning Functions - Discovered" pass set on routines whose body returns
-  (ROE2MAIN's `__ftol`, marked from the emulated-float wreckage around its callers)
-  cleared, each caller's fall-through reopened and its body regrown over the orphan
-  function the cut left; "conflicting instruction" bookmarks
+  one) sealing their callers' fall-throughs (the junk behind each call cleared up to the
+  first evidenced instruction — on the very first one, a name, external entry or flow
+  reference counts, an unreferenced default-named function does not); no-return flags
+  that Ghidra's "Non-Returning Functions - Discovered" pass set on routines whose body
+  returns (ROE2MAIN's `__ftol`, marked from the emulated-float wreckage around its
+  callers) cleared unless the signature has since been committed, each caller's
+  fall-through reopened and its body regrown over the orphan function the cut left (one
+  with a default name, no references, no comment and no committed signature);
+  "conflicting instruction" bookmarks
   arbitrated by evidence; routines reached only through a `CS:imm` far pointer the
   program builds to itself (stored into adjacent words, handed as `DS:DX` to a routine
   that stores it so, or installed by DOS set-vector: interrupt hooks, the PSP terminate

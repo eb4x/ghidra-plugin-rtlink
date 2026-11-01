@@ -20,6 +20,8 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.FlowType;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.SourceType;
+import ghidra.program.model.symbol.Symbol;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
@@ -68,8 +70,12 @@ final class NonReturningCalls {
 			if (!function.hasNoReturn()) {
 				function.setNoReturn(true);
 			}
-			for (Reference reference : program.getReferenceManager()
-					.getReferencesTo(function.getEntryPoint())) {
+			// Copied first: the clear below removes references, and past 1700 of them the
+			// reference iterator is live rather than a snapshot.
+			List<Reference> callers = new ArrayList<>();
+			program.getReferenceManager().getReferencesTo(function.getEntryPoint())
+					.forEach(callers::add);
+			for (Reference reference : callers) {
 				monitor.checkCancelled();
 				if (!reference.getReferenceType().isCall()) {
 					continue;
@@ -162,6 +168,11 @@ final class NonReturningCalls {
 	 * The run of instructions the disassembler decoded straight through from
 	 * {@code start}, plus the byte after it — where a run it abandoned (a long stretch
 	 * of one repeated byte, say) leaves its ERROR mark.
+	 * <p>
+	 * The first instruction is held to a weaker test than the rest: a function at the
+	 * fall-through is no evidence by itself, since analysis makes an orphan of the junk
+	 * behind a call that never returns. Anything else — a flow reference, an external entry,
+	 * a name someone gave it — means the run is empty and nothing is cleared.
 	 */
 	private static AddressSetView fallThroughRun(Program program, Address start) {
 		AddressSet run = new AddressSet();
@@ -172,13 +183,26 @@ final class NonReturningCalls {
 			if (instruction == null) {
 				break;
 			}
-			if (!at.equals(start) && CodeEvidence.isEvidenced(program, instruction)) {
+			boolean evidenced = at.equals(start)
+					? isEvidencedBesidesFunction(program, at)
+					: CodeEvidence.isEvidenced(program, instruction);
+			if (evidenced) {
 				break; // something really flows here: the run has left the junk
 			}
 			run.add(instruction.getMinAddress(), instruction.getMaxAddress());
 			at = instruction.getFallThrough();
 		}
 		return run;
+	}
+
+	/** {@link CodeEvidence#isEvidenced} without its function-entry clause. */
+	private static boolean isEvidencedBesidesFunction(Program program, Address entry) {
+		if (CodeEvidence.hasFlowReferenceTo(program, entry) ||
+			program.getSymbolTable().isExternalEntryPoint(entry)) {
+			return true;
+		}
+		Symbol primary = program.getSymbolTable().getPrimarySymbol(entry);
+		return primary != null && primary.getSource() != SourceType.DEFAULT;
 	}
 
 	/**
