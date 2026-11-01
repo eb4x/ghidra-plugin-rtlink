@@ -1,5 +1,6 @@
 package ebbex.rtlink;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -7,6 +8,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
 /**
  * The parts of an Intel OMF-86 object library (or a single object module) that signature
@@ -52,18 +54,16 @@ final class OmfLibrary {
 	private static final int THEADR = 0x80;
 	private static final int LHEADR = 0x82;
 	private static final int PUBDEF = 0x90;
-	private static final int PUBDEF32 = 0x91;
 	private static final int LNAMES = 0x96;
 	private static final int SEGDEF = 0x98;
-	private static final int SEGDEF32 = 0x99;
 	private static final int FIXUPP = 0x9c;
-	private static final int FIXUPP32 = 0x9d;
 	private static final int LEDATA = 0xa0;
-	private static final int LEDATA32 = 0xa1;
 	private static final int LIDATA = 0xa2;
-	private static final int LIDATA32 = 0xa3;
 	private static final int MODEND = 0x8a;
-	private static final int MODEND32 = 0x8b;
+
+	/** The records that have a 32-bit form, one type above: its offsets and lengths are wide. */
+	private static final Set<Integer> WIDE_FORMS = Set.of(PUBDEF, SEGDEF, FIXUPP, LEDATA, LIDATA,
+		MODEND);
 	private static final int LIBHDR = 0xf0;
 	private static final int LIBEND = 0xf1;
 
@@ -116,10 +116,11 @@ final class OmfLibrary {
 		private final List<Segment> segments = new ArrayList<>();
 		private final List<Public> publics = new ArrayList<>();
 		private String moduleName = "";
-		private Segment lastSegment;
-		private int lastOffset;
-		private int lastLength;
-		private boolean lastIterated;
+		/** The last data record, which a FIXUPP applies to. */
+		private LastData last;
+
+		private record LastData(Segment segment, int offset, int length, boolean iterated) {
+		}
 
 		ModuleReader(byte[] bytes, int start) {
 			this.bytes = bytes;
@@ -140,24 +141,26 @@ final class OmfLibrary {
 					throw new IOException(String.format("bad record at 0x%x", at));
 				}
 				Cursor cursor = new Cursor(bytes, content, contentEnd);
-				switch (type) {
+				int base = WIDE_FORMS.contains(type & ~1) ? type & ~1 : type;
+				boolean wide = base != type;
+				switch (base) {
 					case THEADR, LHEADR -> moduleName = cursor.name();
 					case LNAMES -> {
 						while (cursor.more()) {
 							names.add(cursor.name());
 						}
 					}
-					case SEGDEF, SEGDEF32 -> segdef(cursor, type == SEGDEF32);
-					case PUBDEF, PUBDEF32 -> pubdef(cursor, type == PUBDEF32);
-					case LEDATA, LEDATA32 -> ledata(cursor, type == LEDATA32);
-					case LIDATA, LIDATA32 -> lidata(cursor, type == LIDATA32);
-					case FIXUPP, FIXUPP32 -> fixupp(cursor, type == FIXUPP32);
+					case SEGDEF -> segdef(cursor, wide);
+					case PUBDEF -> pubdef(cursor, wide);
+					case LEDATA -> ledata(cursor, wide);
+					case LIDATA -> lidata(cursor, wide);
+					case FIXUPP -> fixupp(cursor, wide);
 					default -> {
 						// not needed for matching
 					}
 				}
 				at = contentEnd + 1;
-				if (type == MODEND || type == MODEND32) {
+				if (base == MODEND) {
 					end = at;
 					return new Module(moduleName, List.copyOf(segments), List.copyOf(publics));
 				}
@@ -208,11 +211,11 @@ final class OmfLibrary {
 		private void lidata(Cursor c, boolean wide) throws IOException {
 			Segment segment = segment(c.index());
 			int offset = dataOffset(segment, wide ? c.u32() : c.u16());
-			ByteSink sink = new ByteSink();
+			ByteArrayOutputStream sink = new ByteArrayOutputStream();
 			while (c.more()) {
 				iterate(c, wide, sink, 0);
 			}
-			byte[] data = sink.toArray();
+			byte[] data = sink.toByteArray();
 			put(segment, offset, data);
 			remember(segment, offset, data.length, true);
 		}
@@ -221,18 +224,18 @@ final class OmfLibrary {
 		 * One iterated data block. Real translators nest a few levels at most; the depth bound
 		 * keeps a malformed record from recursing a 64K record's worth of levels deep.
 		 */
-		private void iterate(Cursor c, boolean wide, ByteSink sink, int depth)
+		private void iterate(Cursor c, boolean wide, ByteArrayOutputStream sink, int depth)
 				throws IOException {
 			if (depth > MAX_LIDATA_DEPTH) {
 				throw new IOException("iterated data nested deeper than " + MAX_LIDATA_DEPTH);
 			}
 			long repeat = wide ? c.u32() : c.u16();
 			int blocks = c.u16();
-			ByteSink one = new ByteSink();
+			ByteArrayOutputStream one = new ByteArrayOutputStream();
 			if (blocks == 0) {
 				int count = c.u8();
 				for (int i = 0; i < count; i++) {
-					one.add(c.u8());
+					one.write(c.u8());
 				}
 			}
 			else {
@@ -240,12 +243,12 @@ final class OmfLibrary {
 					iterate(c, wide, one, depth + 1);
 				}
 			}
-			byte[] unit = one.toArray();
+			byte[] unit = one.toByteArray();
 			if (unit.length == 0) {
 				return; // repeating nothing, however often, adds nothing
 			}
 			for (long i = 0; i < repeat && sink.size() < 0x100000; i++) {
-				sink.addAll(unit);
+				sink.writeBytes(unit);
 			}
 		}
 
@@ -299,25 +302,26 @@ final class OmfLibrary {
 		}
 
 		private void mask(int recordOffset, int size) {
-			if (lastSegment == null) {
+			if (last == null || last.segment() == null) {
 				return;
 			}
-			if (lastIterated) {
+			if (last.iterated()) {
 				// Where a fixup lands in expanded iterated data is not worth modelling: none
 				// of it is compared.
-				for (int i = 0; i < lastLength; i++) {
-					fix(lastOffset + i);
+				for (int i = 0; i < last.length(); i++) {
+					fix(last.offset() + i);
 				}
 				return;
 			}
 			for (int i = 0; i < Math.max(size, 1); i++) {
-				fix(lastOffset + recordOffset + i);
+				fix(last.offset() + recordOffset + i);
 			}
 		}
 
 		private void fix(int offset) {
-			if (offset >= 0 && offset < lastSegment.fixed().length) {
-				lastSegment.fixed()[offset] = true;
+			boolean[] fixed = last.segment().fixed();
+			if (offset >= 0 && offset < fixed.length) {
+				fixed[offset] = true;
 			}
 		}
 
@@ -331,10 +335,7 @@ final class OmfLibrary {
 		}
 
 		private void remember(Segment segment, int offset, int length, boolean iterated) {
-			lastSegment = segment;
-			lastOffset = offset;
-			lastLength = length;
-			lastIterated = iterated;
+			last = new LastData(segment, offset, length, iterated);
 		}
 
 		private Segment segment(int index) {
@@ -395,32 +396,6 @@ final class OmfLibrary {
 			byte[] rest = Arrays.copyOfRange(bytes, at, end);
 			at = end;
 			return rest;
-		}
-	}
-
-	private static final class ByteSink {
-		private byte[] buffer = new byte[64];
-		private int size;
-
-		void add(int b) {
-			if (size == buffer.length) {
-				buffer = Arrays.copyOf(buffer, size * 2);
-			}
-			buffer[size++] = (byte) b;
-		}
-
-		void addAll(byte[] bytes) {
-			for (byte b : bytes) {
-				add(b);
-			}
-		}
-
-		int size() {
-			return size;
-		}
-
-		byte[] toArray() {
-			return Arrays.copyOf(buffer, size);
 		}
 	}
 
