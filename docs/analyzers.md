@@ -16,7 +16,8 @@ seven classes and not one. They share package-private statics and must stay in
   fixups), `ModuleSegments` (module bases and the CS over each), `DispatchStubs` (stub and
   trampoline discovery), `StubThunks` (wiring each to its target), `DataSegmentAssumption`
   (DS=DGROUP), `VmRuntimeSeeds` (the entry stub's and the VM dispatch's targets),
-  `HuskRepair` (functions with no code at their entry); `CodeSeeds` holds what the seeding
+  `HuskRepair` (functions with no code at their entry; run again at analysis end, where a
+  husk it cannot repair is a `Msg.warn`, before 0.8.24 dropped); `CodeSeeds` holds what the seeding
   passes share, `OverlayNames` the record numbering in block and label names.
 - **`RTLinkSwitchTableAnalyzer`** — INSTRUCTION, `CODE_ANALYSIS.before()`. Recovers the
   CS-/module-relative switch tables and fixes their *references*. Must run before

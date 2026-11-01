@@ -431,14 +431,18 @@ public final class RTLinkOverlayAnalyzer extends AbstractAnalyzer {
 		// final re-analysis round that fabricates these call-target husks (its once-per-txn
 		// guard then skips its re-invocation). analysisEnded is the one hook after every
 		// round. Idempotent — a no-op once no husks remain — so it is harmless on the
-		// retrofit path where added() already ran it. Failures go to a throwaway log
-		// because analysisEnded cannot surface the analysis warnings dialog.
+		// retrofit path where added() already ran it. analysisEnded cannot surface the
+		// analysis warnings dialog, so failures are forwarded to the application log.
+		MessageLog huskLog = new MessageLog();
 		try {
 			program.withTransaction("RTLink: repair husk functions",
-				() -> HuskRepair.repair(program, new MessageLog(), TaskMonitor.DUMMY));
+				() -> HuskRepair.repair(program, huskLog, TaskMonitor.DUMMY));
 		}
 		catch (CancelledException _) {
 			// DUMMY monitor never cancels
+		}
+		if (huskLog.hasMessages()) {
+			Msg.warn(this, huskLog.toString());
 		}
 
 		if (resolvedStubBodies.isEmpty()) {
