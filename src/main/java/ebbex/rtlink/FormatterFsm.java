@@ -7,7 +7,6 @@ import java.util.Set;
 
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSetView;
-import ghidra.program.model.address.SegmentedAddress;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.Instruction;
@@ -236,7 +235,10 @@ final class FormatterFsm {
 		if (range == null) {
 			return null;
 		}
-		int segment = ((SegmentedAddress) block.getStart()).getSegment();
+		int segment = X86.segment(block);
+		if (segment < 0) {
+			return null;
+		}
 		long lastByte = (long) displacement + 2L * states - 1;
 		if (lastByte > 0xffffL) {
 			return null;

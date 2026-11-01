@@ -8,7 +8,6 @@ import java.util.Set;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressOutOfBoundsException;
 import ghidra.program.model.address.AddressSetView;
-import ghidra.program.model.address.SegmentedAddress;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.Instruction;
@@ -128,7 +127,10 @@ final class DataSwitchTables {
 					dispatch.getMinAddress(), table));
 			return null;
 		}
-		int segment = ((SegmentedAddress) block.getStart()).getSegment();
+		int segment = X86.segment(block);
+		if (segment < 0) {
+			return null;
+		}
 
 		Listing listing = program.getListing();
 		Set<Address> destinations = new LinkedHashSet<>();

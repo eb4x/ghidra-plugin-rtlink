@@ -269,6 +269,19 @@ final class X86 {
 		return cs != null && writes(jump, cs);
 	}
 
+	/**
+	 * The segment {@code block} starts at, or -1 for a block outside the segmented space: an
+	 * overlay block's start is a {@code GenericAddress}.
+	 */
+	static int segment(MemoryBlock block) {
+		return block.getStart() instanceof SegmentedAddress start ? start.getSegment() : -1;
+	}
+
+	/** The 64KB page segment of {@code address}, {@code (offset >> 4) & 0xf000}: stock's guess at CS. */
+	static int pageSegment(Address address) {
+		return (int) ((address.getOffset() >> 4) & 0xf000L);
+	}
+
 	/** The program's segmented (real-mode) default address space. */
 	static SegmentedAddressSpace space(Program program) {
 		return (SegmentedAddressSpace) program.getAddressFactory().getDefaultAddressSpace();

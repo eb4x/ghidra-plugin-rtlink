@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.Set;
 
 import ghidra.program.model.address.Address;
-import ghidra.program.model.address.SegmentedAddress;
 import ghidra.program.model.address.SegmentedAddressSpace;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
@@ -39,7 +38,7 @@ final class ResidentSwitchTables {
 		}
 
 		SegmentedAddressSpace space = X86.space(program);
-		int segment = ((SegmentedAddress) block.getStart()).getSegment();
+		int segment = X86.segment(block); // segmented: isUnalignedSegment
 
 		// The table and every entry must live inside the segment they are addressed from; a
 		// 16-bit offset that would wrap means the guard was misread, so give up rather than
@@ -76,10 +75,7 @@ final class ResidentSwitchTables {
 	 * correctly and must not be touched.
 	 */
 	private static boolean isUnalignedSegment(MemoryBlock block) {
-		if (!(block.getStart() instanceof SegmentedAddress start)) {
-			return false;
-		}
-		int pageSegment = (int) ((start.getOffset() >> 4) & 0xf000L);
-		return start.getSegment() != pageSegment;
+		int segment = X86.segment(block);
+		return segment >= 0 && segment != X86.pageSegment(block.getStart());
 	}
 }
