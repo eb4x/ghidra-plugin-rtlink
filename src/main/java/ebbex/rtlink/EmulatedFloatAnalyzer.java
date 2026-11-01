@@ -103,7 +103,7 @@ public class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 			if (insn == null) {
 				continue; // cleared by an earlier patch, and not code after all
 			}
-			AddressSetView touched = EmulatedFloatPatcher.patch(program, insn, monitor);
+			AddressSetView touched = EmulatedFloatPatcher.patch(program, insn, true, monitor);
 			if (touched != null) {
 				rewrittenCode.add(touched);
 				patched++;

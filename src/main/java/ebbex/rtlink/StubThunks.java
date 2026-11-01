@@ -9,9 +9,7 @@ import ghidra.program.model.listing.CodeUnit;
 import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionManager;
-import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.util.Msg;
@@ -145,7 +143,7 @@ final class StubThunks {
 		// as a jump into unmapped memory), and setNoReturn(true) on the stub thunk
 		// lands on the overlay target. If the target's disassembled body demonstrably
 		// returns, the flag is stale — clear it.
-		if (overlayFunc.hasNoReturn() && bodyReturns(overlayFunc)) {
+		if (overlayFunc.hasNoReturn() && StaleNoReturns.bodyReturns(overlayFunc)) {
 			// A repair, not a failure: Msg.info, not the analysis MessageLog.
 			Msg.info(RTLinkOverlayAnalyzer.class, String.format(
 				"RTLink: clearing stale no-return flag on %s at %s (body returns)",
@@ -192,21 +190,6 @@ final class StubThunks {
 				stubAddr, targetAddr, e.getMessage()));
 			return false;
 		}
-	}
-
-	/**
-	 * Returns true if {@code func}'s disassembled body contains a return instruction —
-	 * proof that a no-return flag on it is wrong.
-	 */
-	private static boolean bodyReturns(Function func) {
-		InstructionIterator it =
-			func.getProgram().getListing().getInstructions(func.getBody(), true);
-		while (it.hasNext()) {
-			if (it.next().getFlowType() == RefType.TERMINATOR) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	/**

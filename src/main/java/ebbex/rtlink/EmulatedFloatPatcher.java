@@ -170,10 +170,12 @@ class EmulatedFloatPatcher {
 	 * instruction does not fail — it reads whatever bytes now sit at its old address. Callers
 	 * re-fetch it by address immediately before calling.
 	 *
+	 * @param analyze whether the re-disassembly may start auto-analysis, as disassembly does;
+	 *        false for a pass that has to finish a repair before analysis sees any of it
 	 * @return what the rewrite cleared and re-disassembled, or null if the site was not patched
 	 */
-	static AddressSetView patch(Program program, Instruction insn, TaskMonitor monitor)
-			throws CancelledException {
+	static AddressSetView patch(Program program, Instruction insn, boolean analyze,
+			TaskMonitor monitor) throws CancelledException {
 		int vector = emulatorVector(insn);
 		if (vector < 0) {
 			return null;
@@ -258,6 +260,7 @@ class EmulatedFloatPatcher {
 
 			DisassembleCommand redo =
 				new DisassembleCommand(restartPoints(program, addr, last), null, true);
+			redo.enableCodeAnalysis(analyze);
 			redo.applyTo(program, monitor);
 			AddressSet touched = new AddressSet(addr, last);
 			touched.add(redo.getDisassembledAddressSet());

@@ -60,7 +60,11 @@ seven classes and not one. They share package-private statics and must stay in
   never reached at all: CALL fall-throughs onto MZ-relocated segment words sealed as
   data (`CALL_RETURN`); far jumps/calls through initialized `CS:[imm16]` vectors
   followed; provably terminating routines (`INT 21h/4Ch` and tail-jump chains into
-  one) sealing their callers' fall-throughs; "conflicting instruction" bookmarks
+  one) sealing their callers' fall-throughs; no-return flags that Ghidra's
+  "Non-Returning Functions - Discovered" pass set on routines whose body returns
+  (ROE2MAIN's `__ftol`, marked from the emulated-float wreckage around its callers)
+  cleared, each caller's fall-through reopened and its body regrown over the orphan
+  function the cut left; "conflicting instruction" bookmarks
   arbitrated by evidence; routines reached only through a `CS:imm` far pointer the
   program builds to itself (stored into adjacent words, handed as `DS:DX` to a routine
   that stores it so, or installed by DOS set-vector: interrupt hooks, the PSP terminate
@@ -74,7 +78,8 @@ seven classes and not one. They share package-private statics and must stay in
   (`00 00` is a real instruction). Unresolved dispatch stubs and NOP sleds are left
   strictly alone. Each repair is its own class — `RelocationFallthroughs`,
   `ConflictArbitration`, `CodeGaps`, `FarVectorFlows`, `NonReturningCalls`,
-  `FillerIslands`, `FarCodePointers` — and the analyzer only orders them.
+  `StaleNoReturns`, `FillerIslands`, `FarCodePointers` — and the analyzer only orders
+  them.
 - **`RTLinkLibrarySignatureAnalyzer`** — BYTE, `LOW_PRIORITY.after().after()` (after the
   buried-code pass). Off until its `Vendor library` option names the user's own
   `RTLUTILS.LIB`; then matches each module's public symbols against the resident code

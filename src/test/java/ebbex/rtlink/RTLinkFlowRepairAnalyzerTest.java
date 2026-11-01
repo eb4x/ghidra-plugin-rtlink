@@ -5,11 +5,13 @@ import static org.junit.Assert.*;
 import org.junit.Test;
 
 import generic.test.AbstractGenericTest;
+import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.FlowOverride;
+import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
@@ -1040,6 +1042,147 @@ public class RTLinkFlowRepairAnalyzerTest extends AbstractGenericTest {
 			assertFalse(builder.getProgram()
 					.getFunctionManager()
 					.getFunctionAt(builder.addr("0x1000:0x0120"))
+					.hasNoReturn());
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	private static int clearStaleNoReturns(ProgramBuilder builder) throws Exception {
+		Program program = builder.getProgram();
+		int txId = program.startTransaction("clear stale no-return flags");
+		try {
+			return StaleNoReturns.clear(program, TaskMonitor.DUMMY);
+		}
+		finally {
+			program.endTransaction(txId, true);
+		}
+	}
+
+	/** The category Ghidra's "Non-Returning Functions - Discovered" pass bookmarks with. */
+	private static final String DISCOVERED = "Non-Returning Function";
+
+	/**
+	 * ROE2MAIN's {@code __ftol} and one of its callers, after Ghidra's discovery pass got the
+	 * callee wrong: the callee flagged and bookmarked, the call cut off, the caller's body
+	 * stopping at it, and the code after it a function nothing calls.
+	 * <pre>
+	 *   0100  55               PUSH BP
+	 *   0101  9a 40 01 00 10   CALLF 1000:0140   ; CALL_RETURN override
+	 *   0106  b8 01 00         MOV AX,1          ; FUN_1000_0106, 0 callers
+	 *   0109  5d               POP BP
+	 *   010a  cb               RETF
+	 *   0140  callee
+	 * </pre>
+	 * With {@code discovered} false the flag is there without the discovery pass's bookmark,
+	 * as one set by name or by hand is.
+	 */
+	private ProgramBuilder cutCallerProgram(String callee, boolean discovered) throws Exception {
+		ProgramBuilder builder = new ProgramBuilder("NORET", ProgramBuilder._X86_16_REAL_MODE);
+		boolean ok = false;
+		try {
+			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0100", 0x50);
+			builder.withTransaction(() -> code.setExecute(true));
+			builder.setBytes("0x1000:0x0100", "55 9a 40 01 00 10 b8 01 00 5d cb");
+			builder.setBytes("0x1000:0x0140", callee);
+			builder.disassemble("0x1000:0x0100", 11, false);
+			builder.disassemble("0x1000:0x0140", callee.split(" ").length, false);
+			builder.createFunction("0x1000:0x0140");
+			builder.createFunction("0x1000:0x0100");
+			Program program = builder.getProgram();
+			int txId = program.startTransaction("discover a wrong no-return");
+			try {
+				program.getFunctionManager().getFunctionAt(builder.addr("0x1000:0x0140"))
+						.setNoReturn(true);
+				if (discovered) {
+					program.getBookmarkManager()
+							.setBookmark(builder.addr("0x1000:0x0140"), BookmarkType.ANALYSIS,
+								DISCOVERED, "Non-Returning Function Found");
+				}
+				program.getListing().getInstructionAt(builder.addr("0x1000:0x0101"))
+						.setFlowOverride(FlowOverride.CALL_RETURN);
+				CreateFunctionCmd.fixupFunctionBody(program,
+					program.getFunctionManager().getFunctionAt(builder.addr("0x1000:0x0100")),
+					TaskMonitor.DUMMY);
+			}
+			finally {
+				program.endTransaction(txId, true);
+			}
+			builder.createFunction("0x1000:0x0106");
+			ok = true;
+			return builder;
+		}
+		finally {
+			if (!ok) {
+				builder.dispose();
+			}
+		}
+	}
+
+	@Test
+	public void testDiscoveredNoReturnOnReturningBodyIsCleared() throws Exception {
+		ProgramBuilder builder = cutCallerProgram("33 c0 cb", true); // XOR AX,AX; RETF
+		try {
+			Program program = builder.getProgram();
+			FunctionManager functions = program.getFunctionManager();
+			assertFalse("setup: the caller must stop at the call",
+				functions.getFunctionAt(builder.addr("0x1000:0x0100"))
+						.getBody()
+						.contains(builder.addr("0x1000:0x010a")));
+
+			assertEquals(1, clearStaleNoReturns(builder));
+
+			assertFalse("the callee returns",
+				functions.getFunctionAt(builder.addr("0x1000:0x0140")).hasNoReturn());
+			assertNull("and the discovery pass's verdict goes with the flag",
+				program.getBookmarkManager()
+						.getBookmark(builder.addr("0x1000:0x0140"), BookmarkType.ANALYSIS,
+							DISCOVERED));
+			Instruction call = program.getListing().getInstructionAt(builder.addr("0x1000:0x0101"));
+			assertEquals(FlowOverride.NONE, call.getFlowOverride());
+			assertNull("the orphan below the call is gone",
+				functions.getFunctionAt(builder.addr("0x1000:0x0106")));
+			assertTrue("and the caller owns its code again, down to its RETF",
+				functions.getFunctionAt(builder.addr("0x1000:0x0100"))
+						.getBody()
+						.contains(builder.addr("0x1000:0x010a")));
+			assertEquals("a second run must find nothing", 0, clearStaleNoReturns(builder));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/** A discovered verdict on a body without a return is the discovery pass being right. */
+	@Test
+	public void testDiscoveredNoReturnWithoutReturnStands() throws Exception {
+		ProgramBuilder builder = cutCallerProgram("eb fe", true); // JMP $
+		try {
+			assertEquals(0, clearStaleNoReturns(builder));
+			Program program = builder.getProgram();
+			assertTrue(program.getFunctionManager()
+					.getFunctionAt(builder.addr("0x1000:0x0140"))
+					.hasNoReturn());
+			assertEquals(FlowOverride.CALL_RETURN, program.getListing()
+					.getInstructionAt(builder.addr("0x1000:0x0101"))
+					.getFlowOverride());
+			assertNotNull(program.getFunctionManager().getFunctionAt(builder.addr("0x1000:0x0106")));
+		}
+		finally {
+			builder.dispose();
+		}
+	}
+
+	/** A flag the discovery pass did not set — by name, by hand — is never second-guessed. */
+	@Test
+	public void testUndiscoveredNoReturnStands() throws Exception {
+		ProgramBuilder builder = cutCallerProgram("33 c0 cb", false);
+		try {
+			assertEquals(0, clearStaleNoReturns(builder));
+			assertTrue(builder.getProgram()
+					.getFunctionManager()
+					.getFunctionAt(builder.addr("0x1000:0x0140"))
 					.hasNoReturn());
 		}
 		finally {

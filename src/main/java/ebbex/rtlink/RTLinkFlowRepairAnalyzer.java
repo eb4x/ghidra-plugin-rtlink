@@ -26,6 +26,7 @@ import ghidra.util.task.TaskMonitor;
  * <li>{@link CodeGaps} — undefined gaps that decode exactly onto the code after them.</li>
  * <li>{@link FarVectorFlows} — far jumps and calls through {@code CS:[imm16]} vectors.</li>
  * <li>{@link NonReturningCalls} — calls to routines that end in DOS exit.</li>
+ * <li>{@link StaleNoReturns} — discovered no-return flags on routines whose body returns.</li>
  * <li>{@link FillerIslands} — instructions decoded out of zero fill.</li>
  * </ol>
  * plus {@link FarCodePointers}, run with the gap filler to a fixpoint.
@@ -79,6 +80,11 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 		int fallthroughs = RelocationFallthroughs.repair(program, monitor);
 		int vectors = FarVectorFlows.resolve(program, monitor);
 		fallthroughs += NonReturningCalls.seal(program, monitor);
+		// After E: only once the DOS exits are marked do the bodies end where the code does,
+		// so a return in one is a return of that routine. And before B: arbitration's clears
+		// start auto-analysis, whose no-return discovery would re-flag a routine whose
+		// callers are still cut.
+		int reopened = StaleNoReturns.clear(program, monitor);
 		// After E, never before it: the junk table behind a non-returning call is
 		// fallen into (from the call), so F would refuse to touch it. E removes the
 		// cause; F only clears islands that never had one.
@@ -108,6 +114,8 @@ public class RTLinkFlowRepairAnalyzer extends AbstractAnalyzer {
 			"RTLink/Plus: Followed %d far jump(s)/call(s) through a code-segment vector");
 		RTLinkProgram.report(this, fallthroughs,
 			"RTLink/Plus: Sealed %d fall-through(s) behind non-returning calls");
+		RTLinkProgram.report(this, reopened,
+			"RTLink/Plus: Cleared %d no-return flag(s) on functions whose body returns");
 		RTLinkProgram.report(this, conflicts,
 			"RTLink/Plus: Recovered %d buried instruction run(s) from junk conflicts");
 		RTLinkProgram.report(this, pointed,

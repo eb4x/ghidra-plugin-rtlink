@@ -122,16 +122,57 @@ final class ConflictArbitration {
 			}
 
 			fixupAround(program, buried, evidence, monitor);
-			// The repair's own disassembly may already have dropped the mark, and since 12.2
-			// removing a deleted bookmark throws: remove whatever mark is there now.
-			Bookmark mark = bookmarks.getBookmark(buried, BookmarkType.ERROR,
-				Disassembler.ERROR_BOOKMARK_CATEGORY);
-			if (mark != null) {
-				bookmarks.removeBookmark(mark);
-			}
+			dropMark(bookmarks, buried);
 			repaired++;
 		}
 		return repaired;
+	}
+
+	/**
+	 * Settle the conflict burying {@code buried} on the spot, for a pass that has to finish a
+	 * repair before analysis sees any of it ({@link StaleNoReturns}). The evidence rules are
+	 * {@link #arbitrate}'s; but the junk is cleared without Ghidra's flow repair, which starts
+	 * auto-analysis, and the buried code is decoded with analysis off. Returns true if code now
+	 * starts at {@code buried}; what was decoded is added to {@code decoded}.
+	 */
+	static boolean recover(Program program, Address buried, AddressSet decoded,
+			TaskMonitor monitor) {
+		PseudoInstruction pseudo = CodeSeeds.decode(new PseudoDisassembler(program), buried);
+		if (pseudo == null || pseudo.getLength() <= 0) {
+			return false;
+		}
+		AddressSet junkStarts = collectJunkClearStarts(program, buried, pseudo.getLength());
+		if (junkStarts == null || junkStarts.isEmpty()) {
+			return false;
+		}
+		AddressSet evidence = new AddressSet();
+		if (!buriedHasEvidence(program, buried, junkStarts, evidence)) {
+			return false;
+		}
+		new ClearFlowAndRepairCmd(junkStarts, evidence, false, false, false)
+				.applyTo(program, monitor);
+		DisassembleCommand disassemble = new DisassembleCommand(buried, null, true);
+		disassemble.enableCodeAnalysis(false);
+		disassemble.applyTo(program, monitor);
+		decoded.add(disassemble.getDisassembledAddressSet());
+		if (program.getListing().getInstructionAt(buried) == null) {
+			return false;
+		}
+		dropMark(program.getBookmarkManager(), buried);
+		return true;
+	}
+
+	/**
+	 * Remove the conflict mark at {@code buried}. A repair's own disassembly may already have
+	 * dropped it, and since 12.2 removing a deleted bookmark throws: remove whatever mark is
+	 * there now.
+	 */
+	private static void dropMark(BookmarkManager bookmarks, Address buried) {
+		Bookmark mark = bookmarks.getBookmark(buried, BookmarkType.ERROR,
+			Disassembler.ERROR_BOOKMARK_CATEGORY);
+		if (mark != null) {
+			bookmarks.removeBookmark(mark);
+		}
 	}
 
 	/**
