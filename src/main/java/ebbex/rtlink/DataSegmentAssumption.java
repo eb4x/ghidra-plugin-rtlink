@@ -14,14 +14,12 @@ import ghidra.app.util.importer.MessageLog;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressOutOfBoundsException;
 import ghidra.program.model.address.SegmentedAddress;
-import ghidra.program.model.lang.OperandType;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.ContextChangeException;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.listing.ProgramContext;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryBlock;
-import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.symbol.FlowType;
 import ghidra.util.Msg;
 import ghidra.util.task.TaskMonitor;
@@ -189,15 +187,12 @@ final class DataSegmentAssumption {
 					}
 				}
 				else if (dest != null) {
-					int type = instr.getOperandType(1);
 					Register src = X86.movSourceRegister(instr);
-					Scalar scalar = instr.getScalar(1);
+					Long immediate = X86.movImmediate(instr);
 					Long known = src != null ? regImm.get(src) : null;
 					forget(regImm, dest);
-					if (scalar != null && OperandType.isScalar(type) &&
-						!OperandType.isAddress(type)) {
-						// A true immediate (not a memory displacement like [0x2]).
-						regImm.put(dest, scalar.getUnsignedValue());
+					if (immediate != null) {
+						regImm.put(dest, immediate);
 					}
 					else if (known != null) {
 						regImm.put(dest, known);

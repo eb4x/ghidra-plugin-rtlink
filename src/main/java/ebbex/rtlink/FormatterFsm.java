@@ -151,7 +151,8 @@ final class FormatterFsm {
 		// MOV CL,3
 		Instruction three = X86.previousInBlock(classScale, block);
 		if (three == null || !"MOV".equals(three.getMnemonicString()) ||
-			!cl.equals(three.getRegister(0)) || !X86.isScalar(three.getScalar(1), 3)) {
+			!cl.equals(X86.movDestination(three)) ||
+			!Long.valueOf(3).equals(X86.movImmediate(three))) {
 			return null;
 		}
 
@@ -166,12 +167,12 @@ final class FormatterFsm {
 		Instruction instruction = X86.previousInBlock(three, block);
 		for (int i = 0; i < FSM_PROLOGUE_SCAN_LIMIT && instruction != null; i++) {
 			String mnemonic = instruction.getMnemonicString();
-			if ("MOV".equals(mnemonic) && bx.equals(instruction.getRegister(0))) {
-				Scalar table = instruction.getScalar(1);
+			if ("MOV".equals(mnemonic) && bx.equals(X86.movDestination(instruction))) {
+				Long table = X86.movImmediate(instruction);
 				if (table == null) {
 					return null;
 				}
-				tableOffset = (int) table.getUnsignedValue();
+				tableOffset = table.intValue();
 				break; // the table base is the far anchor; the walk is done
 			}
 			if (X86.changes(instruction, bx)) {

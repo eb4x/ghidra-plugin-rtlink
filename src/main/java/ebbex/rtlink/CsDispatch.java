@@ -109,12 +109,12 @@ final class CsDispatch {
 				return entries > MAX_TABLE_ENTRIES ? -1 : (int) entries;
 			}
 			if (pendingDivisor != null && "MOV".equals(instruction.getMnemonicString()) &&
-				pendingDivisor.equals(instruction.getRegister(0))) {
-				Scalar value = instruction.getScalar(1);
-				if (value == null || value.getUnsignedValue() == 0) {
+				pendingDivisor.equals(X86.movDestination(instruction))) {
+				Long value = X86.movImmediate(instruction);
+				if (value == null || value == 0) {
 					return -1;
 				}
-				divisor = value.getUnsignedValue();
+				divisor = value;
 				pendingDivisor = null;
 			}
 			else if (isByteDivideOf(instruction, index)) {

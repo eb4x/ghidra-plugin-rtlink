@@ -79,6 +79,22 @@ public class X86Test extends AbstractGenericTest {
 		});
 	}
 
+	/** The immediate of every {@code MOV reg,imm} form, and none for a load from memory. */
+	@Test
+	public void testMovImmediateComesFromTheBytes() throws Exception {
+		with("b8 34 12", (_, insn) -> assertEquals(Long.valueOf(0x1234), X86.movImmediate(insn)));
+		with("b1 03", (_, insn) -> assertEquals(Long.valueOf(3), X86.movImmediate(insn)));
+		with("c7 c3 56 2a", (_, insn) -> assertEquals(Long.valueOf(0x2a56), X86.movImmediate(insn)));
+		with("c6 c3 ff", (_, insn) -> assertEquals(Long.valueOf(0xff), X86.movImmediate(insn)));
+		with("8b 1e 56 2a", (program, insn) -> { // MOV BX,[0x2a56]
+			assertEquals(reg(program, "BX"), X86.movDestination(insn));
+			assertNull("an address is no immediate", X86.movImmediate(insn));		});
+		with("c7 06 56 2a 34 12", (_, insn) -> { // MOV word ptr [0x2a56],0x1234
+			assertNull("a store to memory loads no register", X86.movImmediate(insn));
+		});
+		with("8b d8", (_, insn) -> assertNull(X86.movImmediate(insn))); // MOV BX,AX
+	}
+
 	@Test
 	public void testPrefixesAndSegmentOverride() throws Exception {
 		with("f3 26 a5", (program, insn) -> { // REP MOVSW ES:..

@@ -24,7 +24,6 @@ import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
-import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceManager;
@@ -507,18 +506,10 @@ public final class RTLinkDispatcherJumpAnalyzer extends AbstractAnalyzer {
 	/** The 16-bit immediate a {@code MOV <reg>, imm16} loads, or null if that is not this. */
 	private static Long loadedImmediate(Instruction instruction, Register reg) {
 		if (!"MOV".equals(instruction.getMnemonicString()) ||
-			instruction.getNumOperands() != 2) {
+			!reg.equals(X86.movDestination(instruction))) {
 			return null;
 		}
-		Register dest = instruction.getRegister(0);
-		if (dest == null || !dest.equals(reg)) {
-			return null;
-		}
-		Scalar scalar = instruction.getScalar(1);
-		if (scalar == null) {
-			return null;
-		}
-		return scalar.getUnsignedValue() & 0xffffL;
+		return X86.movImmediate(instruction);
 	}
 
 }

@@ -16,7 +16,6 @@ import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
-import ghidra.program.model.scalar.Scalar;
 import ghidra.util.Msg;
 
 /**
@@ -92,12 +91,12 @@ final class DataSwitchTables {
 				}
 			}
 			else if ("MOV".equals(instruction.getMnemonicString()) &&
-				base.equals(instruction.getRegister(0))) {
-				Scalar table = instruction.getScalar(1);
+				base.equals(X86.movDestination(instruction))) {
+				Long table = X86.movImmediate(instruction);
 				if (table == null) {
 					return null;
 				}
-				tableOffset = (int) table.getUnsignedValue();
+				tableOffset = table.intValue();
 				break;
 			}
 			else if (X86.changes(instruction, base)) {

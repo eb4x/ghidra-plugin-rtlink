@@ -205,6 +205,53 @@ final class X86 {
 		return inputs.length == 1 && inputs[0] instanceof Register register ? register : null;
 	}
 
+	/**
+	 * The immediate a {@code MOV reg,imm} loads, read from its bytes — {@code B0-B7 ib},
+	 * {@code B8-BF iw}, or {@code C6 /0 ib} / {@code C7 /0 iw} with a register operand — or null
+	 * for any other instruction. An operand's scalar is no substitute: {@code MOV BX,[0x2a56]}
+	 * shows the address {@code 0x2a56} there too. The destination is {@link #movDestination}.
+	 */
+	static Long movImmediate(Instruction instruction) {
+		byte[] b = bytes(instruction);
+		int i = opcodeIndex(b);
+		if (i < 0 || hasOperandSizePrefix(b, i)) {
+			return null;
+		}
+		int op = b[i] & 0xff;
+		if (op >= 0xb0 && op <= 0xb7) {
+			return immediate(b, i + 1, 1);
+		}
+		if (op >= 0xb8 && op <= 0xbf) {
+			return immediate(b, i + 1, 2);
+		}
+		if ((op == 0xc6 || op == 0xc7) && i + 1 < b.length) {
+			ModRm modrm = modRm(b, i + 1);
+			if (!modrm.isRegister() || modrm.reg() != 0) {
+				return null;
+			}
+			return immediate(b, i + 2, op == 0xc6 ? 1 : 2);
+		}
+		return null;
+	}
+
+	/** The unsigned {@code size}-byte immediate at {@code b[at]}, or null past the end. */
+	private static Long immediate(byte[] b, int at, int size) {
+		if (at + size > b.length) {
+			return null;
+		}
+		return (long) (size == 1 ? b[at] & 0xff : word(b, at));
+	}
+
+	/** True if an {@code 66} prefix precedes the opcode at {@code b[opcode]}: a 32-bit operand. */
+	private static boolean hasOperandSizePrefix(byte[] b, int opcode) {
+		for (int i = 0; i < opcode; i++) {
+			if ((b[i] & 0xff) == 0x66) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	static boolean isScalar(Scalar scalar, long value) {
 		return scalar != null && scalar.getUnsignedValue() == value;
 	}
