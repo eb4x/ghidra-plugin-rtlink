@@ -263,23 +263,8 @@ final class StaleNoReturns {
 		AddressSet touched = new AddressSet();
 		AddressSetView pending = decoded;
 		while (!pending.isEmpty()) {
-			List<Address> sites = new ArrayList<>();
-			for (Instruction instruction : program.getListing().getInstructions(pending, true)) {
-				if (EmulatedFloatPatcher.emulatorVector(instruction) >= 0) {
-					sites.add(instruction.getMinAddress());
-				}
-			}
-			AddressSet round = new AddressSet();
-			for (Address site : sites) {
-				monitor.checkCancelled();
-				// Re-fetched: an earlier rewrite's clear may have taken it.
-				Instruction call = program.getListing().getInstructionAt(site);
-				AddressSetView rewritten = call == null ? null
-						: EmulatedFloatPatcher.patch(program, call, false, monitor);
-				if (rewritten != null) {
-					round.add(rewritten);
-				}
-			}
+			AddressSetView round =
+				EmulatedFloatPatcher.rewriteAll(program, pending, false, monitor).touched();
 			touched.add(round);
 			pending = round;
 		}

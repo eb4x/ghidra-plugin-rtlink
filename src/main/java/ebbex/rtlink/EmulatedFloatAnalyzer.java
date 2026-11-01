@@ -1,8 +1,5 @@
 package ebbex.rtlink;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
 import ghidra.app.services.AnalyzerType;
@@ -12,7 +9,6 @@ import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.lang.Processor;
 import ghidra.program.model.listing.Instruction;
-import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.util.exception.CancelledException;
@@ -80,41 +76,14 @@ public final class EmulatedFloatAnalyzer extends AbstractAnalyzer {
 		// would otherwise find none and decline.
 		RTLinkProgram.markFloatEmulated(program);
 
-		// Collect first, patch second: patching clears and re-disassembles code, which
-		// would invalidate a live InstructionIterator. Collect addresses, not instructions:
-		// a patch's clear can delete a later call — an out-of-phase INT decoded from the
-		// first call's operands — and a deleted instruction still answers, from whatever
-		// bytes now sit at its old address. Each call is re-fetched just before its patch.
-		Listing listing = program.getListing();
-		List<Address> calls = new ArrayList<>();
-		InstructionIterator instructions = listing.getInstructions(set, true);
-		while (instructions.hasNext()) {
-			monitor.checkCancelled();
-			Instruction insn = instructions.next();
-			if (EmulatedFloatPatcher.emulatorVector(insn) >= 0) {
-				calls.add(insn.getMinAddress());
-			}
-		}
-
-		int patched = 0;
-		for (Address call : calls) {
-			monitor.checkCancelled();
-			Instruction insn = listing.getInstructionAt(call);
-			if (insn == null) {
-				continue; // cleared by an earlier patch, and not code after all
-			}
-			AddressSetView touched = EmulatedFloatPatcher.patch(program, insn, true, monitor);
-			if (touched != null) {
-				rewrittenCode.add(touched);
-				patched++;
-			}
-		}
-
-		// The re-disassembly above resynchronizes each stream, which uncovers emulator
-		// calls that were previously buried inside mis-decoded operand bytes. Those
-		// arrive as newly added instructions, so this analyzer runs again on them; the
-		// process converges when a pass finds none.
-		RTLinkProgram.report(this, patched,
+		// The re-disassembly resynchronizes each stream, which uncovers emulator calls that
+		// were previously buried inside mis-decoded operand bytes. Those arrive as newly
+		// added instructions, so this analyzer runs again on them; the process converges
+		// when a pass finds none.
+		EmulatedFloatPatcher.Rewrites rewrites =
+			EmulatedFloatPatcher.rewriteAll(program, set, true, monitor);
+		rewrittenCode.add(rewrites.touched());
+		RTLinkProgram.report(this, rewrites.patched(),
 			"Emulated FP: Rewrote %d emulator call(s) into x87 instructions");
 		return true;
 	}

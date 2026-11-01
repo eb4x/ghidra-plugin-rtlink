@@ -1,5 +1,8 @@
 package ebbex.rtlink;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressIterator;
@@ -7,6 +10,7 @@ import ghidra.program.model.address.AddressOutOfBoundsException;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Instruction;
+import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryAccessException;
@@ -149,6 +153,45 @@ final class EmulatedFloatPatcher {
 			}
 		}
 		return false;
+	}
+
+	/** What {@link #rewriteAll} did: the calls it rewrote, and what those rewrites re-decoded. */
+	record Rewrites(int patched, AddressSetView touched) {
+	}
+
+	/**
+	 * {@link #patch} every emulator call decoded in {@code set}. Collect first, patch second:
+	 * patching clears and re-disassembles code, which would invalidate a live iterator. Collect
+	 * addresses, not instructions: a patch's clear can delete a later call — an out-of-phase INT
+	 * decoded from the first call's operands — and a deleted instruction still answers, from
+	 * whatever bytes now sit at its old address. Each call is re-fetched just before its patch.
+	 * <p>
+	 * Each rewrite re-decodes what follows it and can expose a further call; that is new code
+	 * in {@link Rewrites#touched}, for the caller to run this over again.
+	 */
+	static Rewrites rewriteAll(Program program, AddressSetView set, boolean analyze,
+			TaskMonitor monitor) throws CancelledException {
+		Listing listing = program.getListing();
+		List<Address> calls = new ArrayList<>();
+		for (Instruction instruction : listing.getInstructions(set, true)) {
+			monitor.checkCancelled();
+			if (emulatorVector(instruction) >= 0) {
+				calls.add(instruction.getMinAddress());
+			}
+		}
+		AddressSet touched = new AddressSet();
+		int patched = 0;
+		for (Address call : calls) {
+			monitor.checkCancelled();
+			Instruction instruction = listing.getInstructionAt(call);
+			AddressSetView rewritten =
+				instruction == null ? null : patch(program, instruction, analyze, monitor);
+			if (rewritten != null) {
+				touched.add(rewritten);
+				patched++;
+			}
+		}
+		return new Rewrites(patched, touched);
 	}
 
 	/**
