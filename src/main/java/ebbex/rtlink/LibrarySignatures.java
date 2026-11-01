@@ -93,6 +93,16 @@ final class LibrarySignatures {
 	private static final int[] OPENING_STEPS = { 12, OPENING_COMPARED, 48, 96 };
 
 	/** A public placed at {@code address}: every name sharing its offset, in order. */
+	/**
+	 * Where a public name is placed and how many entries its module placed in all. The module
+	 * that places more of itself wins a name both claim; the first one wins a tie.
+	 */
+	private record Winner(Placement placement, int score) {
+		static Winner better(Winner held, Winner challenger) {
+			return challenger.score() > held.score() ? challenger : held;
+		}
+	}
+
 	private record Placement(Address address, List<String> names) {
 	}
 
@@ -111,26 +121,21 @@ final class LibrarySignatures {
 		}
 		PseudoDisassembler pseudo = new PseudoDisassembler(program);
 		Address scratch = regions.get(0).start();
-		Map<String, Placement> byName = new LinkedHashMap<>();
-		Map<String, Integer> scoreOf = new LinkedHashMap<>();
+		Map<String, Winner> byName = new LinkedHashMap<>();
 		for (Module module : modules) {
 			monitor.checkCancelled();
 			List<Placement> placed = place(regions, module, pseudo, scratch, monitor);
 			for (Placement placement : placed) {
 				for (String name : placement.names()) {
-					Integer score = scoreOf.get(name);
-					if (score == null || placed.size() > score) {
-						byName.put(name, placement);
-						scoreOf.put(name, placed.size());
-					}
+					byName.merge(name, new Winner(placement, placed.size()), Winner::better);
 				}
 			}
 		}
 		// Names a winning module places together stay together, aliases in vendor order.
 		Map<Address, List<String>> byAddress = new TreeMap<>();
-		for (Map.Entry<String, Placement> e : byName.entrySet()) {
-			List<String> names =
-				byAddress.computeIfAbsent(e.getValue().address(), _ -> new ArrayList<>());
+		for (Map.Entry<String, Winner> e : byName.entrySet()) {
+			List<String> names = byAddress.computeIfAbsent(
+				e.getValue().placement().address(), _ -> new ArrayList<>());
 			if (!names.contains(e.getKey())) {
 				names.add(e.getKey());
 			}
