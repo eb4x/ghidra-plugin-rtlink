@@ -124,6 +124,7 @@ final class CodeEvidence {
 			TaskMonitor monitor) {
 		AddressSet decoded = new AddressSet();
 		AddressSetView next = seeds;
+		long cleared = 0;
 		for (int round = 0; round < GUESS_ROUNDS && !next.isEmpty(); round++) {
 			DisassembleCommand disassemble = new DisassembleCommand(next, null, true);
 			disassemble.applyTo(program, monitor);
@@ -133,7 +134,10 @@ final class CodeEvidence {
 			}
 			decoded.add(fresh);
 			next = clearGuessesBlocking(program, fresh);
+			cleared += next.getNumAddresses();
 		}
+		RTLinkProgram.report(RTLinkFlowRepairAnalyzer.class, cleared,
+			"RTLink/Plus: Decoded through %d guessed string(s) in the way of recovered code");
 		return decoded;
 	}
 
