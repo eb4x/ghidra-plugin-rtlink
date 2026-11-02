@@ -5,6 +5,7 @@ import static org.junit.Assert.*;
 import org.junit.Test;
 
 import ghidra.app.cmd.function.CreateFunctionCmd;
+import ghidra.app.util.importer.MessageLog;
 import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.BookmarkType;
@@ -1190,5 +1191,89 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 			fillGaps(builder));
 		assertNull("the stub must stay undefined for the overlay analyzer",
 			builder.getProgram().getListing().getInstructionAt(builder.addr("0x1000:0x0104")));
+	}
+
+	/** A conflict mark whose blocked address now holds code is a fossil; one on nothing stands. */
+	@Test
+	public void testSweepDropsOnlyMarksOnRecoveredCode() throws Exception {
+		RealMode builder = realMode("SWEEP");
+		builder.code("0x1000:0x0100", 0x20);
+		builder.setBytes("0x1000:0x0100", "55 8b ec cb");
+		builder.decode("0x1000:0x0100", 4, true);
+		builder.errorMark("0x1000:0x0101",
+			"Failed to disassemble at 1000:0101 due to conflicting instruction " +
+				"(flow from 1000:00fe)");
+		builder.errorMark("0x1000:0x0110",
+			"Failed to disassemble at 1000:0110 due to conflicting instruction " +
+				"(flow from 1000:010e)");
+
+		assertEquals(1, (int) builder.tx(
+			() -> ConflictArbitration.sweepRepaired(builder.getProgram(), TaskMonitor.DUMMY)));
+		assertFalse("the mark on code is gone", hasErrorMark(builder, "0x1000:0x0101"));
+		assertTrue("the mark on undefined bytes stays", hasErrorMark(builder, "0x1000:0x0110"));
+	}
+
+	private static boolean runAnalyzer(RTLinkFlowRepairAnalyzer analyzer, RealMode builder)
+			throws Exception {
+		Program program = builder.getProgram();
+		return analyzer.added(program, program.getMemory(), TaskMonitor.DUMMY, new MessageLog());
+	}
+
+	private static FlowOverride flowAt(RealMode builder, String at) {
+		return builder.getProgram().getListing().getInstructionAt(builder.addr(at)).getFlowOverride();
+	}
+
+	@Test
+	public void testAnalyzerWaitsForTheOverlayAnalyzer() throws Exception {
+		RealMode builder = abortProgram();
+		var analyzer = new RTLinkFlowRepairAnalyzer();
+
+		assertFalse("not an RTLink program yet", builder.tx(() -> runAnalyzer(analyzer, builder)));
+		assertEquals(FlowOverride.NONE, flowAt(builder, "0x1000:0x0100"));
+	}
+
+	/**
+	 * One run follows the vector and then seals the call: the abort routine is judged only
+	 * once the handler behind its vector is code, so {@link FarVectorFlows} must run first.
+	 */
+	@Test
+	public void testAnalyzerFollowsTheVectorBeforeSealing() throws Exception {
+		RealMode builder = abortProgram();
+		Program program = builder.getProgram();
+		builder.withTransaction(() -> RTLinkProgram.markOverlayAnalyzed(program));
+
+		assertTrue(builder.tx(() -> runAnalyzer(new RTLinkFlowRepairAnalyzer(), builder)));
+
+		assertNotNull("the handler is decoded",
+			program.getListing().getInstructionAt(builder.addr("0x1000:0x0130")));
+		assertEquals("and the call to the abort sealed in the same run", FlowOverride.CALL_RETURN,
+			flowAt(builder, "0x1000:0x0100"));
+	}
+
+	/**
+	 * The analyzer's own repairs re-trigger byte analysis inside the transaction, so it runs
+	 * once per transaction: a second call in the same one does nothing, a call in the next
+	 * one runs again.
+	 */
+	@Test
+	public void testAnalyzerRunsOncePerTransaction() throws Exception {
+		RealMode builder = abortProgram();
+		Program program = builder.getProgram();
+		builder.withTransaction(() -> RTLinkProgram.markOverlayAnalyzed(program));
+		builder.setBytes("0x1000:0x0110", "9a 20 01 00 10"); // a second CALLF abort
+		var analyzer = new RTLinkFlowRepairAnalyzer();
+
+		builder.tx(() -> {
+			runAnalyzer(analyzer, builder);
+			builder.decode("0x1000:0x0110", 9, false); // the call and the zeros behind it
+			assertTrue("skipped, not refused", runAnalyzer(analyzer, builder));
+			return null;
+		});
+		assertEquals("the second call was not looked at", FlowOverride.NONE,
+			flowAt(builder, "0x1000:0x0110"));
+
+		builder.tx(() -> runAnalyzer(analyzer, builder));
+		assertEquals("the next transaction seals it", FlowOverride.CALL_RETURN,
+			flowAt(builder, "0x1000:0x0110"));
 	}
 }
