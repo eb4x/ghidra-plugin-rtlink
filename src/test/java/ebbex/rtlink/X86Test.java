@@ -4,37 +4,28 @@ import static org.junit.Assert.*;
 
 import org.junit.Test;
 
-import generic.test.AbstractGenericTest;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.SegmentedAddress;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.mem.MemoryBlock;
 
 /**
  * Tests for {@link X86}: the instruction facts the analyzers share. Each case is one
  * instruction at {@code 1000:0000}, read the way the analyzers read it.
  */
-public class X86Test extends AbstractGenericTest {
+public class X86Test extends RealModeTest {
 
 	/** Decode {@code hex} as one instruction and run {@code check} on it. */
-	private static void with(String hex, InstructionCheck check) throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("X86", ProgramBuilder._X86_16_REAL_MODE);
-		try {
-			MemoryBlock block = builder.createMemory("CODE", "0x1000:0x0000", 0x10);
-			builder.withTransaction(() -> block.setExecute(true));
-			builder.setBytes("0x1000:0x0000", hex);
-			builder.disassemble("0x1000:0x0000", hex.split(" ").length, false);
-			Program program = builder.getProgram();
-			Instruction instruction =
-				program.getListing().getInstructionAt(builder.addr("0x1000:0x0000"));
-			assertNotNull("setup: " + hex + " must decode", instruction);
-			check.check(program, instruction);
-		}
-		finally {
-			builder.dispose();
-		}
+	private void with(String hex, InstructionCheck check) throws Exception {
+		RealMode builder = realMode("X86");
+		builder.code("0x1000:0x0000", 0x10);
+		builder.setBytes("0x1000:0x0000", hex);
+		builder.disassemble("0x1000:0x0000", hex.split(" ").length, false);
+		Program program = builder.getProgram();
+		Instruction instruction =
+			program.getListing().getInstructionAt(builder.addr("0x1000:0x0000"));
+		assertNotNull("setup: " + hex + " must decode", instruction);
+		check.check(program, instruction);
 	}
 
 	@FunctionalInterface
@@ -187,24 +178,68 @@ public class X86Test extends AbstractGenericTest {
 
 	@Test
 	public void testCodeSegmentPrefersTheContextValue() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("X86", ProgramBuilder._X86_16_REAL_MODE);
-		try {
-			MemoryBlock block = builder.createMemory("CODE", "0x1000:0x0000", 0x10);
-			builder.withTransaction(() -> block.setExecute(true));
-			builder.setBytes("0x1000:0x0000", "90 90");
-			builder.disassemble("0x1000:0x0000", 2, false);
-			Program program = builder.getProgram();
-			Instruction first = program.getListing().getInstructionAt(builder.addr("0x1000:0x0000"));
-			Instruction second = program.getListing().getInstructionAt(builder.addr("0x1000:0x0001"));
-			builder.setRegisterValue("CS", "0x1000:0x0001", "0x1000:0x0001", 0x0ff8);
+		RealMode builder = realMode("X86");
+		builder.code("0x1000:0x0000", 0x10);
+		builder.setBytes("0x1000:0x0000", "90 90");
+		builder.disassemble("0x1000:0x0000", 2, false);
+		Program program = builder.getProgram();
+		Instruction first = program.getListing().getInstructionAt(builder.addr("0x1000:0x0000"));
+		Instruction second = program.getListing().getInstructionAt(builder.addr("0x1000:0x0001"));
+		builder.setRegisterValue("CS", "0x1000:0x0001", "0x1000:0x0001", 0x0ff8);
 
-			assertEquals("no context: the address' segment", 0x1000,
-				X86.codeSegment(program, first, (SegmentedAddress) first.getMinAddress()));
-			assertEquals("an asserted CS wins", 0x0ff8,
-				X86.codeSegment(program, second, (SegmentedAddress) second.getMinAddress()));
+		assertEquals("no context: the address' segment", 0x1000,
+			X86.codeSegment(program, first, (SegmentedAddress) first.getMinAddress()));
+		assertEquals("an asserted CS wins", 0x0ff8,
+			X86.codeSegment(program, second, (SegmentedAddress) second.getMinAddress()));
+	}
+
+	/** One MOV of {@link #SEGMENT_MOVES}: its address, destination and source register. */
+	private record Move(String at, String destination, String source) {
+	}
+
+	// @formatter:off
+	private static final String SEGMENT_MOVES =
+		"8e d8 " +      // 0000  MOV DS,AX
+		"8e c7 " +      // 0002  MOV ES,DI
+		"8c c0 " +      // 0004  MOV AX,ES
+		"b8 34 12 " +   // 0006  MOV AX,0x1234
+		"8b c3 " +      // 0009  MOV AX,BX
+		"a1 02 00";     // 000b  MOV AX,[0x2]
+	// @formatter:on
+
+	/**
+	 * {@link X86#movDestination} and {@link X86#movSourceRegister}
+	 * read a MOV from its p-code, so the answer cannot depend on operand display order. Stock
+	 * Ghidra 12.1.3 and 12.1.4 display {@code MOV Sreg,r/m16} ({@code 8E}) with the operands
+	 * swapped (GP-7018), and reading operand 0 there made the DGROUP detection and the
+	 * segment-flow guard of {@link RTLinkXrefAnalyzer} miss every segment load: on stock Ghidra
+	 * DS was never assumed. These assertions hold whichever way the SDK displays the operands.
+	 */
+	@Test
+	public void testSegmentMovesReadFromPcode() throws Exception {
+		RealMode builder = realMode("SREG");
+		builder.code("0x1000:0x0000", 0x20);
+		builder.setBytes("0x1000:0x0000", SEGMENT_MOVES, true);
+		Program program = builder.getProgram();
+
+		for (Move move : new Move[] {
+			new Move("0x1000:0x0000", "DS", "AX"),
+			new Move("0x1000:0x0002", "ES", "DI"),
+			new Move("0x1000:0x0004", "AX", "ES"),
+			new Move("0x1000:0x0006", "AX", null),   // an immediate
+			new Move("0x1000:0x0009", "AX", "BX"),
+			new Move("0x1000:0x000b", "AX", null) }) { // a memory source
+			assertMove(program, move);
 		}
-		finally {
-			builder.dispose();
-		}
+	}
+
+	private static void assertMove(Program program, Move move) {
+		Instruction mov = program.getListing()
+				.getInstructionAt(program.getAddressFactory().getAddress(move.at()));
+		assertNotNull("no instruction at " + move.at(), mov);
+		assertEquals(mov + ": destination", move.destination(),
+			X86.movDestination(mov).getName());
+		var src = X86.movSourceRegister(mov);
+		assertEquals(mov + ": source", move.source(), src == null ? null : src.getName());
 	}
 }

@@ -9,11 +9,9 @@ import java.util.List;
 
 import org.junit.Test;
 
-import generic.test.AbstractGenericTest;
 import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.ByteArrayProvider;
 import ghidra.app.util.importer.MessageLog;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryBlock;
@@ -45,14 +43,14 @@ import ghidra.program.model.reloc.Relocation.Status;
  * entry on demand; the shipped games that carry them (NEBULAR, ROE2MAIN, SPHERE) cannot be
  * checked into the repo.
  */
-public class RTLinkOverlayRelocationTest extends AbstractGenericTest {
+public class RTLinkOverlayRelocationTest extends RealModeTest {
 
 	/**
 	 * The on-disk bytes of the test program's overlay page. The header declares 7 total
 	 * paragraphs but the file ends 11 bytes short — the usual truncated final page, which
 	 * is fine here: everything through the last relocation site is present.
 	 */
-	private static final byte[] PAGE = bytes(
+	private static final byte[] PAGE = Hex.parse(
 	// header: total=7 paras, overhead=3 paras, frame=0x262, start_index=0,
 	// reloc counts 1/1/0, codeview=0
 		"07 00 03 00 62 02 00 00 01 00 01 00 00 00 00 00 " +
@@ -71,15 +69,6 @@ public class RTLinkOverlayRelocationTest extends AbstractGenericTest {
 	// code+0x30: JMPF 07d6:000a back into the resident image; its segment word at
 	// code+0x33 is the list-1 site, holding the unrelocated resident segment 0x07d6
 		"ea 0a 00 d6 07");
-
-	private static byte[] bytes(String hex) {
-		String[] parts = hex.trim().split("\\s+");
-		byte[] result = new byte[parts.length];
-		for (int i = 0; i < parts.length; i++) {
-			result[i] = (byte) Integer.parseInt(parts[i], 16);
-		}
-		return result;
-	}
 
 	private static RTLinkOverlayPage parsePage() throws IOException {
 		return RTLinkOverlayPage.read(new BinaryReader(new ByteArrayProvider(PAGE), true), 0, 1);
@@ -114,39 +103,34 @@ public class RTLinkOverlayRelocationTest extends AbstractGenericTest {
 		byte[] code = Arrays.copyOfRange(PAGE, page.header().overheadSizeBytes(),
 			PAGE.length);
 
-		ProgramBuilder builder = new ProgramBuilder("L2TEST", ProgramBuilder._X86_16_REAL_MODE);
-		try {
-			// In production this is an overlay block; the delta derivation only uses the
-			// block start's linear offset, which a plain block at 2000:0000 shares.
-			MemoryBlock block = builder.createMemory("OVERLAY_00", "0x2000:0x0000", code.length);
-			builder.setBytes("0x2000:0x0000", code);
-			Program program = builder.getProgram();
+		RealMode builder = realMode("L2TEST");
+		// In production this is an overlay block; the delta derivation only uses the
+		// block start's linear offset, which a plain block at 2000:0000 shares.
+		MemoryBlock block = builder.data("OVERLAY_00", "0x2000:0x0000", code.length);
+		builder.setBytes("0x2000:0x0000", code);
+		Program program = builder.getProgram();
 
-			MessageLog log = new MessageLog();
-			builder.withTransaction(() -> OverlayRelocations.apply(program, block, page, log));
-			assertFalse(log.toString(), log.hasMessages());
+		MessageLog log = new MessageLog();
+		builder.withTransaction(() -> OverlayRelocations.apply(program, block, page, log));
+		assertFalse(log.toString(), log.hasMessages());
 
-			Memory memory = program.getMemory();
-			assertEquals("list-1 site must take the image load delta (0x07d6 + 0x1000)",
-				0x17d6, Short.toUnsignedInt(memory.getShort(builder.addr("0x2000:0x0033"))));
-			assertEquals("list-2 site must take the block's base paragraph (0x0000 + 0x2000)",
-				0x2000, Short.toUnsignedInt(memory.getShort(builder.addr("0x2000:0x0003"))));
+		Memory memory = program.getMemory();
+		assertEquals("list-1 site must take the image load delta (0x07d6 + 0x1000)",
+			0x17d6, Short.toUnsignedInt(memory.getShort(builder.addr("0x2000:0x0033"))));
+		assertEquals("list-2 site must take the block's base paragraph (0x0000 + 0x2000)",
+			0x2000, Short.toUnsignedInt(memory.getShort(builder.addr("0x2000:0x0003"))));
 
-			// the instructions around the sites are untouched
-			assertEquals(0x9a, Byte.toUnsignedInt(memory.getByte(builder.addr("0x2000:0x0000"))));
-			assertEquals(0xea, Byte.toUnsignedInt(memory.getByte(builder.addr("0x2000:0x0030"))));
+		// the instructions around the sites are untouched
+		assertEquals(0x9a, Byte.toUnsignedInt(memory.getByte(builder.addr("0x2000:0x0000"))));
+		assertEquals(0xea, Byte.toUnsignedInt(memory.getByte(builder.addr("0x2000:0x0030"))));
 
-			List<Relocation> recorded = new ArrayList<>();
-			program.getRelocationTable().getRelocations().forEachRemaining(recorded::add);
-			assertEquals(2, recorded.size());
-			for (Relocation reloc : recorded) {
-				assertEquals(Status.APPLIED, reloc.getStatus());
-			}
-			assertEquals(builder.addr("0x2000:0x0003"), recorded.get(0).getAddress());
-			assertEquals(builder.addr("0x2000:0x0033"), recorded.get(1).getAddress());
+		List<Relocation> recorded = new ArrayList<>();
+		program.getRelocationTable().getRelocations().forEachRemaining(recorded::add);
+		assertEquals(2, recorded.size());
+		for (Relocation reloc : recorded) {
+			assertEquals(Status.APPLIED, reloc.getStatus());
 		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals(builder.addr("0x2000:0x0003"), recorded.get(0).getAddress());
+		assertEquals(builder.addr("0x2000:0x0033"), recorded.get(1).getAddress());
 	}
 }

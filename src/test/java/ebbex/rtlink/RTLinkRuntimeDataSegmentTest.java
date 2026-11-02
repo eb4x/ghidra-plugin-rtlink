@@ -2,13 +2,13 @@ package ebbex.rtlink;
 
 import static org.junit.Assert.*;
 
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
 import org.junit.Test;
 
-import generic.test.AbstractGenericTest;
 import ghidra.app.util.importer.MessageLog;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
@@ -31,7 +31,7 @@ import ghidra.program.model.symbol.SourceType;
  * fixup-loop fingerprint), the RTLink support code (its {@code 275d}, carrying the error
  * text), an ordinary application block, and DGROUP.
  */
-public class RTLinkRuntimeDataSegmentTest extends AbstractGenericTest {
+public class RTLinkRuntimeDataSegmentTest extends RealModeTest {
 
 	private static final int DGROUP = 0x2b5a;
 
@@ -44,21 +44,14 @@ public class RTLinkRuntimeDataSegmentTest extends AbstractGenericTest {
 		"Internal error in .RTLink(R)/Plus run-time code.";
 
 	/** A startup at the entry, decoded for its DGROUP load and assumed for DS over the block. */
-	private static Integer assumedFromStartup(String startup) throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("STARTUP", ProgramBuilder._X86_16_REAL_MODE);
-		try {
-			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0000", 0x400);
-			builder.withTransaction(() -> code.setExecute(true));
-			builder.setBytes("0x1000:0x0000", startup);
-			builder.createEntryPoint("0x1000:0x0000", "entry");
-			Program program = builder.getProgram();
-			builder.withTransaction(
-				() -> DataSegmentAssumption.assume(program, new MessageLog()));
-			return X86.dataSegment(program, builder.addr("0x1000:0x0000"));
-		}
-		finally {
-			builder.dispose();
-		}
+	private Integer assumedFromStartup(String startup) throws Exception {
+		RealMode builder = realMode("STARTUP");
+		builder.code("0x1000:0x0000", 0x400);
+		builder.setBytes("0x1000:0x0000", startup);
+		builder.createEntryPoint("0x1000:0x0000", "entry");
+		Program program = builder.getProgram();
+		builder.withTransaction(() -> DataSegmentAssumption.assume(program, new MessageLog()));
+		return X86.dataSegment(program, builder.addr("0x1000:0x0000"));
 	}
 
 	/** {@code MOV AX,1234h; MOV DS,AX}: DGROUP is the immediate that reached DS. */
@@ -89,35 +82,23 @@ public class RTLinkRuntimeDataSegmentTest extends AbstractGenericTest {
 
 	@Test
 	public void testRuntimeBlocksAreFoundAndApplicationBlocksAreNot() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("DS", ProgramBuilder._X86_16_REAL_MODE);
-		try {
-			MemoryBlock app = builder.createMemory("CODE_APP", "0x1000:0x0000", 0x40);
-			MemoryBlock manager = builder.createMemory("CODE_VM", "0x210d:0x0000", 0x40);
-			MemoryBlock support = builder.createMemory("CODE_RTL", "0x275d:0x0000", 0x60);
-			MemoryBlock dgroup = builder.createMemory("CODE_DG", "0x2b5a:0x0000", 0x40);
-			builder.withTransaction(() -> {
-				app.setExecute(true);
-				manager.setExecute(true);
-				support.setExecute(true);
-				dgroup.setExecute(true);
-			});
+		RealMode builder = realMode("DS");
+		MemoryBlock app = builder.code("CODE_APP", "0x1000:0x0000", 0x40);
+		MemoryBlock manager = builder.code("CODE_VM", "0x210d:0x0000", 0x40);
+		MemoryBlock support = builder.code("CODE_RTL", "0x275d:0x0000", 0x60);
+		MemoryBlock dgroup = builder.code("CODE_DG", "0x2b5a:0x0000", 0x40);
 
-			builder.setBytes("0x210d:0x0010", FINGERPRINT_BYTES);
-			builder.setBytes("0x275d:0x0008", asHex(RUNTIME_TEXT));
+		builder.setBytes("0x210d:0x0010", FINGERPRINT_BYTES);
+		builder.setBytes("0x275d:0x0008", RUNTIME_TEXT.getBytes(StandardCharsets.US_ASCII));
 
-			Program program = builder.getProgram();
-			Set<MemoryBlock> runtime =
-				DataSegmentAssumption.findRuntimeCodeBlocks(program, DGROUP);
+		Set<MemoryBlock> runtime =
+			DataSegmentAssumption.findRuntimeCodeBlocks(builder.getProgram(), DGROUP);
 
-			assertEquals("both halves of the runtime are found", 2, runtime.size());
-			assertTrue("VM manager block (fixup-loop fingerprint)", runtime.contains(manager));
-			assertTrue("RTLink support block (error text)", runtime.contains(support));
-			assertFalse("application code keeps DS = DGROUP", runtime.contains(app));
-			assertFalse("DGROUP itself is never disowned", runtime.contains(dgroup));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals("both halves of the runtime are found", 2, runtime.size());
+		assertTrue("VM manager block (fixup-loop fingerprint)", runtime.contains(manager));
+		assertTrue("RTLink support block (error text)", runtime.contains(support));
+		assertFalse("application code keeps DS = DGROUP", runtime.contains(app));
+		assertFalse("DGROUP itself is never disowned", runtime.contains(dgroup));
 	}
 
 	/**
@@ -126,19 +107,13 @@ public class RTLinkRuntimeDataSegmentTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testNoSignaturesMeansNoBlocksDisowned() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("DS", ProgramBuilder._X86_16_REAL_MODE);
-		try {
-			MemoryBlock app = builder.createMemory("CODE_APP", "0x1000:0x0000", 0x40);
-			builder.withTransaction(() -> app.setExecute(true));
+		RealMode builder = realMode("DS");
+		builder.code("CODE_APP", "0x1000:0x0000", 0x40);
 
-			Set<MemoryBlock> runtime =
-				DataSegmentAssumption.findRuntimeCodeBlocks(builder.getProgram(), DGROUP);
+		Set<MemoryBlock> runtime =
+			DataSegmentAssumption.findRuntimeCodeBlocks(builder.getProgram(), DGROUP);
 
-			assertTrue("nothing is disowned without a signature", runtime.isEmpty());
-		}
-		finally {
-			builder.dispose();
-		}
+		assertTrue("nothing is disowned without a signature", runtime.isEmpty());
 	}
 
 	/**
@@ -147,20 +122,14 @@ public class RTLinkRuntimeDataSegmentTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testDgroupBlockIsNeverDisowned() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("DS", ProgramBuilder._X86_16_REAL_MODE);
-		try {
-			MemoryBlock dgroup = builder.createMemory("CODE_DG", "0x2b5a:0x0000", 0x40);
-			builder.withTransaction(() -> dgroup.setExecute(true));
-			builder.setBytes("0x2b5a:0x0010", FINGERPRINT_BYTES);
+		RealMode builder = realMode("DS");
+		builder.code("CODE_DG", "0x2b5a:0x0000", 0x40);
+		builder.setBytes("0x2b5a:0x0010", FINGERPRINT_BYTES);
 
-			Set<MemoryBlock> runtime =
-				DataSegmentAssumption.findRuntimeCodeBlocks(builder.getProgram(), DGROUP);
+		Set<MemoryBlock> runtime =
+			DataSegmentAssumption.findRuntimeCodeBlocks(builder.getProgram(), DGROUP);
 
-			assertTrue("DGROUP keeps DS even carrying the fingerprint", runtime.isEmpty());
-		}
-		finally {
-			builder.dispose();
-		}
+		assertTrue("DGROUP keeps DS even carrying the fingerprint", runtime.isEmpty());
 	}
 
 	/**
@@ -173,67 +142,43 @@ public class RTLinkRuntimeDataSegmentTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testRuntimeDgroupReferencesAreSweptButApplicationOnesSurvive() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("DS", ProgramBuilder._X86_16_REAL_MODE);
-		try {
-			MemoryBlock app = builder.createMemory("CODE_APP", "0x1000:0x0000", 0x40);
-			MemoryBlock manager = builder.createMemory("CODE_VM", "0x210d:0x0000", 0x40);
-			builder.createUninitializedMemory("DATA", "0x2b5a:0x1000", 0x100);
-			builder.withTransaction(() -> {
-				app.setExecute(true);
-				manager.setExecute(true);
-			});
-			builder.setBytes("0x210d:0x0010", FINGERPRINT_BYTES);
+		RealMode builder = realMode("DS");
+		MemoryBlock app = builder.code("CODE_APP", "0x1000:0x0000", 0x40);
+		builder.code("CODE_VM", "0x210d:0x0000", 0x40);
+		builder.createUninitializedMemory("DATA", "0x2b5a:0x1000", 0x100);
+		builder.setBytes("0x210d:0x0010", FINGERPRINT_BYTES);
 
-			Program program = builder.getProgram();
-			// DS is asserted over compiler-generated code only — which is also how the sweep
-			// recovers DGROUP.
-			builder.withTransaction(() -> {
-				try {
-					program.getProgramContext().setValue(
-						program.getProgramContext().getRegister("DS"), app.getStart(),
-						app.getEnd(), java.math.BigInteger.valueOf(DGROUP));
-				}
-				catch (Exception e) {
-					throw new RuntimeException(e);
-				}
-			});
+		Program program = builder.getProgram();
+		// DS is asserted over compiler-generated code only — which is also how the sweep
+		// recovers DGROUP.
+		builder.tx(() -> {
+			program.getProgramContext().setValue(program.getProgramContext().getRegister("DS"),
+				app.getStart(), app.getEnd(), BigInteger.valueOf(DGROUP));
+			return null;
+		});
 
-			ReferenceManager refs = program.getReferenceManager();
-			Address fromRuntime = builder.addr("0x210d:0x0004");
-			Address fromUser = builder.addr("0x210d:0x0008");
-			Address fromApp = builder.addr("0x1000:0x0004");
-			Address target = builder.addr("0x2b5a:0x1010");
-			Address userTarget = builder.addr("0x2b5a:0x1020");
-			builder.withTransaction(() -> {
-				refs.addMemoryReference(fromRuntime, target, RefType.READ, SourceType.ANALYSIS, 0);
-				refs.addMemoryReference(fromApp, target, RefType.READ, SourceType.ANALYSIS, 0);
-				refs.addMemoryReference(fromUser, userTarget, RefType.READ,
-					SourceType.USER_DEFINED, 0);
-			});
-			assertEquals(2, refs.getReferenceCountTo(target));
+		ReferenceManager refs = program.getReferenceManager();
+		Address fromRuntime = builder.addr("0x210d:0x0004");
+		Address fromUser = builder.addr("0x210d:0x0008");
+		Address fromApp = builder.addr("0x1000:0x0004");
+		Address target = builder.addr("0x2b5a:0x1010");
+		Address userTarget = builder.addr("0x2b5a:0x1020");
+		builder.withTransaction(() -> {
+			refs.addMemoryReference(fromRuntime, target, RefType.READ, SourceType.ANALYSIS, 0);
+			refs.addMemoryReference(fromApp, target, RefType.READ, SourceType.ANALYSIS, 0);
+			refs.addMemoryReference(fromUser, userTarget, RefType.READ,
+				SourceType.USER_DEFINED, 0);
+		});
+		assertEquals(2, refs.getReferenceCountTo(target));
 
-			int[] removed = new int[1];
-			builder.withTransaction(
-				() -> removed[0] = RTLinkXrefAnalyzer.removeRuntimeDgroupRefs(program));
+		int removed = builder.tx(() -> RTLinkXrefAnalyzer.removeRuntimeDgroupRefs(program));
 
-			assertEquals("only the runtime's analysis reference is swept", 1, removed[0]);
-			assertEquals("the application's reference survives", 1,
-				refs.getReferenceCountTo(target));
-			assertEquals("and it is the application's", fromApp,
-				refs.getReferencesTo(target).iterator().next().getFromAddress());
-			assertEquals("a reference the user made in the runtime is theirs to keep", 1,
-				refs.getReferenceCountTo(userTarget));
-		}
-		finally {
-			builder.dispose();
-		}
-	}
-
-	private static String asHex(String ascii) {
-		StringBuilder sb = new StringBuilder();
-		for (byte b : ascii.getBytes(java.nio.charset.StandardCharsets.US_ASCII)) {
-			sb.append(String.format("%02x ", b));
-		}
-		return sb.toString().trim();
+		assertEquals("only the runtime's analysis reference is swept", 1, removed);
+		assertEquals("the application's reference survives", 1,
+			refs.getReferenceCountTo(target));
+		assertEquals("and it is the application's", fromApp,
+			refs.getReferencesTo(target).iterator().next().getFromAddress());
+		assertEquals("a reference the user made in the runtime is theirs to keep", 1,
+			refs.getReferenceCountTo(userTarget));
 	}
 }

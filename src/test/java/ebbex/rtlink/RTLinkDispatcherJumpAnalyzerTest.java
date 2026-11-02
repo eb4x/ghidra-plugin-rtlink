@@ -8,20 +8,15 @@ import java.util.Set;
 
 import org.junit.Test;
 
-import generic.test.AbstractGenericTest;
 import ghidra.app.util.importer.MessageLog;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.RefType;
-import ghidra.program.model.symbol.Reference;
-import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.util.task.TaskMonitor;
@@ -34,7 +29,7 @@ import ghidra.util.task.TaskMonitor;
  * And the cases it must refuse: a legitimate register-indirect jump, a resolution into
  * another segment no constant explains, and any {@code JMP reg} lacking the return-slot patch.
  */
-public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
+public class RTLinkDispatcherJumpAnalyzerTest extends RealModeTest {
 
 	// The two-armed dispatch at 1000:0100, as in the nucleus:
 	//   0100  b8 16 00   MOV AX,0x0016
@@ -50,58 +45,31 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	private static final String BODY_A = "0x1000:0x0160";
 	private static final String BODY_B = "0x1000:0x0180";
 
-	private static ProgramBuilder dispatchProgram() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("DISPATCH", ProgramBuilder._X86_16_REAL_MODE);
-		boolean ok = false;
-		try {
-			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0000", 0x400);
-			builder.withTransaction(() -> code.setExecute(true));
-			builder.setBytes("0x1000:0x0100", DISPATCH);
-			builder.setBytes(BODY_A, "33 c0 cb");             // XOR AX,AX ; RETF
-			builder.setBytes(BODY_B, "5d cb");                // POP BP ; RETF
-			builder.disassemble("0x1000:0x0100", DISPATCH_LEN, true);
-			ok = true;
-			return builder;
-		}
-		finally {
-			if (!ok) {
-				builder.dispose();
-			}
-		}
+	private RealMode dispatchProgram() throws Exception {
+		RealMode builder = realMode("DISPATCH");
+		builder.code("0x1000:0x0000", 0x400);
+		builder.setBytes("0x1000:0x0100", DISPATCH);
+		builder.setBytes(BODY_A, "33 c0 cb");             // XOR AX,AX ; RETF
+		builder.setBytes(BODY_B, "5d cb");                // POP BP ; RETF
+		builder.disassemble("0x1000:0x0100", DISPATCH_LEN, true);
+		return builder;
 	}
 
 	/** Run the pass inside a transaction over the whole program and hand back the count. */
-	private static int resolve(ProgramBuilder builder) throws Exception {
+	private static int resolve(RealMode builder) throws Exception {
 		Program program = builder.getProgram();
-		int txId = program.startTransaction("resolve dispatch jumps");
-		try {
-			return RTLinkDispatcherJumpAnalyzer.resolveDispatchJumps(program,
-				program.getMemory(), TaskMonitor.DUMMY);
-		}
-		finally {
-			program.endTransaction(txId, true);
-		}
+		return builder.tx(() -> RTLinkDispatcherJumpAnalyzer.resolveDispatchJumps(program,
+			program.getMemory(), TaskMonitor.DUMMY));
 	}
 
-	private static Set<Address> computedJumpTargets(ProgramBuilder builder, String from) {
-		Set<Address> targets = new HashSet<>();
-		for (Reference ref : builder.getProgram().getReferenceManager()
-				.getReferencesFrom(builder.addr(from))) {
-			if (ref.getReferenceType().isComputed() && ref.getReferenceType().isJump()) {
-				targets.add(ref.getToAddress());
-			}
-		}
-		return targets;
-	}
-
-	private static void addAnalysisJump(ProgramBuilder builder, String from, String to) {
+	private static void addAnalysisJump(RealMode builder, String from, String to) {
 		builder.withTransaction(() -> builder.getProgram().getReferenceManager()
 				.addMemoryReference(builder.addr(from), builder.addr(to), RefType.COMPUTED_JUMP,
 					SourceType.ANALYSIS, 0));
 	}
 
 	/** Claim the dispatch jumps as the table pass does, inside a transaction. */
-	private static int claim(ProgramBuilder builder) throws Exception {
+	private static int claim(RealMode builder) throws Exception {
 		Program program = builder.getProgram();
 		return builder.tx(() -> VmDispatch.claim(program,
 			program.getMemory(), TaskMonitor.DUMMY));
@@ -114,19 +82,14 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testDispatchJumpIsClaimedWhereCsResolvesAgainstThePage() throws Exception {
-		ProgramBuilder builder = dispatchProgram();
-		try {
-			Program program = builder.getProgram();
-			assumeTrue(X86.resolvesAgainstPage(program,
-				program.getListing().getInstructionAt(builder.addr(JMP))));
+		RealMode builder = dispatchProgram();
+		Program program = builder.getProgram();
+		assumeTrue(X86.resolvesAgainstPage(program,
+			program.getListing().getInstructionAt(builder.addr(JMP))));
 
-			assertEquals(1, claim(builder));
-			assertEquals(Set.of(builder.addr(BODY_A), builder.addr(BODY_B)),
-				computedJumpTargets(builder, JMP));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals(1, claim(builder));
+		assertEquals(Set.of(builder.addr(BODY_A), builder.addr(BODY_B)),
+			builder.computedTargets(JMP));
 	}
 
 	/**
@@ -136,44 +99,39 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testResolvedDispatchJumpIsOverriddenOnce() throws Exception {
-		ProgramBuilder builder = dispatchProgram();
-		try {
-			Program program = builder.getProgram();
-			Address jmp = builder.addr(JMP);
+		RealMode builder = dispatchProgram();
+		Program program = builder.getProgram();
+		Address jmp = builder.addr(JMP);
 
-			resolve(builder);
-			builder.createFunction("0x1000:0x0100");
-			assertEquals(Integer.valueOf(1), writeOverrides(builder));
+		resolve(builder);
+		builder.createFunction("0x1000:0x0100");
+		assertEquals(Integer.valueOf(1), writeOverrides(builder));
 
-			Namespace space = overrideSpace(builder, jmp);
-			assertNotNull("the jump carries an override", space);
-			Set<Address> cases = new HashSet<>();
-			for (Symbol symbol : program.getSymbolTable().getSymbols(space)) {
-				if (symbol.getName().startsWith("case")) {
-					cases.add(symbol.getAddress());
-				}
+		Namespace space = overrideSpace(builder, jmp);
+		assertNotNull("the jump carries an override", space);
+		Set<Address> cases = new HashSet<>();
+		for (Symbol symbol : program.getSymbolTable().getSymbols(space)) {
+			if (symbol.getName().startsWith("case")) {
+				cases.add(symbol.getAddress());
 			}
-			assertEquals(Set.of(builder.addr(BODY_A), builder.addr(BODY_B)), cases);
+		}
+		assertEquals(Set.of(builder.addr(BODY_A), builder.addr(BODY_B)), cases);
 
-			builder.withTransaction(
-				() -> program.getSymbolTable().removeSymbolSpecial(space.getSymbol()));
-			resolve(builder);
-			assertEquals("a second resolution records nothing", Integer.valueOf(0),
-				writeOverrides(builder));
-			assertNull("the deleted override stays deleted", overrideSpace(builder, jmp));
-		}
-		finally {
-			builder.dispose();
-		}
+		builder.withTransaction(
+			() -> program.getSymbolTable().removeSymbolSpecial(space.getSymbol()));
+		resolve(builder);
+		assertEquals("a second resolution records nothing", Integer.valueOf(0),
+			writeOverrides(builder));
+		assertNull("the deleted override stays deleted", overrideSpace(builder, jmp));
 	}
 
-	private static Integer writeOverrides(ProgramBuilder builder) throws Exception {
+	private static Integer writeOverrides(RealMode builder) throws Exception {
 		Program program = builder.getProgram();
 		return builder.tx(() -> RTLinkSwitchOverrideAnalyzer.writeOverrides(program,
 			program.getMemory(), new MessageLog(), TaskMonitor.DUMMY));
 	}
 
-	private static Namespace overrideSpace(ProgramBuilder builder, Address jmp) {
+	private static Namespace overrideSpace(RealMode builder, Address jmp) {
 		Program program = builder.getProgram();
 		Function function = program.getFunctionManager().getFunctionContaining(jmp);
 		Namespace overrides = function == null ? null : HighFunction.findOverrideSpace(function);
@@ -184,46 +142,36 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	/** With the dispatcher analyzer switched off, the table pass claims nothing for it. */
 	@Test
 	public void testDisabledAnalyzerClaimsNothing() throws Exception {
-		ProgramBuilder builder = dispatchProgram();
-		try {
-			Program program = builder.getProgram();
-			assumeTrue("only where a claim would otherwise happen", X86.resolvesAgainstPage(
-				program, program.getListing().getInstructionAt(builder.addr(JMP))));
-			builder.withTransaction(() -> program.getOptions(Program.ANALYSIS_PROPERTIES)
-					.setBoolean(RTLinkDispatcherJumpAnalyzer.NAME, false));
-			Set<Address> before = computedJumpTargets(builder, JMP);
+		RealMode builder = dispatchProgram();
+		Program program = builder.getProgram();
+		assumeTrue("only where a claim would otherwise happen", X86.resolvesAgainstPage(
+			program, program.getListing().getInstructionAt(builder.addr(JMP))));
+		builder.withTransaction(() -> program.getOptions(Program.ANALYSIS_PROPERTIES)
+				.setBoolean(RTLinkDispatcherJumpAnalyzer.NAME, false));
+		Set<Address> before = builder.computedTargets(JMP);
 
-			assertEquals(0, claim(builder));
-			assertEquals("no reference is added", before, computedJumpTargets(builder, JMP));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals(0, claim(builder));
+		assertEquals("no reference is added", before, builder.computedTargets(JMP));
 	}
 
 	@Test
 	public void testBodiesAreReferencedAndDecoded() throws Exception {
-		ProgramBuilder builder = dispatchProgram();
-		try {
-			Program program = builder.getProgram();
-			assertNull("setup: body A not yet decoded",
-				program.getListing().getInstructionAt(builder.addr(BODY_A)));
+		RealMode builder = dispatchProgram();
+		Program program = builder.getProgram();
+		assertNull("setup: body A not yet decoded",
+			program.getListing().getInstructionAt(builder.addr(BODY_A)));
 
-			assertEquals(1, resolve(builder));
+		assertEquals(1, resolve(builder));
 
-			assertEquals("JMP DX goes to CS:imm for both constants that reach it",
-				Set.of(builder.addr(BODY_A), builder.addr(BODY_B)), computedJumpTargets(builder, JMP));
-			assertNotNull("body A is decoded",
-				program.getListing().getInstructionAt(builder.addr(BODY_A)));
-			assertNotNull("body B is decoded",
-				program.getListing().getInstructionAt(builder.addr(BODY_B)));
-			assertEquals(RTLinkDispatcherJumpAnalyzer.DISPATCHER_COMMENT,
-				program.getListing().getInstructionAt(builder.addr(JMP))
-						.getComment(CommentType.PLATE));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals("JMP DX goes to CS:imm for both constants that reach it",
+			Set.of(builder.addr(BODY_A), builder.addr(BODY_B)), builder.computedTargets(JMP));
+		assertNotNull("body A is decoded",
+			program.getListing().getInstructionAt(builder.addr(BODY_A)));
+		assertNotNull("body B is decoded",
+			program.getListing().getInstructionAt(builder.addr(BODY_B)));
+		assertEquals(RTLinkDispatcherJumpAnalyzer.DISPATCHER_COMMENT,
+			program.getListing().getInstructionAt(builder.addr(JMP))
+					.getComment(CommentType.PLATE));
 	}
 
 	/**
@@ -233,55 +181,40 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testCorrectReferencesAreKept() throws Exception {
-		ProgramBuilder builder = dispatchProgram();
-		try {
-			Program program = builder.getProgram();
-			builder.disassemble(BODY_A, 3, true);
-			builder.disassemble(BODY_B, 2, true);
-			addAnalysisJump(builder, JMP, BODY_A);
-			addAnalysisJump(builder, JMP, BODY_B);
+		RealMode builder = dispatchProgram();
+		Program program = builder.getProgram();
+		builder.disassemble(BODY_A, 3, true);
+		builder.disassemble(BODY_B, 2, true);
+		addAnalysisJump(builder, JMP, BODY_A);
+		addAnalysisJump(builder, JMP, BODY_B);
 
-			assertEquals("nothing to change", 0, resolve(builder));
+		assertEquals("nothing to change", 0, resolve(builder));
 
-			assertEquals(Set.of(builder.addr(BODY_A), builder.addr(BODY_B)),
-				computedJumpTargets(builder, JMP));
-			assertNotNull(program.getListing().getInstructionAt(builder.addr(BODY_A)));
-			assertNotNull(program.getListing().getInstructionAt(builder.addr(BODY_B)));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals(Set.of(builder.addr(BODY_A), builder.addr(BODY_B)),
+			builder.computedTargets(JMP));
+		assertNotNull(program.getListing().getInstructionAt(builder.addr(BODY_A)));
+		assertNotNull(program.getListing().getInstructionAt(builder.addr(BODY_B)));
 	}
 
 	@Test
 	public void testResolutionIsIdempotent() throws Exception {
-		ProgramBuilder builder = dispatchProgram();
-		try {
-			assertEquals(1, resolve(builder));
-			assertEquals("a re-run finds nothing left to do", 0, resolve(builder));
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode builder = dispatchProgram();
+		assertEquals(1, resolve(builder));
+		assertEquals("a re-run finds nothing left to do", 0, resolve(builder));
 	}
 
 	@Test
 	public void testExistingPlateCommentIsKept() throws Exception {
-		ProgramBuilder builder = dispatchProgram();
-		try {
-			Program program = builder.getProgram();
-			String own = "$$VM_UNK: dispatch to the selected entry";
-			builder.withTransaction(() -> program.getListing().getInstructionAt(builder.addr(JMP))
-					.setComment(CommentType.PLATE, own));
+		RealMode builder = dispatchProgram();
+		Program program = builder.getProgram();
+		String own = "$$VM_UNK: dispatch to the selected entry";
+		builder.withTransaction(() -> program.getListing().getInstructionAt(builder.addr(JMP))
+				.setComment(CommentType.PLATE, own));
 
-			resolve(builder);
+		resolve(builder);
 
-			assertEquals(own, program.getListing().getInstructionAt(builder.addr(JMP))
-					.getComment(CommentType.PLATE));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals(own, program.getListing().getInstructionAt(builder.addr(JMP))
+				.getComment(CommentType.PLATE));
 	}
 
 	/**
@@ -299,24 +232,18 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testSiblingDispatchersKeepTheirOwnConstants() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("SIBLINGS", ProgramBuilder._X86_16_REAL_MODE);
-		try {
-			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0000", 0x400);
-			builder.withTransaction(() -> code.setExecute(true));
-			builder.setBytes("0x1000:0x0100", "ba 60 01 89 44 fc ff e2 ba 80 01 89 44 fc ff e2");
-			builder.setBytes(BODY_A, "33 c0 cb");
-			builder.setBytes(BODY_B, "5d cb");
-			builder.disassemble("0x1000:0x0100", 8, true);
-			builder.disassemble("0x1000:0x0108", 8, true);
+		RealMode builder = realMode("SIBLINGS");
+		builder.code("0x1000:0x0000", 0x400);
+		builder.setBytes("0x1000:0x0100", "ba 60 01 89 44 fc ff e2 ba 80 01 89 44 fc ff e2");
+		builder.setBytes(BODY_A, "33 c0 cb");
+		builder.setBytes(BODY_B, "5d cb");
+		builder.disassemble("0x1000:0x0100", 8, true);
+		builder.disassemble("0x1000:0x0108", 8, true);
 
-			assertEquals(2, resolve(builder));
+		assertEquals(2, resolve(builder));
 
-			assertEquals(Set.of(builder.addr(BODY_A)), computedJumpTargets(builder, "0x1000:0x0106"));
-			assertEquals(Set.of(builder.addr(BODY_B)), computedJumpTargets(builder, "0x1000:0x010e"));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals(Set.of(builder.addr(BODY_A)), builder.computedTargets("0x1000:0x0106"));
+		assertEquals(Set.of(builder.addr(BODY_B)), builder.computedTargets("0x1000:0x010e"));
 	}
 
 	/**
@@ -340,92 +267,63 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testPageBaseRefsAreReplacedBySegmentRefs() throws Exception {
-		ProgramBuilder builder = pageProgram(false);
-		try {
-			Program program = builder.getProgram();
+		RealMode builder = pageProgram(false);
+		Program program = builder.getProgram();
+		assertNotNull("setup: the collision is marked", program.getBookmarkManager()
+				.getBookmark(builder.addr("0x1000:0x0067"), BookmarkType.ERROR, "Bad Instruction"));
 
-			assertEquals(1, resolve(builder));
+		assertEquals(1, resolve(builder));
 
-			assertEquals("the page-based references give way to the nucleus-segment ones",
-				Set.of(builder.addr("0x1012:0x0060"), builder.addr("0x1012:0x0067")),
-				computedJumpTargets(builder, "0x1012:0x000e"));
-			assertNull("the junk the first one decoded in the earlier block is cleared",
-				program.getListing().getInstructionAt(builder.addr("0x1000:0x0060")));
-			assertNull("the mark the second one left at its collision is dropped",
-				program.getBookmarkManager()
-						.getBookmark(builder.addr("0x1000:0x0067"), BookmarkType.ERROR,
-							"Bad Instruction"));
-			assertNotNull("the real code it collided with is untouched",
-				program.getListing().getInstructionAt(builder.addr("0x1000:0x0068")));
-			assertNotNull("arm 1's body is decoded",
-				program.getListing().getInstructionAt(builder.addr("0x1012:0x0060")));
-			assertNotNull("arm 2's body is decoded",
-				program.getListing().getInstructionAt(builder.addr("0x1012:0x0067")));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals("the page-based references give way to the nucleus-segment ones",
+			Set.of(builder.addr("0x1012:0x0060"), builder.addr("0x1012:0x0067")),
+			builder.computedTargets("0x1012:0x000e"));
+		assertNull("the junk the first one decoded in the earlier block is cleared",
+			program.getListing().getInstructionAt(builder.addr("0x1000:0x0060")));
+		assertNull("the mark the second one left at its collision is dropped",
+			program.getBookmarkManager()
+					.getBookmark(builder.addr("0x1000:0x0067"), BookmarkType.ERROR,
+						"Bad Instruction"));
+		assertNotNull("the real code it collided with is untouched",
+			program.getListing().getInstructionAt(builder.addr("0x1000:0x0068")));
+		assertNotNull("arm 1's body is decoded",
+			program.getListing().getInstructionAt(builder.addr("0x1012:0x0060")));
+		assertNotNull("arm 2's body is decoded",
+			program.getListing().getInstructionAt(builder.addr("0x1012:0x0067")));
 	}
 
 	@Test
 	public void testEvidencedCodeAtPageTargetIsKept() throws Exception {
-		ProgramBuilder builder = pageProgram(true); // 1000:0060 carries a non-default symbol
-		try {
-			assertEquals(1, resolve(builder));
+		RealMode builder = pageProgram(true); // 1000:0060 carries a non-default symbol
+		assertEquals(1, resolve(builder));
 
-			assertFalse("the page-based reference is still deleted",
-				computedJumpTargets(builder, "0x1012:0x000e").contains(builder.addr("0x1000:0x0060")));
-			assertNotNull("but evidenced code at its target is kept, not over-cleared",
-				builder.getProgram().getListing().getInstructionAt(builder.addr("0x1000:0x0060")));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertFalse("the page-based reference is still deleted",
+			builder.computedTargets("0x1012:0x000e").contains(builder.addr("0x1000:0x0060")));
+		assertNotNull("but evidenced code at its target is kept, not over-cleared",
+			builder.getProgram().getListing().getInstructionAt(builder.addr("0x1000:0x0060")));
 	}
 
-	private static ProgramBuilder pageProgram(boolean evidencedJunk) throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("PAGE", ProgramBuilder._X86_16_REAL_MODE);
-		boolean ok = false;
-		try {
-			MemoryBlock resident = builder.createMemory("CODE", "0x1000:0x0000", 0x120);
-			MemoryBlock nucleus = builder.createMemory("NUC", "0x1012:0x0000", 0x100);
-			builder.withTransaction(() -> {
-				resident.setExecute(true);
-				nucleus.setExecute(true);
-			});
-			builder.setBytes("0x1012:0x0000", "b8 16 00 ba 60 00 74 03 ba 67 00 89 44 fc ff e2");
-			builder.setBytes("0x1012:0x0060", "c3");
-			builder.setBytes("0x1012:0x0067", "cb");
-			builder.setBytes("0x1000:0x0060", "f8 f9 fa");
-			builder.setBytes("0x1000:0x0068", "55 c3");
-			builder.disassemble("0x1012:0x0000", 16, true);
-			builder.disassemble("0x1000:0x0060", 3, true);
-			builder.disassemble("0x1000:0x0068", 2, true);
-			builder.createFunction("0x1000:0x0068");
-			Program program = builder.getProgram();
-			builder.withTransaction(() -> {
-				ReferenceManager refs = program.getReferenceManager();
-				refs.addMemoryReference(builder.addr("0x1012:0x000e"),
-					builder.addr("0x1000:0x0060"), RefType.COMPUTED_JUMP, SourceType.ANALYSIS, 0);
-				refs.addMemoryReference(builder.addr("0x1012:0x000e"),
-					builder.addr("0x1000:0x0067"), RefType.COMPUTED_JUMP, SourceType.ANALYSIS, 0);
-				program.getBookmarkManager().setBookmark(builder.addr("0x1000:0x0060"),
-					BookmarkType.ERROR, "Bad Instruction", "conflicting data");
-				program.getBookmarkManager().setBookmark(builder.addr("0x1000:0x0067"),
-					BookmarkType.ERROR, "Bad Instruction", "Failed to disassemble at 1000:0067 " +
-						"due to conflicting instruction at 1000:0068");
-			});
-			if (evidencedJunk) {
-				builder.createLabel("0x1000:0x0060", "keep_me");
-			}
-			ok = true;
-			return builder;
+	private RealMode pageProgram(boolean evidencedJunk) throws Exception {
+		RealMode builder = realMode("PAGE");
+		builder.code("CODE", "0x1000:0x0000", 0x120);
+		builder.code("NUC", "0x1012:0x0000", 0x100);
+		builder.setBytes("0x1012:0x0000", "b8 16 00 ba 60 00 74 03 ba 67 00 89 44 fc ff e2");
+		builder.setBytes("0x1012:0x0060", "c3");
+		builder.setBytes("0x1012:0x0067", "cb");
+		builder.setBytes("0x1000:0x0060", "f8 f9 fa");
+		builder.setBytes("0x1000:0x0068", "55 c3");
+		builder.disassemble("0x1012:0x0000", 16, true);
+		builder.disassemble("0x1000:0x0060", 3, true);
+		builder.disassemble("0x1000:0x0068", 2, true);
+		builder.createFunction("0x1000:0x0068");
+		addAnalysisJump(builder, "0x1012:0x000e", "0x1000:0x0060");
+		addAnalysisJump(builder, "0x1012:0x000e", "0x1000:0x0067");
+		builder.errorMark("0x1000:0x0060", "conflicting data");
+		builder.errorMark("0x1000:0x0067",
+			"Failed to disassemble at 1000:0067 due to conflicting instruction at 1000:0068");
+		if (evidencedJunk) {
+			builder.createLabel("0x1000:0x0060", "keep_me");
 		}
-		finally {
-			if (!ok) {
-				builder.dispose();
-			}
-		}
+		return builder;
 	}
 
 	/**
@@ -441,27 +339,21 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testLegitComputedJumpUntouched() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("LEGIT", ProgramBuilder._X86_16_REAL_MODE);
-		try {
-			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0000", 0x400);
-			builder.withTransaction(() -> code.setExecute(true));
-			builder.setBytes("0x1000:0x0200", "bb 50 02 90 ff e3");
-			builder.setBytes("0x1000:0x0250", "c3");
-			builder.disassemble("0x1000:0x0200", 6, true);
-			builder.disassemble("0x1000:0x0250", 1, true);
-			addAnalysisJump(builder, "0x1000:0x0204", "0x1000:0x0250");
-			builder.createLabel("0x1000:0x0250", "real_target");
+		RealMode builder = realMode("LEGIT");
+		builder.code("0x1000:0x0000", 0x400);
+		builder.setBytes("0x1000:0x0200", "bb 50 02 90 ff e3");
+		builder.setBytes("0x1000:0x0250", "c3");
+		builder.disassemble("0x1000:0x0200", 6, true);
+		builder.disassemble("0x1000:0x0250", 1, true);
+		addAnalysisJump(builder, "0x1000:0x0204", "0x1000:0x0250");
+		builder.createLabel("0x1000:0x0250", "real_target");
 
-			assertEquals(0, resolve(builder));
+		assertEquals(0, resolve(builder));
 
-			assertEquals(Set.of(builder.addr("0x1000:0x0250")),
-				computedJumpTargets(builder, "0x1000:0x0204"));
-			assertNotNull("its target code must be untouched",
-				builder.getProgram().getListing().getInstructionAt(builder.addr("0x1000:0x0250")));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals(Set.of(builder.addr("0x1000:0x0250")),
+			builder.computedTargets("0x1000:0x0204"));
+		assertNotNull("its target code must be untouched",
+			builder.getProgram().getListing().getInstructionAt(builder.addr("0x1000:0x0250")));
 	}
 
 	/**
@@ -470,23 +362,17 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testUnexplainedCrossSegmentRefUntouched() throws Exception {
-		ProgramBuilder builder = dispatchProgram();
-		try {
-			MemoryBlock other = builder.createMemory("OVL", "0x2000:0x0000", 0x400);
-			builder.withTransaction(() -> other.setExecute(true));
-			builder.setBytes("0x2000:0x0080", "c3");
-			builder.disassemble("0x2000:0x0080", 1, true);
-			addAnalysisJump(builder, JMP, "0x2000:0x0080");
+		RealMode builder = dispatchProgram();
+		builder.code("OVL", "0x2000:0x0000", 0x400);
+		builder.setBytes("0x2000:0x0080", "c3");
+		builder.disassemble("0x2000:0x0080", 1, true);
+		addAnalysisJump(builder, JMP, "0x2000:0x0080");
 
-			assertEquals("the dispatch itself is still resolved", 1, resolve(builder));
+		assertEquals("the dispatch itself is still resolved", 1, resolve(builder));
 
-			assertEquals("a resolution no constant explains survives beside the true ones",
-				Set.of(builder.addr("0x2000:0x0080"), builder.addr(BODY_A), builder.addr(BODY_B)),
-				computedJumpTargets(builder, JMP));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals("a resolution no constant explains survives beside the true ones",
+			Set.of(builder.addr("0x2000:0x0080"), builder.addr(BODY_A), builder.addr(BODY_B)),
+			builder.computedTargets(JMP));
 	}
 
 	/**
@@ -502,24 +388,18 @@ public class RTLinkDispatcherJumpAnalyzerTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testMissingReturnSlotPatchDeclined() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("NOSLOT", ProgramBuilder._X86_16_REAL_MODE);
-		try {
-			MemoryBlock code = builder.createMemory("CODE", "0x1000:0x0000", 0x400);
-			builder.withTransaction(() -> code.setExecute(true));
-			builder.setBytes("0x1000:0x0100", "ba 80 01 90 ff e2");
-			builder.setBytes(BODY_B, "50 51 52 53");
-			builder.disassemble("0x1000:0x0100", 6, true);
-			builder.disassemble(BODY_B, 4, true);
-			addAnalysisJump(builder, "0x1000:0x0104", BODY_B);
+		RealMode builder = realMode("NOSLOT");
+		builder.code("0x1000:0x0000", 0x400);
+		builder.setBytes("0x1000:0x0100", "ba 80 01 90 ff e2");
+		builder.setBytes(BODY_B, "50 51 52 53");
+		builder.disassemble("0x1000:0x0100", 6, true);
+		builder.disassemble(BODY_B, 4, true);
+		addAnalysisJump(builder, "0x1000:0x0104", BODY_B);
 
-			assertEquals(0, resolve(builder));
+		assertEquals(0, resolve(builder));
 
-			assertEquals(Set.of(builder.addr(BODY_B)), computedJumpTargets(builder, "0x1000:0x0104"));
-			assertNotNull("and nothing is cleared",
-				builder.getProgram().getListing().getInstructionAt(builder.addr(BODY_B)));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals(Set.of(builder.addr(BODY_B)), builder.computedTargets("0x1000:0x0104"));
+		assertNotNull("and nothing is cleared",
+			builder.getProgram().getListing().getInstructionAt(builder.addr(BODY_B)));
 	}
 }

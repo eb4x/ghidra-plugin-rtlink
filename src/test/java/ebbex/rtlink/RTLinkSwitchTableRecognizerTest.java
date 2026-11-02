@@ -2,14 +2,11 @@ package ebbex.rtlink;
 
 import static org.junit.Assert.*;
 
-import java.util.HexFormat;
 import java.util.List;
 
 import org.junit.Test;
 
-import generic.test.AbstractGenericTest;
 import ghidra.app.cmd.disassemble.DisassembleCommand;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.listing.Instruction;
@@ -27,65 +24,43 @@ import ghidra.util.task.TaskMonitor;
  * Overlay tables are resolved against the module base the overlay analyzer records for the
  * block; each test records the bases that put its table where the corpus has it.
  */
-public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
+public class RTLinkSwitchTableRecognizerTest extends RealModeTest {
 
 	// ---------------------------------------------------------------- harness
 
 	/** A resident code block at {@code start} holding {@code hex}. */
-	private static ProgramBuilder resident(String start, int size, String hex) throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("SWITCH", ProgramBuilder._X86_16_REAL_MODE);
-		boolean ok = false;
-		try {
-			MemoryBlock block = builder.createMemory("CODE", start, size);
-			builder.withTransaction(() -> block.setExecute(true));
-			builder.setBytes(start, hex);
-			ok = true;
-			return builder;
-		}
-		finally {
-			if (!ok) {
-				builder.dispose();
-			}
-		}
+	private RealMode resident(String start, int size, String hex) throws Exception {
+		RealMode builder = realMode("SWITCH");
+		builder.code(start, size);
+		builder.setBytes(start, hex);
+		return builder;
 	}
 
 	/**
 	 * An overlay block {@code name} of {@code size} bytes, with {@code hex} at page offset
 	 * {@code at} and {@code bases} recorded as its module base paragraphs (none if empty).
 	 */
-	private static ProgramBuilder overlay(String name, int size, int at, String hex,
-			List<Integer> bases) throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("SWITCH", ProgramBuilder._X86_16_REAL_MODE);
-		boolean ok = false;
-		try {
-			MemoryBlock block = builder.createOverlayMemory(name, "0x2d00:0x0000", size);
-			Program program = builder.getProgram();
-			int txId = program.startTransaction("overlay");
-			try {
-				block.setExecute(true);
-				program.getMemory().setBytes(block.getStart().add(at), bytes(hex));
-				if (!bases.isEmpty()) {
-					RTLinkProgram.recordModuleBases(program, name, bases);
-				}
+	private RealMode overlay(String name, int size, int at, String hex, List<Integer> bases)
+			throws Exception {
+		RealMode builder = realMode("SWITCH");
+		MemoryBlock block = builder.createOverlayMemory(name, "0x2d00:0x0000", size);
+		Program program = builder.getProgram();
+		builder.tx(() -> {
+			block.setExecute(true);
+			program.getMemory().setBytes(block.getStart().add(at), Hex.parse(hex));
+			if (!bases.isEmpty()) {
+				RTLinkProgram.recordModuleBases(program, name, bases);
 			}
-			finally {
-				program.endTransaction(txId, true);
-			}
-			ok = true;
-			return builder;
-		}
-		finally {
-			if (!ok) {
-				builder.dispose();
-			}
-		}
+			return null;
+		});
+		return builder;
 	}
 
-	private static byte[] bytes(String hex) {
-		return HexFormat.of().parseHex(hex.replace(" ", ""));
-	}
-
-	/** Disassemble {@code length} bytes at {@code start} without following flow. */
+	/**
+	 * Disassemble {@code length} bytes at {@code start} without following flow. Kept here
+	 * rather than {@link RealMode#decode}: it seeds with {@link DisassembleCommand} and no
+	 * restricted set, which is the shape these characterizations were pinned with.
+	 */
 	private static void decode(Program program, Address start, int length) {
 		int txId = program.startTransaction("decode");
 		try {
@@ -136,20 +111,15 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 		assertResidentTable(VICEROY_1AEA.replace("d1 e0 93", "03 c0 93"));
 	}
 
-	private static void assertResidentTable(String hex) throws Exception {
-		ProgramBuilder builder = resident("0x1aea:0x000b", 0x112, hex);
-		try {
-			Program program = builder.getProgram();
-			decode(program, builder.addr("0x1aea:0x000c"), 0x16);
-			List<Address> targets = recover(program, builder.addr("0x1aea:0x001d"));
-			List<Address> expected = java.util.Arrays.stream(VICEROY_1AEA_TARGETS)
-					.mapToObj(o -> builder.addr(String.format("0x1aea:0x%04x", o)))
-					.toList();
-			assertEquals(expected, targets);
-		}
-		finally {
-			builder.dispose();
-		}
+	private void assertResidentTable(String hex) throws Exception {
+		RealMode builder = resident("0x1aea:0x000b", 0x112, hex);
+		Program program = builder.getProgram();
+		decode(program, builder.addr("0x1aea:0x000c"), 0x16);
+		List<Address> targets = recover(program, builder.addr("0x1aea:0x001d"));
+		List<Address> expected = java.util.Arrays.stream(VICEROY_1AEA_TARGETS)
+				.mapToObj(o -> builder.addr(String.format("0x1aea:0x%04x", o)))
+				.toList();
+		assertEquals(expected, targets);
 	}
 
 	/**
@@ -165,30 +135,20 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 			VICEROY_1AEA.replace("a7 22 00 80 00", "a7 22 00 0e 00"));
 	}
 
-	private static void assertResidentTableRefused(String why, String hex) throws Exception {
-		ProgramBuilder builder = resident("0x1aea:0x000b", 0x112, hex);
-		try {
-			Program program = builder.getProgram();
-			decode(program, builder.addr("0x1aea:0x000c"), 0x16);
-			assertNull(why, recover(program, builder.addr("0x1aea:0x001d")));
-		}
-		finally {
-			builder.dispose();
-		}
+	private void assertResidentTableRefused(String why, String hex) throws Exception {
+		RealMode builder = resident("0x1aea:0x000b", 0x112, hex);
+		Program program = builder.getProgram();
+		decode(program, builder.addr("0x1aea:0x000c"), 0x16);
+		assertNull(why, recover(program, builder.addr("0x1aea:0x001d")));
 	}
 
 	/** The same bytes in a segment on a 64KB page: currentCS gets that right, so hands off. */
 	@Test
 	public void testPageAlignedSegmentIsLeftToStock() throws Exception {
-		ProgramBuilder builder = resident("0x1000:0x000b", 0x112, VICEROY_1AEA);
-		try {
-			Program program = builder.getProgram();
-			decode(program, builder.addr("0x1000:0x000c"), 0x16);
-			assertNull(recover(program, builder.addr("0x1000:0x001d")));
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode builder = resident("0x1000:0x000b", 0x112, VICEROY_1AEA);
+		Program program = builder.getProgram();
+		decode(program, builder.addr("0x1000:0x000c"), 0x16);
+		assertNull(recover(program, builder.addr("0x1000:0x001d")));
 	}
 
 	// ---------------------------------------------------------------- recorded targets
@@ -200,28 +160,19 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testRecordedTargetsRoundTrip() throws Exception {
-		ProgramBuilder builder = resident("0x1aea:0x000b", 0x112, VICEROY_1AEA);
-		try {
-			assertRoundTrip(builder.getProgram(), builder.addr("0x1aea:0x001d"),
-				List.of(builder.addr("0x1aea:0x0080"), builder.addr("0x1aea:0x0118")));
-		}
-		finally {
-			builder.dispose();
-		}
-		builder = overlay("OVERLAY_25", 0xa20, 0x316, "90", List.of(0, 0xb));
-		try {
-			Program program = builder.getProgram();
-			MemoryBlock block = program.getMemory().getBlock("OVERLAY_25");
-			assertRoundTrip(program, block.getStart().add(0x321), offsets(block, 0xd2, 0x30e));
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode resident = resident("0x1aea:0x000b", 0x112, VICEROY_1AEA);
+		assertRoundTrip(resident, resident.addr("0x1aea:0x001d"),
+			List.of(resident.addr("0x1aea:0x0080"), resident.addr("0x1aea:0x0118")));
+
+		RealMode overlay = overlay("OVERLAY_25", 0xa20, 0x316, "90", List.of(0, 0xb));
+		MemoryBlock block = overlay.getProgram().getMemory().getBlock("OVERLAY_25");
+		assertRoundTrip(overlay, block.getStart().add(0x321), offsets(block, 0xd2, 0x30e));
 	}
 
-	private static void assertRoundTrip(Program program, Address dispatch, List<Address> targets) {
-		int txId = program.startTransaction("record");
-		try {
+	private static void assertRoundTrip(RealMode builder, Address dispatch,
+			List<Address> targets) {
+		Program program = builder.getProgram();
+		builder.withTransaction(() -> {
 			RTLinkProgram.recordSwitch(program, dispatch, targets);
 			List<Address> read = RTLinkProgram.switchTargets(program, dispatch);
 			assertEquals(targets, read);
@@ -230,10 +181,7 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 				new AddressSet(dispatch, dispatch)).next());
 			RTLinkProgram.consumeSwitch(program, dispatch);
 			assertEquals(List.of(), RTLinkProgram.switchTargets(program, dispatch));
-		}
-		finally {
-			program.endTransaction(txId, true);
-		}
+		});
 	}
 
 	// ---------------------------------------------------------------- overlay module tables
@@ -248,17 +196,12 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 	public void testAdjacentTableMayRunPastTheNextAnchor() throws Exception {
 		String hex = "2d 46 00 3d 09 00 77 1c d1 e0 93 2e ff a7 76 02 " +
 			"22 00 b4 00 ea 00 62 01 8e 01 c0 01 f2 01 26 02 5e 02 4c 01";
-		ProgramBuilder builder = overlay("OVERLAY_25", 0xa20, 0x316, hex, List.of(0, 0xb, 0x33));
-		try {
-			Program program = builder.getProgram();
-			MemoryBlock block = program.getMemory().getBlock("OVERLAY_25");
-			decode(program, block.getStart().add(0x316), 0x10);
-			assertEquals(offsets(block, 0xd2, 0x164, 0x19a, 0x212, 0x23e, 0x270, 0x2a2, 0x2d6,
-				0x30e, 0x1fc), recover(program, block.getStart().add(0x321)));
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode builder = overlay("OVERLAY_25", 0xa20, 0x316, hex, List.of(0, 0xb, 0x33));
+		Program program = builder.getProgram();
+		MemoryBlock block = program.getMemory().getBlock("OVERLAY_25");
+		decode(program, block.getStart().add(0x316), 0x10);
+		assertEquals(offsets(block, 0xd2, 0x164, 0x19a, 0x212, 0x23e, 0x270, 0x2a2, 0x2d6,
+			0x30e, 0x1fc), recover(program, block.getStart().add(0x321)));
 	}
 
 	/**
@@ -271,16 +214,11 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 		String hex = "2d 14 00 3d 78 00 77 2a b3 0a f6 f3 0a e4 75 22 " +
 			"d1 e0 93 2e ff a7 04 01 32 00 32 00 32 00 32 00 " +
 			"32 00 32 00 32 00 32 00 32 00 32 00 32 00 32 00 32 00 83 7e";
-		ProgramBuilder builder = overlay("OVERLAY_27", 0xcd0, 0xec, hex, List.of(0));
-		try {
-			Program program = builder.getProgram();
-			MemoryBlock block = program.getMemory().getBlock("OVERLAY_27");
-			decode(program, block.getStart().add(0xec), 0x18);
-			assertEquals(offsets(block, 0x32), recover(program, block.getStart().add(0xff)));
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode builder = overlay("OVERLAY_27", 0xcd0, 0xec, hex, List.of(0));
+		Program program = builder.getProgram();
+		MemoryBlock block = program.getMemory().getBlock("OVERLAY_27");
+		decode(program, block.getStart().add(0xec), 0x18);
+		assertEquals(offsets(block, 0x32), recover(program, block.getStart().add(0xff)));
 	}
 
 	/**
@@ -292,17 +230,12 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 	public void testByteOffsetIndexHalved() throws Exception {
 		String hex = "2d da ff a8 03 75 21 d1 e8 3d 12 00 77 1a 93 2e " +
 			"ff a7 0a 03 60 02 f2 01 1e 03 1e 03 1e 03 9c 01 8e 01 1e 03 60 01 56 01";
-		ProgramBuilder builder = overlay("OVERLAY_43", 0xd30, 0xce6, hex, List.of(0, 0x9f));
-		try {
-			Program program = builder.getProgram();
-			MemoryBlock block = program.getMemory().getBlock("OVERLAY_43");
-			decode(program, block.getStart().add(0xce6), 0x14);
-			assertEquals(offsets(block, 0xc50, 0xbe2, 0xd0e, 0xb8c, 0xb7e, 0xb50, 0xb46),
-				recover(program, block.getStart().add(0xcf5)));
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode builder = overlay("OVERLAY_43", 0xd30, 0xce6, hex, List.of(0, 0x9f));
+		Program program = builder.getProgram();
+		MemoryBlock block = program.getMemory().getBlock("OVERLAY_43");
+		decode(program, block.getStart().add(0xce6), 0x14);
+		assertEquals(offsets(block, 0xc50, 0xbe2, 0xd0e, 0xb8c, 0xb7e, 0xb50, 0xb46),
+			recover(program, block.getStart().add(0xcf5)));
 	}
 
 	/**
@@ -314,17 +247,12 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 	public void testByteOffsetIndexRequiredEven() throws Exception {
 		String hex = "2d 43 00 a8 01 75 23 3d 16 00 77 1e 93 2e ff a7 " +
 			"60 02 4c 01 d0 01 10 02 78 02 7a 01 5a 01 6a 01 36 01 0a 01 78 02 22 01 2c 01";
-		ProgramBuilder builder = overlay("OVERLAY_38", 0x12d0, 0x124e, hex, List.of(0, 0x100));
-		try {
-			Program program = builder.getProgram();
-			MemoryBlock block = program.getMemory().getBlock("OVERLAY_38");
-			decode(program, block.getStart().add(0x124e), 0x12);
-			assertEquals(offsets(block, 0x114c, 0x11d0, 0x1210, 0x1278, 0x117a, 0x115a, 0x116a,
-				0x1136, 0x110a, 0x1122, 0x112c), recover(program, block.getStart().add(0x125b)));
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode builder = overlay("OVERLAY_38", 0x12d0, 0x124e, hex, List.of(0, 0x100));
+		Program program = builder.getProgram();
+		MemoryBlock block = program.getMemory().getBlock("OVERLAY_38");
+		decode(program, block.getStart().add(0x124e), 0x12);
+		assertEquals(offsets(block, 0x114c, 0x11d0, 0x1210, 0x1278, 0x117a, 0x115a, 0x116a,
+			0x1136, 0x110a, 0x1122, 0x112c), recover(program, block.getStart().add(0x125b)));
 	}
 
 	/** Without a recorded module base the overlay table cannot be anchored: hands off. */
@@ -332,16 +260,11 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 	public void testOverlayWithoutModuleBasesIsLeftAlone() throws Exception {
 		String hex = "2d 46 00 3d 09 00 77 1c d1 e0 93 2e ff a7 76 02 " +
 			"22 00 b4 00 ea 00 62 01 8e 01 c0 01 f2 01 26 02 5e 02 4c 01";
-		ProgramBuilder builder = overlay("OVERLAY_25", 0xa20, 0x316, hex, List.of());
-		try {
-			Program program = builder.getProgram();
-			MemoryBlock block = program.getMemory().getBlock("OVERLAY_25");
-			decode(program, block.getStart().add(0x316), 0x10);
-			assertNull(recover(program, block.getStart().add(0x321)));
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode builder = overlay("OVERLAY_25", 0xa20, 0x316, hex, List.of());
+		Program program = builder.getProgram();
+		MemoryBlock block = program.getMemory().getBlock("OVERLAY_25");
+		decode(program, block.getStart().add(0x316), 0x10);
+		assertNull(recover(program, block.getStart().add(0x321)));
 	}
 
 	// ---------------------------------------------------------------- DGROUP data table
@@ -356,22 +279,17 @@ public class RTLinkSwitchTableRecognizerTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testDgroupTableBoundedByTheCallingFunction() throws Exception {
-		ProgramBuilder builder = resident("0x122e:0x51d0", 0x140, "c3");
-		try {
-			Program program = builder.getProgram();
-			builder.setBytes("0x122e:0x5276", "bf 6a b2 33 c9 8a 48 05 03 f9 ff 25");
-			builder.setBytes("0x122e:0x5300", "e8 d2 fe e8 06 00 c3"); // CALL 51d5; CALL 530c
-			builder.createMemory("DGROUP", "0x35f5:0xb26a", 0x10);
-			builder.setBytes("0x35f5:0xb26a", "ae 52 82 52 8a 52 a3 52 78 00");
-			builder.setRegisterValue("DS", "0x122e:0x51d0", "0x122e:0x530f", 0x35f5);
-			decode(program, builder.addr("0x122e:0x5276"), 12);
-			decode(program, builder.addr("0x122e:0x5300"), 7);
-			assertEquals(List.of(builder.addr("0x122e:0x52ae"), builder.addr("0x122e:0x5282"),
-				builder.addr("0x122e:0x528a"), builder.addr("0x122e:0x52a3")),
-				recover(program, builder.addr("0x122e:0x5280")));
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode builder = resident("0x122e:0x51d0", 0x140, "c3");
+		Program program = builder.getProgram();
+		builder.setBytes("0x122e:0x5276", "bf 6a b2 33 c9 8a 48 05 03 f9 ff 25");
+		builder.setBytes("0x122e:0x5300", "e8 d2 fe e8 06 00 c3"); // CALL 51d5; CALL 530c
+		builder.data("DGROUP", "0x35f5:0xb26a", 0x10);
+		builder.setBytes("0x35f5:0xb26a", "ae 52 82 52 8a 52 a3 52 78 00");
+		builder.setRegisterValue("DS", "0x122e:0x51d0", "0x122e:0x530f", 0x35f5);
+		decode(program, builder.addr("0x122e:0x5276"), 12);
+		decode(program, builder.addr("0x122e:0x5300"), 7);
+		assertEquals(List.of(builder.addr("0x122e:0x52ae"), builder.addr("0x122e:0x5282"),
+			builder.addr("0x122e:0x528a"), builder.addr("0x122e:0x52a3")),
+			recover(program, builder.addr("0x122e:0x5280")));
 	}
 }

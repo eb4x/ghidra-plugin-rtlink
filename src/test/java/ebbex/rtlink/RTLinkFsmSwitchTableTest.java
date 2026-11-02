@@ -8,14 +8,11 @@ import java.util.TreeSet;
 
 import org.junit.Test;
 
-import generic.test.AbstractGenericTest;
 import ghidra.app.util.importer.MessageLog;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.RefType;
@@ -37,7 +34,7 @@ import ghidra.util.task.TaskMonitor;
  * relocation test's transcribed page is: it exercises exactly the bytes the analyzer
  * has to handle in the wild.
  */
-public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
+public class RTLinkFsmSwitchTableTest extends RealModeTest {
 
 	/**
 	 * The combined class/transition table, VICEROY {@code 2b5a:2a56}, {@code 0x59} bytes
@@ -99,42 +96,32 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 
 	private static final String DISPATCH = "0x1100:0x0067";
 
-	private ProgramBuilder buildFsmProgram(String fsmCode, String tableBytes, boolean withDs)
+	private RealMode buildFsmProgram(String fsmCode, String tableBytes, boolean withDs)
 			throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("FSM", ProgramBuilder._X86_16_REAL_MODE);
-		boolean ok = false;
-		try {
-			MemoryBlock code = builder.createMemory("CODE", "0x1100:0x0000", 0x100);
-			builder.withTransaction(() -> code.setExecute(true));
-			builder.setBytes("0x1100:0x0000", CALLER);
-			builder.setBytes("0x1100:0x0010", JUMP_TABLE);
-			builder.setBytes("0x1100:0x0040", fsmCode);
-			builder.setBytes("0x1100:0x0080", CASE_STUBS);
+		RealMode builder = realMode("FSM");
+		builder.code("0x1100:0x0000", 0x100);
+		builder.setBytes("0x1100:0x0000", CALLER);
+		builder.setBytes("0x1100:0x0010", JUMP_TABLE);
+		builder.setBytes("0x1100:0x0040", fsmCode);
+		builder.setBytes("0x1100:0x0080", CASE_STUBS);
 
-			builder.createMemory("TABLE", "0x2b5a:0x2a56", 0x59);
-			builder.setBytes("0x2b5a:0x2a56", tableBytes);
+		builder.data("TABLE", "0x2b5a:0x2a56", 0x59);
+		builder.setBytes("0x2b5a:0x2a56", tableBytes);
 
-			if (withDs) {
-				builder.setRegisterValue("DS", "0x1100:0x0000", "0x1100:0x00ff", 0x2b5a);
-			}
-			// The disassemble range is a restricted set, so seed the caller and the FSM
-			// separately. The caller's CALL still records its call reference (that is
-			// what CaseRange keys on), flow stops at the computed dispatch, and the
-			// case stubs stay undefined — exactly the state a fresh import is in when
-			// the analyzer runs.
-			builder.disassemble("0x1100:0x0000", 4, true);
-			builder.disassemble("0x1100:0x0040", 0x2c, true);
-			ok = true;
-			return builder;
+		if (withDs) {
+			builder.setRegisterValue("DS", "0x1100:0x0000", "0x1100:0x00ff", 0x2b5a);
 		}
-		finally {
-			if (!ok) {
-				builder.dispose();
-			}
-		}
+		// The disassemble range is a restricted set, so seed the caller and the FSM
+		// separately. The caller's CALL still records its call reference (that is
+		// what CaseRange keys on), flow stops at the computed dispatch, and the
+		// case stubs stay undefined — exactly the state a fresh import is in when
+		// the analyzer runs.
+		builder.disassemble("0x1100:0x0000", 4, true);
+		builder.disassemble("0x1100:0x0040", 0x2c, true);
+		return builder;
 	}
 
-	private static List<Address> recover(ProgramBuilder builder) {
+	private static List<Address> recover(RealMode builder) {
 		Program program = builder.getProgram();
 		Instruction dispatch =
 			program.getListing().getInstructionAt(builder.addr(DISPATCH));
@@ -144,18 +131,13 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 
 	@Test
 	public void testRecoversFormatterFsm() throws Exception {
-		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
-		try {
-			List<Address> destinations = recover(builder);
-			assertNotNull("the FSM dispatch must be recovered", destinations);
-			assertEquals("the real table reaches 8 states", 8, destinations.size());
-			for (int i = 0; i < 8; i++) {
-				assertEquals(builder.addr(String.format("0x1100:0x%04x", 0x80 + 4 * i)),
-					destinations.get(i));
-			}
-		}
-		finally {
-			builder.dispose();
+		RealMode builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
+		List<Address> destinations = recover(builder);
+		assertNotNull("the FSM dispatch must be recovered", destinations);
+		assertEquals("the real table reaches 8 states", 8, destinations.size());
+		for (int i = 0; i < 8; i++) {
+			assertEquals(builder.addr(String.format("0x1100:0x%04x", 0x80 + 4 * i)),
+				destinations.get(i));
 		}
 	}
 
@@ -164,31 +146,20 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 		// Classes {0,1}; transitions 0->1->2->3->0 through class 0; everything else
 		// stays at state 0. Proves the count is computed, not assumed to be 8.
 		String synthetic = "10 21 30" + " 00".repeat(0x59 - 3);
-		ProgramBuilder builder = buildFsmProgram(FSM_CODE, synthetic, true);
-		try {
-			List<Address> destinations = recover(builder);
-			assertNotNull("a well-formed smaller FSM must still be recovered", destinations);
-			assertEquals("the synthetic table reaches 4 states", 4, destinations.size());
-			for (int i = 0; i < 4; i++) {
-				assertEquals(builder.addr(String.format("0x1100:0x%04x", 0x80 + 4 * i)),
-					destinations.get(i));
-			}
-		}
-		finally {
-			builder.dispose();
+		RealMode builder = buildFsmProgram(FSM_CODE, synthetic, true);
+		List<Address> destinations = recover(builder);
+		assertNotNull("a well-formed smaller FSM must still be recovered", destinations);
+		assertEquals("the synthetic table reaches 4 states", 4, destinations.size());
+		for (int i = 0; i < 4; i++) {
+			assertEquals(builder.addr(String.format("0x1100:0x%04x", 0x80 + 4 * i)),
+				destinations.get(i));
 		}
 	}
 
 	@Test
 	public void testDeclinesWithoutDsContext() throws Exception {
-		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, false);
-		try {
-			assertNull("no DS value means the table cannot be located: decline",
-				recover(builder));
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, false);
+		assertNull("no DS value means the table cannot be located: decline", recover(builder));
 	}
 
 	@Test
@@ -196,14 +167,9 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 		// First class byte perturbed to class 15: transition index 15*8 = 120 lies past
 		// the 0x59 bytes the CMP proves, so no count may be claimed.
 		String escaped = "0f" + LOOKUP_TABLE.substring(2);
-		ProgramBuilder builder = buildFsmProgram(FSM_CODE, escaped, true);
-		try {
-			assertNull("a transition escaping the proven table region must decline",
-				recover(builder));
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode builder = buildFsmProgram(FSM_CODE, escaped, true);
+		assertNull("a transition escaping the proven table region must decline",
+			recover(builder));
 	}
 
 	/**
@@ -212,28 +178,23 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testTablePassOverridesWhereTheFunctionExists() throws Exception {
-		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
-		try {
-			Program program = builder.getProgram();
-			markOverlayAnalyzed(builder);
-			builder.createFunction("0x1100:0x0040");
+		RealMode builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
+		Program program = builder.getProgram();
+		markOverlayAnalyzed(builder);
+		builder.createFunction("0x1100:0x0040");
 
-			runTablePass(builder);
+		runTablePass(builder);
 
-			assertEquals("the table pass wrote the override", caseStubs(builder, 8),
-				overrideTargets(builder));
-			assertEquals("the override pass has nothing left to do", 0, writeOverrides(builder));
+		assertEquals("the table pass wrote the override", caseStubs(builder, 8),
+			overrideTargets(builder));
+		assertEquals("the override pass has nothing left to do", 0, writeOverrides(builder));
 
-			Address dispatch = builder.addr(DISPATCH);
-			int refs = program.getReferenceManager().getReferencesFrom(dispatch).length;
-			assertEquals(8, refs);
-			runTablePass(builder);
-			assertEquals("a second table pass adds nothing", refs,
-				program.getReferenceManager().getReferencesFrom(dispatch).length);
-		}
-		finally {
-			builder.dispose();
-		}
+		Address dispatch = builder.addr(DISPATCH);
+		int refs = program.getReferenceManager().getReferencesFrom(dispatch).length;
+		assertEquals(8, refs);
+		runTablePass(builder);
+		assertEquals("a second table pass adds nothing", refs,
+			program.getReferenceManager().getReferencesFrom(dispatch).length);
 	}
 
 	/**
@@ -242,78 +203,63 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 	 */
 	@Test
 	public void testDeferredOverrideComesFromTheRecoveredTargets() throws Exception {
-		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
-		try {
-			Program program = builder.getProgram();
-			markOverlayAnalyzed(builder);
-			runTablePass(builder);
-			assertNull("no function yet, so no override", overrideTargets(builder));
+		RealMode builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
+		Program program = builder.getProgram();
+		markOverlayAnalyzed(builder);
+		runTablePass(builder);
+		assertNull("no function yet, so no override", overrideTargets(builder));
 
-			Address dispatch = builder.addr(DISPATCH);
-			builder.withTransaction(() -> {
-				ReferenceManager references = program.getReferenceManager();
-				references.removeAllReferencesFrom(dispatch);
-				references.addMemoryReference(dispatch, builder.addr("0x1100:0x0010"),
-					RefType.COMPUTED_JUMP, SourceType.ANALYSIS, Reference.MNEMONIC);
-			});
-			builder.createFunction("0x1100:0x0040");
+		Address dispatch = builder.addr(DISPATCH);
+		builder.withTransaction(() -> {
+			ReferenceManager references = program.getReferenceManager();
+			references.removeAllReferencesFrom(dispatch);
+			references.addMemoryReference(dispatch, builder.addr("0x1100:0x0010"),
+				RefType.COMPUTED_JUMP, SourceType.ANALYSIS, Reference.MNEMONIC);
+		});
+		builder.createFunction("0x1100:0x0040");
 
-			assertEquals(1, writeOverrides(builder));
-			assertEquals("written from the recovered targets, not the references",
-				caseStubs(builder, 8), overrideTargets(builder));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals(1, writeOverrides(builder));
+		assertEquals("written from the recovered targets, not the references",
+			caseStubs(builder, 8), overrideTargets(builder));
 	}
 
 	/** An override the user deletes is not written again at the next analysis end. */
 	@Test
 	public void testDeletedOverrideStaysDeleted() throws Exception {
-		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
-		try {
-			Program program = builder.getProgram();
-			markOverlayAnalyzed(builder);
-			runTablePass(builder);
-			builder.createFunction("0x1100:0x0040");
-			assertEquals(1, writeOverrides(builder));
+		RealMode builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
+		Program program = builder.getProgram();
+		markOverlayAnalyzed(builder);
+		runTablePass(builder);
+		builder.createFunction("0x1100:0x0040");
+		assertEquals(1, writeOverrides(builder));
 
-			builder.withTransaction(() -> program.getSymbolTable()
-					.removeSymbolSpecial(overrideSpace(builder).getSymbol()));
-			assertNull(overrideTargets(builder));
+		builder.withTransaction(() -> program.getSymbolTable()
+				.removeSymbolSpecial(overrideSpace(builder).getSymbol()));
+		assertNull(overrideTargets(builder));
 
-			assertEquals("nothing is rewritten", 0, writeOverrides(builder));
-			assertNull("the deletion stands", overrideTargets(builder));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals("nothing is rewritten", 0, writeOverrides(builder));
+		assertNull("the deletion stands", overrideTargets(builder));
 	}
 
 	/** A dispatch that already has computed references — stock's guess — is not taken over. */
 	@Test
 	public void testDispatchWithForeignReferencesIsNotTakenOver() throws Exception {
-		ProgramBuilder builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
-		try {
-			Program program = builder.getProgram();
-			markOverlayAnalyzed(builder);
-			builder.withTransaction(() -> program.getReferenceManager()
-					.addMemoryReference(builder.addr(DISPATCH), builder.addr("0x1100:0x0080"),
-						RefType.COMPUTED_JUMP, SourceType.ANALYSIS, Reference.MNEMONIC));
+		RealMode builder = buildFsmProgram(FSM_CODE, LOOKUP_TABLE, true);
+		Program program = builder.getProgram();
+		markOverlayAnalyzed(builder);
+		builder.withTransaction(() -> program.getReferenceManager()
+				.addMemoryReference(builder.addr(DISPATCH), builder.addr("0x1100:0x0080"),
+					RefType.COMPUTED_JUMP, SourceType.ANALYSIS, Reference.MNEMONIC));
 
-			runTablePass(builder);
-			builder.createFunction("0x1100:0x0040");
+		runTablePass(builder);
+		builder.createFunction("0x1100:0x0040");
 
-			assertEquals(0, writeOverrides(builder));
-			assertNull(overrideTargets(builder));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals(0, writeOverrides(builder));
+		assertNull(overrideTargets(builder));
 	}
 
 	/** The first {@code count} case stubs, in address order. */
-	private static Set<Address> caseStubs(ProgramBuilder builder, int count) {
+	private static Set<Address> caseStubs(RealMode builder, int count) {
 		Set<Address> stubs = new TreeSet<>();
 		for (int i = 0; i < count; i++) {
 			stubs.add(builder.addr(String.format("0x1100:0x%04x", 0x80 + 4 * i)));
@@ -322,7 +268,7 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 	}
 
 	/** The override namespace {@code <func>::override::jmp_<dispatch>}, or null. */
-	private static Namespace overrideSpace(ProgramBuilder builder) {
+	private static Namespace overrideSpace(RealMode builder) {
 		Program program = builder.getProgram();
 		Address dispatch = builder.addr(DISPATCH);
 		Function function = program.getFunctionManager().getFunctionContaining(dispatch);
@@ -332,7 +278,7 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 	}
 
 	/** The case destinations of the dispatch's override, or null when it has none. */
-	private static Set<Address> overrideTargets(ProgramBuilder builder) {
+	private static Set<Address> overrideTargets(RealMode builder) {
 		Namespace space = overrideSpace(builder);
 		if (space == null) {
 			return null;
@@ -346,33 +292,21 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 		return targets;
 	}
 
-	private static void markOverlayAnalyzed(ProgramBuilder builder) {
+	private static void markOverlayAnalyzed(RealMode builder) {
 		Program program = builder.getProgram();
 		builder.withTransaction(() -> RTLinkProgram.markOverlayAnalyzed(program));
 	}
 
-	private static void runTablePass(ProgramBuilder builder) throws Exception {
+	private static void runTablePass(RealMode builder) throws Exception {
 		Program program = builder.getProgram();
-		int txId = program.startTransaction("switch table");
-		try {
-			new RTLinkSwitchTableAnalyzer().added(program, program.getMemory(),
-				TaskMonitor.DUMMY, new MessageLog());
-		}
-		finally {
-			program.endTransaction(txId, true);
-		}
+		builder.tx(() -> new RTLinkSwitchTableAnalyzer().added(program, program.getMemory(),
+			TaskMonitor.DUMMY, new MessageLog()));
 	}
 
-	private static int writeOverrides(ProgramBuilder builder) throws Exception {
+	private static int writeOverrides(RealMode builder) throws Exception {
 		Program program = builder.getProgram();
-		int txId = program.startTransaction("switch override");
-		try {
-			return RTLinkSwitchOverrideAnalyzer.writeOverrides(program, program.getMemory(),
-				new MessageLog(), TaskMonitor.DUMMY);
-		}
-		finally {
-			program.endTransaction(txId, true);
-		}
+		return builder.tx(() -> RTLinkSwitchOverrideAnalyzer.writeOverrides(program,
+			program.getMemory(), new MessageLog(), TaskMonitor.DUMMY));
 	}
 
 	@Test
@@ -381,13 +315,7 @@ public class RTLinkFsmSwitchTableTest extends AbstractGenericTest {
 		// idiom must not match.
 		String broken = FSM_CODE.replace("fe c1 ", "90 90 ");
 		assertNotEquals(FSM_CODE, broken);
-		ProgramBuilder builder = buildFsmProgram(broken, LOOKUP_TABLE, true);
-		try {
-			assertNull("a prologue that is not the FSM idiom must decline",
-				recover(builder));
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode builder = buildFsmProgram(broken, LOOKUP_TABLE, true);
+		assertNull("a prologue that is not the FSM idiom must decline", recover(builder));
 	}
 }

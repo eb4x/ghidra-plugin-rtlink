@@ -7,12 +7,8 @@ import java.util.List;
 import org.junit.Test;
 
 import ebbex.rtlink.OmfTestLibrary.ModuleSpec;
-import generic.test.AbstractGenericTest;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Function;
-import ghidra.program.model.listing.Program;
-import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.util.task.TaskMonitor;
@@ -23,7 +19,7 @@ import ghidra.util.task.TaskMonitor;
  * past a byte the program inserts, a short body placed beside its neighbour, a body that
  * matches twice (refused), a fixed-up word that differs, and names a user gave (kept).
  */
-public class LibrarySignaturesTest extends AbstractGenericTest {
+public class LibrarySignaturesTest extends RealModeTest {
 
 	/**
 	 * Module A, matched whole: alpha (a fixed-up word at 4), beta = gamma (aliases), delta.
@@ -52,28 +48,21 @@ public class LibrarySignaturesTest extends AbstractGenericTest {
 						.pub("f1", 0).pub("f2", 0x10).pub("f3", 0x1c).pub("f4", 0x20);
 	}
 
-	private static ProgramBuilder program(String at, String hex) throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("LIB", ProgramBuilder._X86_16_REAL_MODE);
-		MemoryBlock block = builder.createMemory("CODE", "0x1000:0x0000", 0x400);
-		builder.withTransaction(() -> block.setExecute(true));
+	private RealMode program(String at, String hex) throws Exception {
+		RealMode builder = realMode("LIB");
+		builder.code("0x1000:0x0000", 0x400);
 		builder.setBytes(at, hex);
 		return builder;
 	}
 
-	private static LibrarySignatures.Result apply(ProgramBuilder builder, ModuleSpec... modules)
+	private static LibrarySignatures.Result apply(RealMode builder, ModuleSpec... modules)
 			throws Exception {
-		Program program = builder.getProgram();
 		List<OmfLibrary.Module> parsed = OmfLibrary.parse(OmfTestLibrary.library(modules));
-		int txId = program.startTransaction("library signatures");
-		try {
-			return LibrarySignatures.apply(program, parsed, TaskMonitor.DUMMY);
-		}
-		finally {
-			program.endTransaction(txId, true);
-		}
+		return builder.tx(
+			() -> LibrarySignatures.apply(builder.getProgram(), parsed, TaskMonitor.DUMMY));
 	}
 
-	private static boolean named(ProgramBuilder builder, String at, String name) {
+	private static boolean named(RealMode builder, String at, String name) {
 		for (Symbol symbol : builder.getProgram().getSymbolTable().getSymbols(builder.addr(at))) {
 			if (symbol.getName().equals(name)) {
 				return true;
@@ -82,7 +71,7 @@ public class LibrarySignaturesTest extends AbstractGenericTest {
 		return false;
 	}
 
-	private static Function function(ProgramBuilder builder, String at) {
+	private static Function function(RealMode builder, String at) {
 		return builder.getProgram().getFunctionManager().getFunctionAt(builder.addr(at));
 	}
 
@@ -108,100 +97,73 @@ public class LibrarySignaturesTest extends AbstractGenericTest {
 	@Test
 	public void testModuleMatchedWhole() throws Exception {
 		// The fixed-up word reads 5678 here, not 1234.
-		ProgramBuilder builder = program("0x1000:0x0140",
+		RealMode builder = program("0x1000:0x0140",
 			"55 8b ec a1 78 56 5d cb b8 ff ff cb 33 c0 cb");
-		try {
-			LibrarySignatures.Result result = apply(builder, moduleA());
+		LibrarySignatures.Result result = apply(builder, moduleA());
 
-			assertEquals(3, result.placed());
-			assertEquals(3, result.functions());
-			assertEquals("alpha", function(builder, "0x1000:0x0140").getName());
-			assertEquals("beta", function(builder, "0x1000:0x0148").getName());
-			assertTrue("the alias is a label beside it", named(builder, "0x1000:0x0148", "gamma"));
-			assertEquals("delta", function(builder, "0x1000:0x014c").getName());
-			assertEquals(SourceType.IMPORTED,
-				function(builder, "0x1000:0x0140").getSymbol().getSource());
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals(3, result.placed());
+		assertEquals(3, result.functions());
+		assertEquals("alpha", function(builder, "0x1000:0x0140").getName());
+		assertEquals("beta", function(builder, "0x1000:0x0148").getName());
+		assertTrue("the alias is a label beside it", named(builder, "0x1000:0x0148", "gamma"));
+		assertEquals("delta", function(builder, "0x1000:0x014c").getName());
+		assertEquals(SourceType.IMPORTED,
+			function(builder, "0x1000:0x0140").getSymbol().getSource());
 	}
 
 	@Test
 	public void testModuleMatchedPublicByPublic() throws Exception {
-		ProgramBuilder builder = program("0x1000:0x0200",
+		RealMode builder = program("0x1000:0x0200",
 			"55 8b ec 83 ec 04 8b 46 06 03 46 08 8b e5 5d cb 90 90 " +
 				"50 53 51 52 b8 01 00 5a 59 5b 58 cb b9 ff ff cb " +
 				"56 57 1e 06 8b f0 07 1f 5f 5e cb");
-		try {
-			apply(builder, moduleB());
+		apply(builder, moduleB());
 
-			assertEquals("f1", function(builder, "0x1000:0x0200").getName());
-			assertEquals("f2", function(builder, "0x1000:0x0212").getName());
-			assertEquals("the short body, beside f2", "f3",
-				function(builder, "0x1000:0x021e").getName());
-			assertEquals("f4", function(builder, "0x1000:0x0222").getName());
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals("f1", function(builder, "0x1000:0x0200").getName());
+		assertEquals("f2", function(builder, "0x1000:0x0212").getName());
+		assertEquals("the short body, beside f2", "f3",
+			function(builder, "0x1000:0x021e").getName());
+		assertEquals("f4", function(builder, "0x1000:0x0222").getName());
 	}
 
 	@Test
 	public void testBodyMatchingTwiceIsRefused() throws Exception {
 		ModuleSpec twice =
 			new ModuleSpec("modc", "50 53 51 52 b8 02 00 5a 59 5b 58 cb").pub("twice", 0);
-		ProgramBuilder builder = program("0x1000:0x0100",
+		RealMode builder = program("0x1000:0x0100",
 			"50 53 51 52 b8 02 00 5a 59 5b 58 cb 90 90 90 90 50 53 51 52 b8 02 00 5a 59 5b 58 cb");
-		try {
-			LibrarySignatures.Result result = apply(builder, twice);
+		LibrarySignatures.Result result = apply(builder, twice);
 
-			assertEquals(0, result.placed());
-			assertNull(function(builder, "0x1000:0x0100"));
-			assertNull(function(builder, "0x1000:0x0110"));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals(0, result.placed());
+		assertNull(function(builder, "0x1000:0x0100"));
+		assertNull(function(builder, "0x1000:0x0110"));
 	}
 
 	@Test
 	public void testUserNameIsKept() throws Exception {
-		ProgramBuilder builder = program("0x1000:0x0140",
+		RealMode builder = program("0x1000:0x0140",
 			"55 8b ec a1 78 56 5d cb b8 ff ff cb 33 c0 cb");
-		try {
-			builder.disassemble("0x1000:0x0140", 8, true);
-			builder.createFunction("0x1000:0x0140");
-			Program program = builder.getProgram();
-			Address entry = builder.addr("0x1000:0x0140");
-			int txId = program.startTransaction("user name");
-			try {
-				program.getFunctionManager().getFunctionAt(entry)
-						.setName("my_alpha", SourceType.USER_DEFINED);
-			}
-			finally {
-				program.endTransaction(txId, true);
-			}
+		builder.disassemble("0x1000:0x0140", 8, true);
+		builder.createFunction("0x1000:0x0140");
+		Address entry = builder.addr("0x1000:0x0140");
+		builder.tx(() -> {
+			builder.getProgram()
+					.getFunctionManager()
+					.getFunctionAt(entry)
+					.setName("my_alpha", SourceType.USER_DEFINED);
+			return null;
+		});
 
-			apply(builder, moduleA());
+		apply(builder, moduleA());
 
-			assertEquals("the user's name stays the function's", "my_alpha",
-				function(builder, "0x1000:0x0140").getName());
-			assertTrue("the vendor name goes beside it", named(builder, "0x1000:0x0140", "alpha"));
-		}
-		finally {
-			builder.dispose();
-		}
+		assertEquals("the user's name stays the function's", "my_alpha",
+			function(builder, "0x1000:0x0140").getName());
+		assertTrue("the vendor name goes beside it", named(builder, "0x1000:0x0140", "alpha"));
 	}
 
 	@Test
 	public void testNothingMatchesNothingChanges() throws Exception {
-		ProgramBuilder builder = program("0x1000:0x0100", "90 90 90 90 c3");
-		try {
-			assertEquals(0, apply(builder, moduleA(), moduleB()).placed());
-		}
-		finally {
-			builder.dispose();
-		}
+		RealMode builder = program("0x1000:0x0100", "90 90 90 90 c3");
+		assertEquals(0, apply(builder, moduleA(), moduleB()).placed());
 	}
 }

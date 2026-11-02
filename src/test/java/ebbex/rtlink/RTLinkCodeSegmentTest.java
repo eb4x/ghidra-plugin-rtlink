@@ -6,16 +6,12 @@ import static org.junit.Assume.*;
 import java.math.BigInteger;
 import java.util.List;
 
-import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
-import generic.test.AbstractGenericTest;
-import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.listing.ProgramContext;
 import ghidra.program.model.mem.MemoryBlock;
 
 /**
@@ -24,24 +20,19 @@ import ghidra.program.model.mem.MemoryBlock;
  * base. {@code cseg} exists only in the dailydriver fork; against stock Ghidra those
  * assertions are skipped.
  */
-public class RTLinkCodeSegmentTest extends AbstractGenericTest {
+public class RTLinkCodeSegmentTest extends RealModeTest {
 
-	private ProgramBuilder builder;
+	private RealMode builder;
 	private Program program;
 	private Register cs;
 	private Register cseg;
 
 	@Before
 	public void setUp() throws Exception {
-		builder = new ProgramBuilder("CS", ProgramBuilder._X86_16_REAL_MODE);
+		builder = realMode("CS");
 		program = builder.getProgram();
 		cs = program.getRegister("CS");
 		cseg = program.getRegister("cseg");
-	}
-
-	@After
-	public void tearDown() {
-		builder.dispose();
 	}
 
 	@Test
@@ -114,19 +105,9 @@ public class RTLinkCodeSegmentTest extends AbstractGenericTest {
 		assertEquals(0x10010, target.getOffset());
 	}
 
-	private int assign(MemoryBlock block, List<Integer> bases) {
-		ProgramContext context = program.getProgramContext();
-		int[] modules = new int[1];
-		builder.withTransaction(() -> {
-			try {
-				modules[0] =
-					ModuleSegments.assign(context, cs, cseg, block, bases);
-			}
-			catch (Exception e) {
-				throw new RuntimeException(e);
-			}
-		});
-		return modules[0];
+	private int assign(MemoryBlock block, List<Integer> bases) throws Exception {
+		return builder.tx(
+			() -> ModuleSegments.assign(program.getProgramContext(), cs, cseg, block, bases));
 	}
 
 	private void assertSegment(Register register, String at, int expected) {
