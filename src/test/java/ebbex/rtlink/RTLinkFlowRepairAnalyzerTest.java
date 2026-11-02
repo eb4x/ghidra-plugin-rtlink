@@ -129,9 +129,9 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		// flow decodes the relocated word as junk and runs on into the routine,
 		// exactly as a fresh import does. Each disassemble is restricted to the
 		// bytes it is given, so the regions are seeded one at a time.
-		builder.disassemble("0x1000:0x0120", 3, true);
-		builder.disassemble("0x1000:0x0140", 3, true);
-		builder.disassemble("0x1000:0x0100", 10, true);
+		builder.decode("0x1000:0x0120", 3, true);
+		builder.decode("0x1000:0x0140", 3, true);
+		builder.decode("0x1000:0x0100", 10, true);
 		return builder;
 	}
 
@@ -196,8 +196,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.setBytes("0x1000:0x0100", "e8 7d 00 34 12 90 b8 ff 00 c3");
 		builder.setBytes("0x1000:0x0120", EXIT_CALLER);
 		builder.setBytes("0x1000:0x0180", RELOC_CALLEE);
-		builder.disassemble("0x1000:0x0120", 3, true);  // evidence for the exit call
-		builder.disassemble("0x1000:0x0100", 3, false); // the CALL alone, no flow
+		builder.decode("0x1000:0x0120", 3, true);  // evidence for the exit call
+		builder.decode("0x1000:0x0100", 3, false); // the CALL alone, no flow
 
 		Program program = builder.getProgram();
 		Address word = builder.addr(WORD);
@@ -229,12 +229,12 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		// decode the CALLF at 0103 because 0104 is taken. That is the conflict the
 		// disassembler bookmarks in the wild; the mark is placed the same way it
 		// does (Disassembler.markCallConflict), at the blocked address.
-		builder.disassemble(CONFLICT_JUNK, 4, true);
-		builder.disassemble("0x1000:0x0150", 3, true);
+		builder.decode(CONFLICT_JUNK, 4, true);
+		builder.decode("0x1000:0x0150", 3, true);
 		if (evidenceForJunk) {
-			builder.disassemble("0x1000:0x0160", 3, true);
+			builder.decode("0x1000:0x0160", 3, true);
 		}
-		builder.disassemble(CONFLICT_ENTRY, 9, true);
+		builder.decode(CONFLICT_ENTRY, 9, true);
 
 		builder.errorMark(CONFLICT_BURIED,
 			"Failed to disassemble at 1000:0103 due to conflicting instruction " +
@@ -283,7 +283,7 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		RealMode builder = realMode("ISLE");
 		builder.code("0x1000:0x0000", 0x200);
 		builder.setBytes("0x1000:0x01c0", "9a 3c 00 b6 27 c3");
-		builder.disassemble("0x1000:0x01c1", 4, true); // island, referenced by nothing
+		builder.decode("0x1000:0x01c1", 4, true); // island, referenced by nothing
 		builder.errorMark("0x1000:0x01c0",
 			"Failed to disassemble at 1000:01c0 due to conflicting instruction " +
 				"(flow from 1000:01bd)");
@@ -326,8 +326,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 			"55 8b ec 83 ec 12 eb 02 eb fc 8b e5 5d cb 55 8b ec 5d cb");
 		// Only the little JMP loop is reachable, exactly as flow-only recovery
 		// leaves it; the prologue above and the epilogue below stay undefined.
-		builder.disassemble("0x1000:0x0106", 4, true);
-		builder.disassemble("0x1000:0x010e", 5, true);
+		builder.decode("0x1000:0x0106", 4, true);
+		builder.decode("0x1000:0x010e", 5, true);
 		builder.createFunction("0x1000:0x010e");
 
 		Program program = builder.getProgram();
@@ -365,8 +365,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		// 0108 — the phase test alone would accept them. Only the repeated-byte
 		// rule rejects them.
 		builder.setBytes("0x1000:0x0100", "55 8b ec cb 00 00 00 00 55 8b ec cb");
-		builder.disassemble("0x1000:0x0100", 4, true);
-		builder.disassemble("0x1000:0x0108", 4, true);
+		builder.decode("0x1000:0x0100", 4, true);
+		builder.decode("0x1000:0x0108", 4, true);
 		builder.createFunction("0x1000:0x0108");
 
 		assertEquals("padding is not code", 0, fillGaps(builder));
@@ -411,9 +411,9 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 			"a1 62 26 8b 16 64 26 a3 4c a6 89 16 4e a6 " +
 			"a1 6a 26 8b 16 6c 26 a3 50 a6 89 16 52 a6 cb " + "90 " + routineC +
 			ROUTINE_RUN_BELOW);
-		builder.disassemble("0x1000:0x0100", 7, true);
+		builder.decode("0x1000:0x0100", 7, true);
 		builder.createFunction("0x1000:0x0100");
-		builder.disassemble("0x1000:0x0148", 5, true);
+		builder.decode("0x1000:0x0148", 5, true);
 		builder.createFunction("0x1000:0x0148");
 		return builder;
 	}
@@ -519,9 +519,9 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.setBytes("0x1000:0x0100", "55 8b ec 5d cb " +
 			"52 ba 00 08 eb 0a 52 ba 00 20 eb 04 52 ba 00 10 09 16 00 00 5a cb " +
 			"55 8b ec 5d cb");
-		builder.disassemble("0x1000:0x0100", 5, true);
+		builder.decode("0x1000:0x0100", 5, true);
 		builder.createFunction("0x1000:0x0100");
-		builder.disassemble("0x1000:0x011b", 5, true);
+		builder.decode("0x1000:0x011b", 5, true);
 		builder.createFunction("0x1000:0x011b");
 
 		assertEquals("three entries", 3, fillGaps(builder));
@@ -552,8 +552,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.code("0x1000:0x0100", 0x40);
 		builder.setBytes("0x1000:0x0100", "ea 00 01 00 10 00 00 00 00 00 00 " +
 			"50 06 b0 04 07 58 cb 33 c0 cb 55 8b ec 5d cb");
-		builder.disassemble("0x1000:0x0100", 5, true);
-		builder.disassemble("0x1000:0x0115", 5, true);
+		builder.decode("0x1000:0x0100", 5, true);
+		builder.decode("0x1000:0x0115", 5, true);
 		builder.createFunction("0x1000:0x0115");
 
 		assertEquals("two routines", 2, fillGaps(builder));
@@ -584,8 +584,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.code("0x1000:0x0100", 0x20);
 		builder.setBytes("0x1000:0x0100",
 			"c3 e9 0c 00 e9 09 00 e9 06 00 e9 03 00 e9 00 00 55 8b ec 5d c3");
-		builder.disassemble("0x1000:0x0100", 1, true);
-		builder.disassemble("0x1000:0x0110", 5, true);
+		builder.decode("0x1000:0x0100", 1, true);
+		builder.decode("0x1000:0x0110", 5, true);
 		builder.createFunction("0x1000:0x0110");
 
 		assertEquals("no gap is filled", 0, fillGaps(builder));
@@ -604,8 +604,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.code("0x1000:0x0100", 0x20);
 		// 0100: RETF; 0101: ENTER 2,0; LEAVE; RETF (the gap); 0107: the next routine
 		builder.setBytes("0x1000:0x0100", "cb c8 02 00 00 c9 cb 55 8b ec 5d cb");
-		builder.disassemble("0x1000:0x0100", 1, true);
-		builder.disassemble("0x1000:0x0107", 5, true);
+		builder.decode("0x1000:0x0100", 1, true);
+		builder.decode("0x1000:0x0107", 5, true);
 		builder.createFunction("0x1000:0x0107");
 
 		assertEquals(1, fillGaps(builder));
@@ -635,12 +635,12 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.setBytes("0x1000:0x0120", "2e ff 2e 40 01");           // JMPF CS:[0x140]
 		builder.setBytes("0x1000:0x0130", "b8 01 4c cd 21");           // MOV AX,4C01; INT 21
 		builder.setBytes("0x1000:0x0140", "30 01 00 10");              // vector -> 1000:0130
-		builder.disassemble("0x1000:0x0100", 5, false);
-		builder.disassemble("0x1000:0x0120", 5, false);
+		builder.decode("0x1000:0x0100", 5, false);
+		builder.decode("0x1000:0x0120", 5, false);
 		builder.createFunction("0x1000:0x0120");
 		// The junk the disassembler decoded from the table behind the call, and the
 		// mark it left one byte past where it gave up.
-		builder.disassemble("0x1000:0x0105", 4, false);
+		builder.decode("0x1000:0x0105", 4, false);
 		builder.errorMark("0x1000:0x0109",
 			"Maximum run of repeated byte instructions exceeded (flow from 1000:0107)");
 		return builder;
@@ -698,8 +698,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		// elsewhere, sitting right where a runaway clear would reach it.
 		builder.setBytes("0x1000:0x0109", "cb");             // RETF at 0109
 		builder.setBytes("0x1000:0x0118", "eb ef");          // JMP 0109
-		builder.disassemble("0x1000:0x0118", 2, true);       // makes the flow ref
-		builder.disassemble("0x1000:0x0109", 1, true);       // and the code it reaches
+		builder.decode("0x1000:0x0118", 2, true);       // makes the flow ref
+		builder.decode("0x1000:0x0109", 1, true);       // and the code it reaches
 		resolveVectors(builder);
 
 		assertEquals(1, sealNonReturning(builder));
@@ -758,10 +758,10 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.setBytes("0x1000:0x0100", "9a 10 01 00 10");
 		builder.setBytes("0x1000:0x0110", "ea 30 01 00 10");
 		builder.setBytes("0x1000:0x0130", "b8 01 4c cd 21");
-		builder.disassemble("0x1000:0x0100", 5, false);
-		builder.disassemble("0x1000:0x0105", 4, false);
-		builder.disassemble("0x1000:0x0110", 5, false);
-		builder.disassemble("0x1000:0x0130", 5, false);
+		builder.decode("0x1000:0x0100", 5, false);
+		builder.decode("0x1000:0x0105", 4, false);
+		builder.decode("0x1000:0x0110", 5, false);
+		builder.decode("0x1000:0x0130", 5, false);
 		Function exit = builder.createFunction("0x1000:0x0130");
 		Function thunk = builder.createFunction("0x1000:0x0110");
 		builder.withTransaction(() -> thunk.setThunkedFunction(exit));
@@ -798,8 +798,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.setBytes("0x1000:0x0100", "9a 20 01 00 10 cb");
 		builder.setBytes("0x1000:0x0120", callee);
 		// Each disassemble stays inside the bytes it is given, so decode both.
-		builder.disassemble("0x1000:0x0100", 6, false);
-		builder.disassemble("0x1000:0x0120", callee.split(" ").length, false);
+		builder.decode("0x1000:0x0100", 6, false);
+		builder.decode("0x1000:0x0120", callee.split(" ").length, false);
 		builder.createFunction("0x1000:0x0120");
 		return builder;
 	}
@@ -827,8 +827,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.setBytes("0x1000:0x0100", "9a 25 01 00 10 cb");   // CALLF 1000:0125; RETF
 		builder.setBytes("0x1000:0x0120", "b8 01 4c cd 21");      // the routine above
 		builder.setBytes("0x1000:0x0125", "8a 27 cd 21 cb");      // MOV AH,[BX]; INT 21; RETF
-		builder.disassemble("0x1000:0x0100", 6, false);
-		builder.disassemble("0x1000:0x0120", 10, false);
+		builder.decode("0x1000:0x0100", 6, false);
+		builder.decode("0x1000:0x0120", 10, false);
 		// The callee first, so the routine above, which still falls into it, stops there.
 		builder.createFunction("0x1000:0x0125");
 		builder.createFunction("0x1000:0x0120");
@@ -855,8 +855,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.code("0x1000:0x0100", 0x40);
 		builder.setBytes("0x1000:0x0100", "9a 20 01 00 10 cb");
 		builder.setBytes("0x1000:0x0120", "74 05 b8 01 4c cd 21 cb");
-		builder.disassemble("0x1000:0x0100", 6, false);
-		builder.disassemble("0x1000:0x0120", 7, false); // 0127 stays undecoded
+		builder.decode("0x1000:0x0100", 6, false);
+		builder.decode("0x1000:0x0120", 7, false); // 0127 stays undecoded
 		builder.createFunction("0x1000:0x0120");
 
 		assertEquals(0, sealNonReturning(builder));
@@ -891,8 +891,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.code("0x1000:0x0100", 0x50);
 		builder.setBytes("0x1000:0x0100", "55 9a 40 01 00 10 b8 01 00 5d cb");
 		builder.setBytes("0x1000:0x0140", callee);
-		builder.disassemble("0x1000:0x0100", 11, false);
-		builder.disassemble("0x1000:0x0140", callee.split(" ").length, false);
+		builder.decode("0x1000:0x0100", 11, false);
+		builder.decode("0x1000:0x0140", callee.split(" ").length, false);
 		builder.createFunction("0x1000:0x0140");
 		builder.createFunction("0x1000:0x0100");
 		Program program = builder.getProgram();
@@ -1005,7 +1005,7 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		// 0100: a real routine, ending in RETF — the fill starts at 0104 and runs
 		// to the end of the block, exactly as the DGROUP tail does in the corpus.
 		builder.setBytes("0x1000:0x0100", "55 8b ec cb");
-		builder.disassemble("0x1000:0x0100", 4, true);
+		builder.decode("0x1000:0x0100", 4, true);
 		return builder;
 	}
 
@@ -1019,8 +1019,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 	public void testZeroFillIslandsAreDeleted() throws Exception {
 		RealMode builder = fillerProgram();
 		Listing listing = builder.getProgram().getListing();
-		builder.disassemble("0x1000:0x0110", 20, false); // chain A, even phase
-		builder.disassemble("0x1000:0x0125", 20, false); // chain B, odd phase
+		builder.decode("0x1000:0x0110", 20, false); // chain A, even phase
+		builder.decode("0x1000:0x0125", 20, false); // chain B, odd phase
 		// The conflict mark sits in the one-byte HOLE between the chains — chain A's last
 		// instruction ends at 0x0123, chain B starts at 0x0125 — so it lies on no
 		// instruction at all. That is the real shape (NEBULAR 2078:18eb), and a sweep that
@@ -1059,7 +1059,7 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.code("0x1000:0x0100", 0x40);
 		// 8b 76 c4 | 00 00 | eb 02 | cb  — transcribed from SPHERE 02f5ff.
 		builder.setBytes("0x1000:0x0100", "55 8b ec 8b 76 c4 00 00 eb 02 90 90 cb");
-		builder.disassemble("0x1000:0x0100", 13, true);
+		builder.decode("0x1000:0x0100", 13, true);
 		Listing listing = builder.getProgram().getListing();
 		Instruction store = listing.getInstructionAt(builder.addr("0x1000:0x0106"));
 		assertNotNull("setup: the byte store must be decoded", store);
@@ -1081,8 +1081,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		// 0100: PUSH BP; MOV BP,SP; MOV AX,0 — the MOV's last two bytes are zeros
 		// and run straight into the fill that follows.
 		builder.setBytes("0x1000:0x0100", "55 8b ec b8 00 00");
-		builder.disassemble("0x1000:0x0100", 6, true);
-		builder.disassemble("0x1000:0x0110", 16, false); // junk decoded from the fill
+		builder.decode("0x1000:0x0100", 6, true);
+		builder.decode("0x1000:0x0110", 16, false); // junk decoded from the fill
 
 		assertEquals("the eight 00 00 instructions decoded from the fill are cleared", 8,
 			clearFiller(builder));
@@ -1101,7 +1101,7 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		RealMode builder = realMode("FALL");
 		builder.code("0x1000:0x0100", 0x40);
 		builder.setBytes("0x1000:0x0100", "55 8b ec"); // falls straight into the fill
-		builder.disassemble("0x1000:0x0100", 24, true);
+		builder.decode("0x1000:0x0100", 24, true);
 
 		assertEquals("something runs into this fill: not ours to delete", 0,
 			clearFiller(builder));
@@ -1114,8 +1114,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 	public void testReferencedFillIsLeftAlone() throws Exception {
 		RealMode builder = fillerProgram();
 		builder.setBytes("0x1000:0x0104", "eb 0a"); // JMP 0110, inside the fill
-		builder.disassemble("0x1000:0x0104", 2, true);
-		builder.disassemble("0x1000:0x0110", 16, false);
+		builder.decode("0x1000:0x0104", 2, true);
+		builder.decode("0x1000:0x0110", 16, false);
 
 		assertEquals("something jumps here: leave it", 0, clearFiller(builder));
 		assertNotNull(
@@ -1129,7 +1129,7 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		builder.code("0x1000:0x0100", 0x40);
 		builder.setBytes("0x1000:0x0110",
 			"90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90");
-		builder.disassemble("0x1000:0x0110", 20, false);
+		builder.decode("0x1000:0x0110", 20, false);
 
 		assertEquals("0x90 is an instruction, not fill", 0, clearFiller(builder));
 		assertNotNull(
@@ -1158,7 +1158,7 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 	@Test
 	public void testClearedIslandIsNotRefilled() throws Exception {
 		RealMode builder = fillerProgram();
-		builder.disassemble("0x1000:0x0110", 20, false);
+		builder.decode("0x1000:0x0110", 20, false);
 		assertTrue(clearFiller(builder) > 0);
 
 		assertEquals("the gap filler refuses fill", 0, fillGaps(builder));
@@ -1182,8 +1182,8 @@ public class RTLinkFlowRepairAnalyzerTest extends RealModeTest {
 		// 010e: PUSH BP; MOV BP,SP; RETF        — the next routine
 		builder.setBytes("0x1000:0x0100",
 			"55 8b ec cb " + "9a 00 01 00 10 ea 41 03 00 00 " + "55 8b ec cb");
-		builder.disassemble("0x1000:0x0100", 4, true);
-		builder.disassemble("0x1000:0x010e", 4, true);
+		builder.decode("0x1000:0x0100", 4, true);
+		builder.decode("0x1000:0x010e", 4, true);
 		builder.createFunction("0x1000:0x010e");
 
 		assertEquals("a stub whose jump goes nowhere is not ours to claim", 0,

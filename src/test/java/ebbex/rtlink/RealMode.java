@@ -49,11 +49,16 @@ final class RealMode extends ProgramBuilder {
 		setBytes(at, Hex.parse(hex));
 	}
 
-	/** Disassemble {@code length} bytes at {@code at}, without running any analysis. */
+	/**
+	 * Disassemble the {@code length} bytes at {@code at} as {@link #disassemble(String, int,
+	 * boolean)} does, every undefined byte in the range a seed and flow kept inside it, but
+	 * without running any analysis.
+	 */
 	void decode(String at, int length, boolean followFlow) {
 		Address start = addr(at);
+		AddressSet range = new AddressSet(start, start.add(length - 1));
 		withTransaction(() -> Disassembler.getDisassembler(getProgram(), TaskMonitor.DUMMY, null)
-				.disassemble(start, new AddressSet(start, start.add(length - 1)), followFlow));
+				.disassemble(range, range, followFlow));
 	}
 
 	/** The disassembler's own error bookmark at {@code at}, as it leaves one for a conflict. */
