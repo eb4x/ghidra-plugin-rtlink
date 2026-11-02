@@ -83,7 +83,6 @@ public final class RTLinkSwitchOverrideAnalyzer extends AbstractAnalyzer {
 			!RTLinkProgram.isOverlayAnalyzed(program)) {
 			return;
 		}
-		RTLinkProgram.dropLegacySwitchMarks(program);
 		MessageLog log = new MessageLog();
 		try {
 			report(writeOverrides(program, program.getMemory(), log, TaskMonitor.DUMMY));

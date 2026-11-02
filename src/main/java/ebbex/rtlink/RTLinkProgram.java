@@ -60,9 +60,6 @@ final class RTLinkProgram {
 	 */
 	private static final String PENDING_SWITCHES = "RTLink pending switch";
 
-	/** The target-less marks of 0.8.20 and earlier; see {@link #dropLegacySwitchMarks}. */
-	private static final String LEGACY_SWITCH_DISPATCHES = "RTLink switch dispatch";
-
 	private RTLinkProgram() {
 	}
 
@@ -213,18 +210,6 @@ final class RTLinkProgram {
 		StringPropertyMap pending = program.getUsrPropertyManager().getStringPropertyMap(PENDING_SWITCHES);
 		if (pending != null) {
 			pending.remove(dispatch);
-		}
-	}
-
-	/**
-	 * Remove the switch marks of 0.8.20 and earlier, which carried no targets. Every marked
-	 * dispatch in {@code /COLONIZE/VICEROY.EXE} already has its override (confirmed by viceroy),
-	 * so nothing is lost. Delete once viceroy confirms the program has been through it.
-	 */
-	static void dropLegacySwitchMarks(Program program) {
-		PropertyMapManager properties = program.getUsrPropertyManager();
-		if (properties.getVoidPropertyMap(LEGACY_SWITCH_DISPATCHES) != null) {
-			properties.removePropertyMap(LEGACY_SWITCH_DISPATCHES);
 		}
 	}
 }

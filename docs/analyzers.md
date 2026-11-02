@@ -77,9 +77,7 @@ seven classes and not one. They share package-private statics and must stay in
   function exists the record is consumed: an override already present (its own, or the
   user's) is left alone, one the user deletes stays deleted, and a failed write is
   reported once (up to 0.8.20 the mark stayed, so a deleted override came back and a
-  failure warned at every analysis end). The target-less marks of 0.8.20 and earlier
-  (`RTLink switch dispatch`) are removed at the first analysis end; every one on
-  `/COLONIZE/VICEROY.EXE` already has its override.
+  failure warned at every analysis end).
 - **`RTLinkXrefAnalyzer`** — INSTRUCTION, `REFERENCE_ANALYSIS.after()`. Resolves the
   DS-relative data references that Ghidra's own reference pass declines to make on
   RTLink programs. The operand is read from its encoding, not its display: the segment
