@@ -38,10 +38,10 @@ public class FarCodePointersTest extends RealModeTest {
 		builder.setBytes(TARGET, "cf");
 		if (callee != null) {
 			builder.setBytes("0x1000:0x0150", callee);
-			builder.disassemble("0x1000:0x0150", callee.split(" ").length, true);
+			builder.decode("0x1000:0x0150", callee.split(" ").length, true);
 			builder.createFunction("0x1000:0x0150");
 		}
-		builder.disassemble("0x1000:0x0100", code.split(" ").length, true);
+		builder.decode("0x1000:0x0100", code.split(" ").length, true);
 		return builder;
 	}
 

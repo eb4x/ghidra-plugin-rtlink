@@ -30,7 +30,7 @@ public class EmulatedFloatAnalyzerTest extends RealModeTest {
 		RealMode builder = realMode("FP");
 		builder.code("0x1000:0x0000", 0x200);
 		builder.setBytes("0x1000:0x0000", code);
-		builder.disassemble("0x1000:0x0000", 7, false);
+		builder.decode("0x1000:0x0000", 7, false);
 		return builder;
 	}
 
@@ -116,7 +116,7 @@ public class EmulatedFloatAnalyzerTest extends RealModeTest {
 	public void testSweepKeepsMarksOutsideTheRewrite() throws Exception {
 		RealMode builder = program(OUT_OF_PHASE);
 		builder.setBytes("0x1000:0x0100", "b8 00 00 c3 b8 00 00 c3");
-		builder.disassemble("0x1000:0x0100", 8, false);
+		builder.decode("0x1000:0x0100", 8, false);
 		// Stale: the mis-decode's mark, inside what the rewrite re-decodes.
 		builder.errorMark("0x1000:0x0004", "conflicting instruction");
 		// Elsewhere: a mark inside an instruction the rewrite never touched.

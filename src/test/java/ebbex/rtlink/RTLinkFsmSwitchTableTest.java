@@ -116,8 +116,8 @@ public class RTLinkFsmSwitchTableTest extends RealModeTest {
 		// what CaseRange keys on), flow stops at the computed dispatch, and the
 		// case stubs stay undefined — exactly the state a fresh import is in when
 		// the analyzer runs.
-		builder.disassemble("0x1100:0x0000", 4, true);
-		builder.disassemble("0x1100:0x0040", 0x2c, true);
+		builder.decode("0x1100:0x0000", 4, true);
+		builder.decode("0x1100:0x0040", 0x2c, true);
 		return builder;
 	}
 

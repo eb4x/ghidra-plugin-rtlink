@@ -51,7 +51,7 @@ public class RTLinkDispatcherJumpAnalyzerTest extends RealModeTest {
 		builder.setBytes("0x1000:0x0100", DISPATCH);
 		builder.setBytes(BODY_A, "33 c0 cb");             // XOR AX,AX ; RETF
 		builder.setBytes(BODY_B, "5d cb");                // POP BP ; RETF
-		builder.disassemble("0x1000:0x0100", DISPATCH_LEN, true);
+		builder.decode("0x1000:0x0100", DISPATCH_LEN, true);
 		return builder;
 	}
 
@@ -183,8 +183,8 @@ public class RTLinkDispatcherJumpAnalyzerTest extends RealModeTest {
 	public void testCorrectReferencesAreKept() throws Exception {
 		RealMode builder = dispatchProgram();
 		Program program = builder.getProgram();
-		builder.disassemble(BODY_A, 3, true);
-		builder.disassemble(BODY_B, 2, true);
+		builder.decode(BODY_A, 3, true);
+		builder.decode(BODY_B, 2, true);
 		addAnalysisJump(builder, JMP, BODY_A);
 		addAnalysisJump(builder, JMP, BODY_B);
 
@@ -237,8 +237,8 @@ public class RTLinkDispatcherJumpAnalyzerTest extends RealModeTest {
 		builder.setBytes("0x1000:0x0100", "ba 60 01 89 44 fc ff e2 ba 80 01 89 44 fc ff e2");
 		builder.setBytes(BODY_A, "33 c0 cb");
 		builder.setBytes(BODY_B, "5d cb");
-		builder.disassemble("0x1000:0x0100", 8, true);
-		builder.disassemble("0x1000:0x0108", 8, true);
+		builder.decode("0x1000:0x0100", 8, true);
+		builder.decode("0x1000:0x0108", 8, true);
 
 		assertEquals(2, resolve(builder));
 
@@ -311,9 +311,9 @@ public class RTLinkDispatcherJumpAnalyzerTest extends RealModeTest {
 		builder.setBytes("0x1012:0x0067", "cb");
 		builder.setBytes("0x1000:0x0060", "f8 f9 fa");
 		builder.setBytes("0x1000:0x0068", "55 c3");
-		builder.disassemble("0x1012:0x0000", 16, true);
-		builder.disassemble("0x1000:0x0060", 3, true);
-		builder.disassemble("0x1000:0x0068", 2, true);
+		builder.decode("0x1012:0x0000", 16, true);
+		builder.decode("0x1000:0x0060", 3, true);
+		builder.decode("0x1000:0x0068", 2, true);
 		builder.createFunction("0x1000:0x0068");
 		addAnalysisJump(builder, "0x1012:0x000e", "0x1000:0x0060");
 		addAnalysisJump(builder, "0x1012:0x000e", "0x1000:0x0067");
@@ -343,8 +343,8 @@ public class RTLinkDispatcherJumpAnalyzerTest extends RealModeTest {
 		builder.code("0x1000:0x0000", 0x400);
 		builder.setBytes("0x1000:0x0200", "bb 50 02 90 ff e3");
 		builder.setBytes("0x1000:0x0250", "c3");
-		builder.disassemble("0x1000:0x0200", 6, true);
-		builder.disassemble("0x1000:0x0250", 1, true);
+		builder.decode("0x1000:0x0200", 6, true);
+		builder.decode("0x1000:0x0250", 1, true);
 		addAnalysisJump(builder, "0x1000:0x0204", "0x1000:0x0250");
 		builder.createLabel("0x1000:0x0250", "real_target");
 
@@ -365,7 +365,7 @@ public class RTLinkDispatcherJumpAnalyzerTest extends RealModeTest {
 		RealMode builder = dispatchProgram();
 		builder.code("OVL", "0x2000:0x0000", 0x400);
 		builder.setBytes("0x2000:0x0080", "c3");
-		builder.disassemble("0x2000:0x0080", 1, true);
+		builder.decode("0x2000:0x0080", 1, true);
 		addAnalysisJump(builder, JMP, "0x2000:0x0080");
 
 		assertEquals("the dispatch itself is still resolved", 1, resolve(builder));
@@ -392,8 +392,8 @@ public class RTLinkDispatcherJumpAnalyzerTest extends RealModeTest {
 		builder.code("0x1000:0x0000", 0x400);
 		builder.setBytes("0x1000:0x0100", "ba 80 01 90 ff e2");
 		builder.setBytes(BODY_B, "50 51 52 53");
-		builder.disassemble("0x1000:0x0100", 6, true);
-		builder.disassemble(BODY_B, 4, true);
+		builder.decode("0x1000:0x0100", 6, true);
+		builder.decode(BODY_B, 4, true);
 		addAnalysisJump(builder, "0x1000:0x0104", BODY_B);
 
 		assertEquals(0, resolve(builder));

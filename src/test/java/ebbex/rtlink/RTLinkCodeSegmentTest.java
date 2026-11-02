@@ -74,7 +74,7 @@ public class RTLinkCodeSegmentTest extends RealModeTest {
 		MemoryBlock page = builder.createMemory("OVERLAY_01", "0x1100:0x0000", 0x40);
 		builder.setBytes("0x1100:0x0020", "90 cb");
 		assign(page, List.of());
-		builder.disassemble("0x1100:0x0020", 2);
+		builder.decode("0x1100:0x0020", 2, true);
 
 		int modules = assign(page, List.of(0x2, 0x3));
 
@@ -97,7 +97,7 @@ public class RTLinkCodeSegmentTest extends RealModeTest {
 		builder.setBytes("0x1000:0xfff0", "e9 1d 00");
 		assign(block, List.of());
 
-		builder.disassemble("0x1000:0xfff0", 3);
+		builder.decode("0x1000:0xfff0", 3, true);
 
 		Address target = program.getListing()
 				.getInstructionAt(builder.addr("0x1000:0xfff0"))

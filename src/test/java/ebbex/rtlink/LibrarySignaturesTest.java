@@ -143,7 +143,7 @@ public class LibrarySignaturesTest extends RealModeTest {
 	public void testUserNameIsKept() throws Exception {
 		RealMode builder = program("0x1000:0x0140",
 			"55 8b ec a1 78 56 5d cb b8 ff ff cb 33 c0 cb");
-		builder.disassemble("0x1000:0x0140", 8, true);
+		builder.decode("0x1000:0x0140", 8, true);
 		builder.createFunction("0x1000:0x0140");
 		Address entry = builder.addr("0x1000:0x0140");
 		builder.tx(() -> {

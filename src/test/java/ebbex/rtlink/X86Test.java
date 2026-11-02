@@ -20,7 +20,7 @@ public class X86Test extends RealModeTest {
 		RealMode builder = realMode("X86");
 		builder.code("0x1000:0x0000", 0x10);
 		builder.setBytes("0x1000:0x0000", hex);
-		builder.disassemble("0x1000:0x0000", hex.split(" ").length, false);
+		builder.decode("0x1000:0x0000", hex.split(" ").length, false);
 		Program program = builder.getProgram();
 		Instruction instruction =
 			program.getListing().getInstructionAt(builder.addr("0x1000:0x0000"));
@@ -181,7 +181,7 @@ public class X86Test extends RealModeTest {
 		RealMode builder = realMode("X86");
 		builder.code("0x1000:0x0000", 0x10);
 		builder.setBytes("0x1000:0x0000", "90 90");
-		builder.disassemble("0x1000:0x0000", 2, false);
+		builder.decode("0x1000:0x0000", 2, false);
 		Program program = builder.getProgram();
 		Instruction first = program.getListing().getInstructionAt(builder.addr("0x1000:0x0000"));
 		Instruction second = program.getListing().getInstructionAt(builder.addr("0x1000:0x0001"));
@@ -219,7 +219,8 @@ public class X86Test extends RealModeTest {
 	public void testSegmentMovesReadFromPcode() throws Exception {
 		RealMode builder = realMode("SREG");
 		builder.code("0x1000:0x0000", 0x20);
-		builder.setBytes("0x1000:0x0000", SEGMENT_MOVES, true);
+		builder.bytes("0x1000:0x0000", SEGMENT_MOVES);
+		builder.decode("0x1000:0x0000", Hex.parse(SEGMENT_MOVES).length, true);
 		Program program = builder.getProgram();
 
 		for (Move move : new Move[] {

@@ -35,7 +35,8 @@ public class RTLinkStubThunkNameTest extends RealModeTest {
 		builder = realMode("STUBNAME");
 		builder.code("0x1000:0x0000", 0x100);
 		builder.setBytes(STUB, "90 90 90 90 90 90 90 90 90 90 90 90");
-		builder.setBytes(TARGET, "cb", true); // RETF
+		builder.setBytes(TARGET, "cb"); // RETF
+		builder.decode(TARGET, 1, true);
 		builder.createFunction(TARGET);
 		program = builder.getProgram();
 	}
