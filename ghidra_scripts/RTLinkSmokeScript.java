@@ -339,6 +339,31 @@ public class RTLinkSmokeScript extends GhidraScript {
 			"the call to the abort routine still falls through");
 		check(getInstructionAt(seg(TEXT, 0x4a)) == null,
 			"the zeroed table behind the abort call is decoded as code");
+		checkAbortPathDecompiles(call);
+	}
+
+	/**
+	 * In the decompiler: the abort routine is non-returning, and its caller ends at the call,
+	 * with nothing of the zeroed table behind it decoded as bad data.
+	 */
+	private void checkAbortPathDecompiles(Instruction call) {
+		if (call == null || call.getFlows().length != 1) {
+			fail("the abort call has no single target");
+			return;
+		}
+		Function abort = getFunctionAt(call.getFlows()[0]);
+		check(abort != null && abort.hasNoReturn(),
+			"the abort routine at " + call.getFlows()[0] + " is not marked non-returning");
+		Function caller = getFunctionContaining(call.getAddress());
+		if (caller == null || abort == null) {
+			fail("no function contains the abort call at " + call.getAddress());
+			return;
+		}
+		String c = decompile(caller.getEntryPoint());
+		check(c != null && c.contains(abort.getName() + "("),
+			"the abort call's caller does not call " + abort.getName());
+		check(c != null && !c.contains("halt_baddata"),
+			"the abort call's caller runs on into bad data");
 	}
 
 	// ---------------------------------------------------------------- dispatcher jump
