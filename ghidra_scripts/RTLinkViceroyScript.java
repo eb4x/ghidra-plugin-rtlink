@@ -72,7 +72,32 @@ public class RTLinkViceroyScript extends GhidraScript {
 		if (library && !checkVendorNames()) {
 			return;
 		}
+		if (!checkFlowOverGuessedStrings()) {
+			return;
+		}
 		println("VICEROY OK");
+	}
+
+	/**
+	 * 210d:1529 is a JMP reached only through $$VM_RET's far return vector, decoded late by
+	 * the far-pointer pass, under a string the string search guessed at 152b. The guess must
+	 * give way, and no "conflicting data" mark be left anywhere.
+	 */
+	private boolean checkFlowOverGuessedStrings() {
+		var jump = currentProgram.getListing().getInstructionAt(toAddr("210d:1529"));
+		int conflicts = 0;
+		var marks = currentProgram.getBookmarkManager()
+				.getBookmarksIterator(ghidra.program.model.listing.BookmarkType.ERROR);
+		while (marks.hasNext()) {
+			conflicts += marks.next().getComment().contains("conflicting data") ? 1 : 0;
+		}
+		println("viceroy: 210d:1529 " + (jump == null ? "undecoded" : jump) + "; " + conflicts +
+			" conflicting-data mark(s)");
+		if (jump == null || !jump.getMnemonicString().equals("JMP") || conflicts > 0) {
+			println("UNEXPECTED: flow blocked by data at 210d:1529 or elsewhere");
+			return false;
+		}
+		return true;
 	}
 
 	/**

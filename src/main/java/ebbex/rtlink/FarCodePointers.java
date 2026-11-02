@@ -6,7 +6,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
@@ -160,7 +159,7 @@ final class FarCodePointers {
 			if (usedAsData(program, target, source.getMinAddress())) {
 				return false; // a far pointer to CS-resident data: an EXEC block, a buffer
 			}
-			new DisassembleCommand(target, null, true).applyTo(program, monitor);
+			CodeEvidence.disassembleOverGuesses(program, new AddressSet(target), monitor);
 			if (listing.getInstructionAt(target) == null) {
 				return false;
 			}

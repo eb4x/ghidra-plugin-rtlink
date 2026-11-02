@@ -2,14 +2,25 @@ package ebbex.rtlink;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.function.Predicate;
 
 import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.cmd.function.CreateFunctionCmd;
+import ghidra.app.util.PseudoDisassembler;
+import ghidra.app.util.PseudoInstruction;
+import ghidra.program.disassemble.Disassembler;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
+import ghidra.program.model.listing.Bookmark;
+import ghidra.program.model.listing.BookmarkManager;
+import ghidra.program.model.listing.BookmarkType;
+import ghidra.program.model.listing.Data;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
+import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
@@ -95,6 +106,103 @@ final class CodeEvidence {
 		disassemble.enableCodeAnalysis(false);
 		disassemble.applyTo(program, monitor);
 		return disassemble.getDisassembledAddressSet();
+	}
+
+	/** Rounds of clearing and re-decoding; each one gets past one more guessed string. */
+	private static final int GUESS_ROUNDS = 16;
+
+	/**
+	 * Disassemble from {@code seeds} following flow, and decode through any string the string
+	 * search guessed where that flow runs. The passes that decode late (far pointers, far
+	 * vectors) reach code long after the string search has run over bytes nothing had decoded
+	 * yet, and a guess there blocks the flow ("conflicting data"; VICEROY {@code 210d:152b},
+	 * one byte early, on a {@code JMP}'s displacement). Flow from code is better evidence than
+	 * a guess, so a string with a default name and no reference to its start is cleared, its
+	 * conflict mark dropped, and the flow decoded on. Any other data stops the flow, as before.
+	 */
+	static AddressSet disassembleOverGuesses(Program program, AddressSetView seeds,
+			TaskMonitor monitor) {
+		AddressSet decoded = new AddressSet();
+		AddressSetView next = seeds;
+		for (int round = 0; round < GUESS_ROUNDS && !next.isEmpty(); round++) {
+			DisassembleCommand disassemble = new DisassembleCommand(next, null, true);
+			disassemble.applyTo(program, monitor);
+			AddressSetView fresh = disassemble.getDisassembledAddressSet();
+			if (fresh == null || fresh.isEmpty()) {
+				break;
+			}
+			decoded.add(fresh);
+			next = clearGuessesBlocking(program, fresh);
+		}
+		return decoded;
+	}
+
+	/** Clear the guessed strings that block a flow out of {@code decoded}; returns the flows. */
+	private static AddressSet clearGuessesBlocking(Program program, AddressSetView decoded) {
+		Listing listing = program.getListing();
+		PseudoDisassembler pseudo = new PseudoDisassembler(program);
+		AddressSet blocked = new AddressSet();
+		for (Instruction instruction : listing.getInstructions(decoded, true)) {
+			List<Address> targets = new ArrayList<>(List.of(instruction.getFlows()));
+			if (instruction.getFallThrough() != null) {
+				targets.add(instruction.getFallThrough());
+			}
+			for (Address target : targets) {
+				if (listing.getInstructionContaining(target) != null) {
+					continue;
+				}
+				PseudoInstruction would = CodeSeeds.decode(pseudo, target);
+				if (would == null) {
+					continue;
+				}
+				List<Data> guesses = guessedStrings(program, target, would.getMaxAddress());
+				if (guesses.isEmpty()) {
+					continue;
+				}
+				for (Data guess : guesses) {
+					listing.clearCodeUnits(guess.getMinAddress(), guess.getMaxAddress(), false);
+				}
+				removeDataConflictMarks(program, target);
+				blocked.add(target);
+			}
+		}
+		return blocked;
+	}
+
+	/**
+	 * The defined data over {@code [start, end]} if every item is a guessed string, else none:
+	 * one item that is not (other data, a name, a reference to it) means the bytes are not
+	 * ours to take.
+	 */
+	private static List<Data> guessedStrings(Program program, Address start, Address end) {
+		Listing listing = program.getListing();
+		Map<Address, Data> data = new TreeMap<>();
+		Data covering = listing.getDefinedDataContaining(start);
+		if (covering != null) {
+			data.put(covering.getMinAddress(), covering);
+		}
+		for (Data item : listing.getDefinedData(new AddressSet(start, end), true)) {
+			data.put(item.getMinAddress(), item);
+		}
+		for (Data item : data.values()) {
+			Symbol name = program.getSymbolTable().getPrimarySymbol(item.getMinAddress());
+			if (!item.hasStringValue() || (name != null && name.getSource() != SourceType.DEFAULT) ||
+				program.getReferenceManager().hasReferencesTo(item.getMinAddress())) {
+				return List.of();
+			}
+		}
+		return List.copyOf(data.values());
+	}
+
+	/** Drop the disassembler's "conflicting data" mark at {@code at}. */
+	private static void removeDataConflictMarks(Program program, Address at) {
+		BookmarkManager bookmarks = program.getBookmarkManager();
+		for (Bookmark bookmark : bookmarks.getBookmarks(at, BookmarkType.ERROR)) {
+			if (Disassembler.ERROR_BOOKMARK_CATEGORY.equals(bookmark.getCategory()) &&
+				bookmark.getComment().contains("conflicting data")) {
+				bookmarks.removeBookmark(bookmark);
+			}
+		}
 	}
 
 	/** Create a function at {@code at} unless one already contains it; true if one was made. */

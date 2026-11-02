@@ -112,7 +112,11 @@ seven classes and not one. They share package-private statics and must stay in
   function); instructions decoded out of zero fill (≥16 zero bytes) deleted when
   unreferenced. The test is always on the bytes in memory, never on the instruction
   (`00 00` is a real instruction). Unresolved dispatch stubs and NOP sleds are left
-  strictly alone. Each repair is its own class — `RelocationFallthroughs`,
+  strictly alone. The far-pointer and far-vector passes reach code long after the stock
+  string search has run, so where their flow runs into a string it guessed (a default
+  name, no reference to its start), the guess is cleared and the flow decoded on (VICEROY
+  `210d:152b`, a string guessed on the last byte of a `JMP`); any other data stops the
+  flow. Each repair is its own class — `RelocationFallthroughs`,
   `ConflictArbitration`, `CodeGaps`, `FarVectorFlows`, `NonReturningCalls`,
   `StaleNoReturns`, `FillerIslands`, `FarCodePointers` — and the analyzer only orders
   them.

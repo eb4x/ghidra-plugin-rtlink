@@ -4,6 +4,9 @@ import static org.junit.Assert.*;
 
 import org.junit.Test;
 
+import ghidra.program.disassemble.Disassembler;
+import ghidra.program.model.data.StringDataType;
+import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
@@ -136,6 +139,57 @@ public class FarCodePointersTest extends RealModeTest {
 					RefType.READ, SourceType.ANALYSIS, 0));
 		assertEquals(0, recover(builder));
 		assertNull(program.getListing().getInstructionAt(builder.addr(TARGET)));
+	}
+
+	/**
+	 * VICEROY {@code 210d:1526}: the routine behind the return vector loads a message address
+	 * and jumps to the fatal path, and the string search, run long before, guessed a string
+	 * one byte early, on the jump's last byte. Flow from the recovered routine wins: the guess
+	 * is cleared and the jump decoded.
+	 * <pre>
+	 *   0130  bf 36 01   MOV DI,0x0136
+	 *   0133  e9 0a 00   JMP 0x0140          ; the guess starts at 0135, its last byte
+	 *   0136  "  &lt;x&gt;\r\n\0"
+	 *   0140  cf         IRET
+	 * </pre>
+	 */
+	@Test
+	public void testFlowRunsThroughAGuessedString() throws Exception {
+		RealMode builder = program("b8 30 01 8c ca 36 87 04 36 87 54 02 c3");
+		builder.setBytes(TARGET, "bf 36 01 e9 0a 00 20 20 3c 78 3e 0d 0a 00 90 90 cf");
+		Program program = builder.getProgram();
+		builder.tx(() -> program.getListing()
+				.createData(builder.addr("0x1000:0x0135"), new StringDataType(), 9));
+
+		assertEquals(1, recover(builder));
+
+		assertEquals("JMP", program.getListing()
+				.getInstructionAt(builder.addr("0x1000:0x0133")).getMnemonicString());
+		assertNotNull("and the flow runs on past it",
+			program.getListing().getInstructionAt(builder.addr("0x1000:0x0140")));
+		assertNull("the guess is gone",
+			program.getListing().getDefinedDataContaining(builder.addr("0x1000:0x0135")));
+		assertNull("and so is the conflict it caused", program.getBookmarkManager()
+				.getBookmark(builder.addr("0x1000:0x0133"), BookmarkType.ERROR,
+					Disassembler.ERROR_BOOKMARK_CATEGORY));
+	}
+
+	/** A string someone named is theirs: the flow stops at it, as it would at any data. */
+	@Test
+	public void testFlowStopsAtANamedString() throws Exception {
+		RealMode builder = program("b8 30 01 8c ca 36 87 04 36 87 54 02 c3");
+		builder.setBytes(TARGET, "bf 36 01 e9 0a 00 20 20 3c 78 3e 0d 0a 00 90 90 cf");
+		Program program = builder.getProgram();
+		builder.tx(() -> program.getListing()
+				.createData(builder.addr("0x1000:0x0135"), new StringDataType(), 9));
+		builder.createLabel("0x1000:0x0135", "s_fatal_message");
+
+		assertEquals(1, recover(builder));
+
+		assertNull("the jump stays undecoded",
+			program.getListing().getInstructionAt(builder.addr("0x1000:0x0133")));
+		assertNotNull("under the named string",
+			program.getListing().getDefinedDataAt(builder.addr("0x1000:0x0135")));
 	}
 
 	/** The same set-vector with DS never set: DX is an offset into an unknown segment. */

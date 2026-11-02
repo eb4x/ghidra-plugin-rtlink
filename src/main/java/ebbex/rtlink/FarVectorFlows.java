@@ -2,7 +2,6 @@ package ebbex.rtlink;
 
 import java.util.Arrays;
 
-import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressOutOfBoundsException;
 import ghidra.program.model.address.AddressSet;
@@ -85,7 +84,7 @@ final class FarVectorFlows {
 		}
 
 		if (!targets.isEmpty()) {
-			new DisassembleCommand(targets, null, true).applyTo(program, monitor);
+			CodeEvidence.disassembleOverGuesses(program, targets, monitor);
 			for (Address target : targets.getAddresses(true)) {
 				monitor.checkCancelled();
 				if (listing.getInstructionAt(target) != null) {
