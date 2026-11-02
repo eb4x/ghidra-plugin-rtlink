@@ -33,49 +33,55 @@ public class RTLinkViceroyScript extends GhidraScript {
 				thunks++;
 			}
 		}
+		boolean ok = true;
 		if (overlayFunctions == 0) {
 			println("UNEXPECTED: overlay blocks exist but contain no functions");
-			return;
+			ok = false;
 		}
 		println("viceroy: " + overlayFunctions + " functions in overlay blocks, " +
 			thunks + " thunks program-wide");
 
-		// The VM-runtime seeding pass: the entry stub must have yielded __astart with a
-		// real function body, and the $$VM_UNK constant-pair recognizer must have seeded
-		// vendor entries (recorded by the analyzer in a program-info option).
+		// Every check below runs and reports, so one failure does not hide the next.
+		ok &= checkVmSeeds();
+		String[] args = getScriptArgs();
+		boolean library = args.length > 0 && !args[0].equals("none");
+		ok &= checkRuntimeCoverage(library);
+		if (library) {
+			ok &= checkVendorNames();
+		}
+		ok &= checkFlowOverGuessedStrings();
+		if (ok) {
+			println("VICEROY OK");
+		}
+	}
+
+	/**
+	 * The VM-runtime seeding pass: the entry stub must have yielded __astart with a real
+	 * function body, and the $$VM_UNK constant-pair recognizer must have seeded vendor entries
+	 * (recorded by the analyzer in a program-info option).
+	 */
+	private boolean checkVmSeeds() {
 		var astartSymbols = currentProgram.getSymbolTable().getSymbols("__astart");
 		if (!astartSymbols.hasNext()) {
 			println("UNEXPECTED: no __astart symbol — entry stub seeding did not run?");
-			return;
+			return false;
 		}
 		Function astart = currentProgram.getFunctionManager()
 				.getFunctionAt(astartSymbols.next().getAddress());
 		if (astart == null) {
 			println("UNEXPECTED: __astart exists but is not a function");
-			return;
+			return false;
 		}
 		int vmSeeds = currentProgram.getOptions(ghidra.program.model.listing.Program.PROGRAM_INFO)
 				.getInt("RTLink VM Runtime Seeds", 0);
+		println("viceroy: __astart at " + astart.getEntryPoint() + ", " + vmSeeds +
+			" VM runtime function seeds");
 		if (vmSeeds < 4) {
 			println("UNEXPECTED: only " + vmSeeds +
 				" VM runtime seeds — dispatch-pair recognizer did not fire?");
-			return;
+			return false;
 		}
-		println("viceroy: __astart at " + astart.getEntryPoint() + ", " + vmSeeds +
-			" VM runtime function seeds");
-
-		String[] args = getScriptArgs();
-		boolean library = args.length > 0 && !args[0].equals("none");
-		if (!checkRuntimeCoverage(library)) {
-			return;
-		}
-		if (library && !checkVendorNames()) {
-			return;
-		}
-		if (!checkFlowOverGuessedStrings()) {
-			return;
-		}
-		println("VICEROY OK");
+		return true;
 	}
 
 	/**

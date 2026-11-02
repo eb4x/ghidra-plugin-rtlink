@@ -340,12 +340,12 @@ public final class RTLinkSampleGenerator {
 			}
 		}
 
-		List<int[]> mzRelocs = new ArrayList<>();
+		List<Site> mzRelocs = new ArrayList<>();
 		for (Code code : concat(resident, pages)) {
 			code.resolve(owners);
 			for (int site : code.segmentSites) {
 				if (code.page == null) {
-					mzRelocs.add(new int[] { site, code.paragraph });
+					mzRelocs.add(new Site(site, code.paragraph));
 				}
 			}
 		}
@@ -381,9 +381,9 @@ public final class RTLinkSampleGenerator {
 		header.word(RELOC_TABLE_OFFSET);                    // e_lfarlc
 		header.word(0);                                     // e_ovno
 		header.zerosTo(RELOC_TABLE_OFFSET);                 // no e_lfanew: a plain MZ
-		for (int[] reloc : mzRelocs) {
-			header.word(reloc[0]);                          // offset within its segment
-			header.word(reloc[1]);                          // segment, load-module relative
+		for (Site reloc : mzRelocs) {
+			header.word(reloc.offset());                    // offset within its segment
+			header.word(reloc.paragraph());                 // segment, load-module relative
 		}
 		header.zerosTo(headerSize);
 
@@ -400,6 +400,13 @@ public final class RTLinkSampleGenerator {
 		List<Code> all = new ArrayList<>(resident);
 		pages.forEach(page -> all.addAll(page.modules));
 		return all;
+	}
+
+	/**
+	 * A segment word to relocate: its offset within its segment (or overlay module), and that
+	 * segment's paragraph (load-module relative, or the module's base in its page).
+	 */
+	private record Site(int offset, int paragraph) {
 	}
 
 	private static int paragraphs(int bytes) {
@@ -422,11 +429,11 @@ public final class RTLinkSampleGenerator {
 			// List 1: resident segment words in the page. List 2: page-relative paragraphs
 			// (intra-page far calls). Each entry is (offset, seg_index) with the site at
 			// page-linear seg_index*16 + offset; seg_index here is the module's base.
-			List<int[]> list1 = new ArrayList<>();
-			List<int[]> list2 = new ArrayList<>();
+			List<Site> list1 = new ArrayList<>();
+			List<Site> list2 = new ArrayList<>();
 			for (Code module : modules) {
 				for (int i = 0; i < module.segmentSites.size(); i++) {
-					int[] entry = { module.segmentSites.get(i), module.paragraph };
+					Site entry = new Site(module.segmentSites.get(i), module.paragraph);
 					(module.segmentSiteIntraPage.get(i) ? list2 : list1).add(entry);
 				}
 			}
@@ -450,9 +457,9 @@ public final class RTLinkSampleGenerator {
 			record.word(list2.size());
 			record.word(0);                                 // reloc_count_3
 			record.word(0);                                 // codeview_word
-			list1.forEach(e -> record.word(e[0]).word(e[1]));
+			list1.forEach(e -> record.word(e.offset()).word(e.paragraph()));
 			record.zerosTo(16 + list2Index * 4);
-			list2.forEach(e -> record.word(e[0]).word(e[1]));
+			list2.forEach(e -> record.word(e.offset()).word(e.paragraph()));
 			record.zerosTo(overhead * 16);
 			record.bytes(pad(code.toByteArray(), (total - overhead) * 16));
 			return record.toArray();
